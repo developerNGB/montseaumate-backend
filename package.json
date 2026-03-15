@@ -1,0 +1,25 @@
+{
+    "name": "montseaumate-api",
+    "version": "1.0.0",
+    "description": "Backend API for MontseaumateII SaaS platform",
+    "type": "module",
+    "main": "src/index.js",
+    "scripts": {
+        "dev": "node --watch src/index.js",
+        "start": "node src/index.js",
+        "db:init": "node src/db/init.js"
+    },
+    "dependencies": {
+        "bcrypt": "^5.1.1",
+        "better-sqlite3": "^12.6.2",
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.7",
+        "express": "^4.21.2",
+        "express-rate-limit": "^7.5.0",
+        "google-auth-library": "^10.6.1",
+        "jsonwebtoken": "^9.0.2",
+        "nodemailer": "^8.0.1",
+        "pg": "^8.13.1",
+        "qrcode": "^1.5.4"
+    }
+}
