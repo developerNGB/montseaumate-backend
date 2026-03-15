@@ -602,8 +602,12 @@ export const googleLogin = async (req, res) => {
             user,
         });
     } catch (err) {
-        console.error('[googleLogin] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Google sign-in failed. Please try again.' });
+        console.error('[googleLogin] Full Error:', err);
+        return res.status(500).json({ 
+            success: false, 
+            message: 'Google sign-in failed.',
+            error: err.message 
+        });
     }
 };
 
