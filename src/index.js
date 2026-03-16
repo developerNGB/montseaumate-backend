@@ -80,26 +80,16 @@ app.get('/', (req, res) => {
 // Auth endpoints
 app.use('/auth', authRoutes);
 
-// Integration endpoints
-app.use('/api/integrations', integrationRoutes);
-
-// Configurations (Protected)
-app.use('/api/config', configRoutes);
-
-// Activity Logs Dashboard
-app.use('/api/activity-logs', activityLogsRoutes);
-
-// Leads Dashboard
-app.use('/api/leads', leadsRoutes);
-
-// General Stats Dashboard
-app.use('/api/stats', statsRoutes);
-
-// Feedback Management
-app.use('/api/feedback', feedbackRoutes);
-
-// Public Facing Funnels
+// Public Facing Funnels (No Auth)
 app.use('/api', publicRoutes);
+
+// Protected Dashboard Endpoints
+app.use('/api/integrations', integrationRoutes);
+app.use('/api/config', configRoutes);
+app.use('/api/activity-logs', activityLogsRoutes);
+app.use('/api/leads', leadsRoutes);
+app.use('/api/stats', statsRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
