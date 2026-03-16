@@ -98,9 +98,8 @@ app.use('/api/stats', statsRoutes);
 // Feedback Management
 app.use('/api/feedback', feedbackRoutes);
 
-// Public Facing Review & Lead Funnels (No Auth limiters)
-app.use('/api/r', publicRoutes);
-app.use('/api/l', publicRoutes);
+// Public Facing Funnels
+app.use('/api', publicRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
