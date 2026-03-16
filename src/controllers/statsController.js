@@ -31,6 +31,14 @@ export const getDashboardStats = async (req, res) => {
         const messagesRecent = parseInt(messagesRes.rows[0].recent_count || 0, 10);
         const messagesPrev = parseInt(messagesRes.rows[0].previous_count || 0, 10);
 
+        // 4. Feedback Stats
+        const feedbackRes = await pool.query(
+            "SELECT COUNT(*) as count, AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1",
+            [userId]
+        );
+        const totalFeedback = parseInt(feedbackRes.rows[0].count, 10);
+        const avgRating = parseFloat(feedbackRes.rows[0].avg_rating || 0).toFixed(1);
+
         const calculateTrend = (recent, previous) => {
             if (previous === 0) {
                 return recent > 0 ? '+100%' : '0%';
@@ -79,7 +87,9 @@ export const getDashboardStats = async (req, res) => {
                 reviewsGenerated,
                 reviewsTrend: calculateTrend(reviewsRecent, reviewsPrev),
                 messagesSent,
-                messagesTrend: calculateTrend(messagesRecent, messagesPrev)
+                messagesTrend: calculateTrend(messagesRecent, messagesPrev),
+                totalFeedback,
+                avgRating
             },
             recipes: {
                 reviewFunnel: reviewFunnelActive,

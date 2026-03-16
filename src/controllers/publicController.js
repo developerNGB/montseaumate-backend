@@ -189,6 +189,138 @@ export const submitReview = async (req, res) => {
 };
 
 /**
+ * POST /api/f/:automation_id/submit
+ * Advanced Survey (3 Star Ratings)
+ */
+export const submitFeedback = async (req, res) => {
+    try {
+        const { automation_id } = req.params;
+        const { 
+            rating_service, 
+            rating_product, 
+            rating_overall, 
+            comment, 
+            contact_requested,
+            customer_name,
+            customer_email,
+            customer_phone
+        } = req.body;
+
+        const result = await pool.query(
+            `SELECT r.*, COALESCE(u.company_name, u.name) as business_name, u.email as owner_email
+             FROM review_funnel_settings r
+             JOIN users u ON u.id = r.user_id 
+             WHERE r.automation_id = $1`,
+            [automation_id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Automation not found.' });
+        }
+
+        const config = result.rows[0];
+
+        // 1. Save to Feedback Table
+        await pool.query(
+            `INSERT INTO feedback (user_id, automation_id, rating_service, rating_product, rating_overall, comment, contact_requested, customer_name, customer_email, customer_phone)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+                config.user_id,
+                automation_id,
+                rating_service || 5,
+                rating_product || 5,
+                rating_overall || 5,
+                comment || '',
+                !!contact_requested,
+                customer_name || null,
+                customer_email || null,
+                customer_phone || null
+            ]
+        );
+
+        // 2. If contact requested, also save as a Lead
+        if (contact_requested && (customer_email || customer_phone)) {
+            await pool.query(
+                `INSERT INTO leads (user_id, full_name, email, phone, message, source, consent_given, marketing_consent)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [
+                    config.user_id,
+                    customer_name || 'Anonymous Feedback',
+                    customer_email || 'no-email@feedback.com',
+                    customer_phone || '',
+                    `Feedback Comment: ${comment}`,
+                    `Feedback Funnel: ${automation_id}`,
+                    true,
+                    false
+                ]
+            );
+        }
+
+        // 3. Log Activity
+        await pool.query(
+            `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+            [
+                config.user_id,
+                'Survey Funnel',
+                'Feedback Received',
+                rating_overall > 3 ? 'Success' : 'Attention',
+                `Rating: ${rating_overall} stars from ${customer_name || 'Guest'}`,
+                JSON.stringify({ rating_service, rating_product, rating_overall, comment, contact_requested })
+            ]
+        );
+
+        // 4. Trigger n8n Webhook
+        const webhookUrl = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+        if (webhookUrl) {
+            try {
+                fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        event: 'customer_feedback',
+                        business_name: config.business_name,
+                        owner_email: config.owner_email,
+                        automation_id,
+                        rating_service,
+                        rating_product,
+                        rating_overall,
+                        comment,
+                        contact_requested,
+                        customer: {
+                            name: customer_name,
+                            email: customer_email,
+                            phone: customer_phone
+                        }
+                    })
+                }).catch(e => console.log('n8n feedback skip'));
+            } catch (e) {}
+        }
+
+        // 5. Intelligent Response
+        // If overall rating is high, we can still suggest Google Review (optional UX)
+        if (rating_overall >= 4) {
+            return res.status(200).json({
+                success: true,
+                action: 'suggest_google',
+                google_url: config.google_review_url,
+                message: "Thank you for your wonderful feedback! Would you mind sharing this on Google to help us grow?"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            action: 'message',
+            message: "Thank you for your feedback! Your insights help us improve every day."
+        });
+
+    } catch (err) {
+        console.error('[submitFeedback] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+/**
  * POST /api/l/:automation_id/lead
  */
 export const submitLead = async (req, res) => {

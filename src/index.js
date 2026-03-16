@@ -10,6 +10,7 @@ import publicRoutes from './routes/publicRoutes.js';
 import activityLogsRoutes from './routes/activityLogsRoutes.js';
 import leadsRoutes from './routes/leadsRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
+import feedbackRoutes from './routes/feedbackRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
 
 dotenv.config();
@@ -93,6 +94,9 @@ app.use('/api/leads', leadsRoutes);
 
 // General Stats Dashboard
 app.use('/api/stats', statsRoutes);
+
+// Feedback Management
+app.use('/api/feedback', feedbackRoutes);
 
 // Public Facing Review & Lead Funnels (No Auth limiters)
 app.use('/api/r', publicRoutes);

@@ -16,15 +16,29 @@ export const getReviewFunnelConfig = async (req, res) => {
 
         const config = result.rows[0];
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        const publicUrl = `${baseUrl}/r/${config.automation_id}`;
-        const leadUrl = `${baseUrl}/l/${config.automation_id}`;
+        
+        // Survey Funnel (New Multi-Rating System)
+        const surveyUrl = `${baseUrl}/f/${config.automation_id}`;
+        const surveyQrCode = await qrcode.toDataURL(surveyUrl);
 
-        const qrCodeDataUrl = await qrcode.toDataURL(publicUrl);
-        const leadQrCodeDataUrl = await qrcode.toDataURL(leadUrl);
+        // Google Review Funnel (Legacy/Direct)
+        const reviewUrl = `${baseUrl}/r/${config.automation_id}`;
+        const reviewQrCode = await qrcode.toDataURL(reviewUrl);
+        
+        const leadUrl = `${baseUrl}/l/${config.automation_id}`;
+        const leadQrCode = await qrcode.toDataURL(leadUrl);
 
         return res.status(200).json({
             success: true,
-            config: { ...config, publicUrl, qrCodeDataUrl, leadUrl, leadQrCodeDataUrl }
+            config: { 
+                ...config, 
+                publicUrl: surveyUrl, // Default to survey
+                qrCodeDataUrl: surveyQrCode, 
+                reviewUrl, 
+                reviewQrCode,
+                leadUrl, 
+                leadQrCode 
+            }
         });
     } catch (err) {
         console.error('[getReviewFunnelConfig] Error:', err.message);
@@ -71,10 +85,12 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 notification_email,
                 auto_response_message,
                 filtering_questions: filtering_questions || [],
-                publicUrl,
-                qrCodeDataUrl,
-                leadUrl,
-                leadQrCodeDataUrl
+                publicUrl: `${baseUrl}/f/${automationId}`,
+                qrCodeDataUrl: await qrcode.toDataURL(`${baseUrl}/f/${automationId}`),
+                reviewUrl: `${baseUrl}/r/${automationId}`,
+                reviewQrCode: await qrcode.toDataURL(`${baseUrl}/r/${automationId}`),
+                leadUrl: `${baseUrl}/l/${automationId}`,
+                leadQrCode: await qrcode.toDataURL(`${baseUrl}/l/${automationId}`)
             }
         });
 
