@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { getFeedback, getFeedbackStats } from '../controllers/feedbackController.js';
-import { authenticateToken } from '../middleware/auth.js';
+import authenticate from '../middleware/authenticate.js';
 
 const router = Router();
 
-router.use(authenticateToken);
+router.use(authenticate);
 
 router.get('/', getFeedback);
 router.get('/stats', getFeedbackStats);
