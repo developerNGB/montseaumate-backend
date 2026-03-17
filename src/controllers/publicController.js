@@ -331,7 +331,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
+        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook/review-feedback";
         let n8nResponseData = null;
         let debugStatus = "pending";
 
