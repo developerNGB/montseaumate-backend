@@ -346,13 +346,13 @@ export const submitFeedback = async (req, res) => {
             const rawData = await n8nRes.json();
             const data = Array.isArray(rawData) ? rawData[0] : rawData;
 
-            if (data && (data.action || data.message)) {
+            if (data && (data.action || data.message || data.status === 'success')) {
                 n8nResponseData = data;
                 debugStatus = "success";
-                console.log('[submitFeedback] n8n responded successfully:', data.action);
+                console.log('[submitFeedback] n8n responded successfully');
             } else {
                 debugStatus = "no_action_in_response";
-                console.warn('[submitFeedback] n8n returned no action/message');
+                console.warn('[submitFeedback] n8n returned no valid action/message/status');
             }
         } catch (e) {
             console.error('[submitFeedback] n8n fetch failed:', e.message);
@@ -376,7 +376,7 @@ export const submitFeedback = async (req, res) => {
 
         if (n8nResponseData) {
             finalResponse.action = n8nResponseData.action || 'message';
-            finalResponse.message = n8nResponseData.message || (n8nResponseData.action === 'suggest_google' ? "Thank you! Please share on Google." : "Feedback submitted successfully.");
+            finalResponse.message = n8nResponseData.message || (n8nResponseData.status === 'success' ? "Feedback received" : "Feedback submitted successfully.");
             finalResponse.google_url = n8nResponseData.google_url || config.google_review_url;
         } else {
             // Default Fallback
