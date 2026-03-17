@@ -51,6 +51,7 @@ const startFollowupCron = () => {
                     access_token: currentGoogleAccessToken || null,
                     refresh_token: googleAuth.refresh_token || null,
                     whatsapp_access_token: whatsappAuth.access_token || null,
+                    whatsapp_refresh_token: whatsappAuth.refresh_token || null,
 
                     timestamp: new Date().toISOString()
                 })

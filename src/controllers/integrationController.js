@@ -47,7 +47,8 @@ export const connectProvider = async (req, res) => {
         const state = token;
 
         // Redirect URL logic
-        const callbackUrl = `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/integrations/${provider}/callback`;
+        const backendBaseUrl = process.env.BACKEND_URL || 'https://montseaumate-backend.onrender.com';
+        const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
 
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -116,7 +117,8 @@ export const providerCallback = async (req, res) => {
         let accountId = '';
         let expiresAt = null;
 
-        const callbackUrl = `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/integrations/${provider}/callback`;
+        const backendBaseUrl = process.env.BACKEND_URL || 'https://montseaumate-backend.onrender.com';
+        const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
 
         // 1. Exchange 'code' for tokens based on the provider
         if (provider === 'google' && process.env.GOOGLE_CLIENT_ID) {

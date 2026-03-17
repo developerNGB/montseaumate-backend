@@ -79,7 +79,8 @@ export const submitReview = async (req, res) => {
         );
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        if (n8nWebhook) {
+        const finalWebhook = n8nWebhook || "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
+        if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
                 const freshGoogleToken = await getValidGoogleToken(config.user_id);
@@ -104,7 +105,7 @@ export const submitReview = async (req, res) => {
                 // Use the fresh token if we got one, otherwise use the stored one
                 const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
-                const n8nRes = await fetch(n8nWebhook, {
+                const n8nRes = await fetch(finalWebhook, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -118,8 +119,11 @@ export const submitReview = async (req, res) => {
                         client_id: process.env.GOOGLE_CLIENT_ID,
                         client_secret: process.env.GOOGLE_CLIENT_SECRET,
                         access_token: currentGoogleAccessToken || null,
+                        accessToken: currentGoogleAccessToken || null, // Alias
                         refresh_token: googleAuth.refresh_token || null,
+                        refreshToken: googleAuth.refresh_token || null, // Alias
                         whatsapp_access_token: whatsappAuth.access_token || null,
+                        whatsapp_refresh_token: whatsappAuth.refresh_token || null,
                     })
                 });
 
@@ -270,53 +274,131 @@ export const submitFeedback = async (req, res) => {
             ]
         );
 
-        // 4. Trigger n8n Webhook
-        const webhookUrl = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
-        if (webhookUrl) {
-            try {
-                fetch(webhookUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        event: 'customer_feedback',
-                        business_name: config.business_name,
-                        owner_email: config.owner_email,
-                        automation_id,
-                        rating_service,
-                        rating_product,
-                        rating_overall,
-                        comment,
-                        contact_requested,
-                        customer: {
-                            name: customer_name,
-                            email: customer_email,
-                            phone: customer_phone
-                        }
-                    })
-                }).catch(e => console.log('n8n feedback skip'));
-            } catch (e) {}
+        // 4. Fetch Integration Tokens (Server-Side Only - Secure)
+        let currentGoogleAccessToken = null;
+        let googleRefreshToken = null;
+        let whatsappAccessToken = null;
+        let whatsappRefreshToken = null;
+
+        try {
+            // Get fresh Google Token
+            currentGoogleAccessToken = await getValidGoogleToken(config.user_id);
+
+            const integrationsResult = await pool.query(
+                `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+                [config.user_id]
+            );
+
+            const integrations = integrationsResult.rows.reduce((acc, curr) => {
+                acc[curr.provider] = {
+                    access_token: curr.access_token,
+                    refresh_token: curr.refresh_token
+                };
+                return acc;
+            }, {});
+
+            googleRefreshToken = integrations['google']?.refresh_token || null;
+            whatsappAccessToken = integrations['whatsapp']?.access_token || null;
+            whatsappRefreshToken = integrations['whatsapp']?.refresh_token || null;
+        } catch (tokenErr) {
+            console.error('[submitFeedback] Token fetch failed:', tokenErr.message);
         }
 
-        // 5. Intelligent Response
-        // If overall rating is high, we can still suggest Google Review (optional UX)
-        if (rating_overall >= 4) {
-            return res.status(200).json({
-                success: true,
-                action: 'suggest_google',
-                google_url: config.google_review_url,
-                message: "Thank you for your wonderful feedback! Would you mind sharing this on Google to help us grow?"
+        const payload = {
+            event: 'customer_feedback',
+            business_name: config.business_name,
+            owner_email: config.owner_email,
+            automation_id,
+            rating: rating_overall, // Standardized alias
+            rating_service,
+            rating_product,
+            rating_overall,
+            comment,
+            contact_requested,
+            auto_response_message: config.auto_response_message,
+            instant_response_template: config.auto_response_message,
+            customer: {
+                name: customer_name,
+                email: customer_email,
+                phone: customer_phone
+            },
+            // Integration tokens for n8n (Server-side injected for security)
+            client_id: process.env.GOOGLE_CLIENT_ID,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+            access_token: currentGoogleAccessToken || null,
+            accessToken: currentGoogleAccessToken || null, // Alias
+            refresh_token: googleRefreshToken || null,
+            refreshToken: googleRefreshToken || null, // Alias
+            whatsapp_access_token: whatsappAccessToken || null,
+            whatsapp_refresh_token: whatsappRefreshToken || null
+        };
+
+        console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
+
+        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
+        let n8nResponseData = null;
+        let debugStatus = "pending";
+
+        // 5. Trigger review-feedback webhook and WAIT for response to drive the UI
+        try {
+            const n8nRes = await fetch(reviewFeedbackWebhook, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
             });
+            
+            const rawData = await n8nRes.json();
+            const data = Array.isArray(rawData) ? rawData[0] : rawData;
+
+            if (data && (data.action || data.message)) {
+                n8nResponseData = data;
+                debugStatus = "success";
+                console.log('[submitFeedback] n8n responded successfully:', data.action);
+            } else {
+                debugStatus = "no_action_in_response";
+                console.warn('[submitFeedback] n8n returned no action/message');
+            }
+        } catch (e) {
+            console.error('[submitFeedback] n8n fetch failed:', e.message);
+            debugStatus = "error: " + e.message;
         }
 
-        return res.status(200).json({
+        // Secondary fire-and-forget webhooks (only if configured and different)
+        if (webhookUrl && webhookUrl !== reviewFeedbackWebhook) {
+            fetch(webhookUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).catch(e => {});
+        }
+
+        // 6. Return Final Controlled Response to Frontend
+        const finalResponse = {
             success: true,
-            action: 'message',
-            message: "Thank you for your feedback! Your insights help us improve every day."
-        });
+            _debug: { n8n_status: debugStatus }
+        };
+
+        if (n8nResponseData) {
+            finalResponse.action = n8nResponseData.action || 'message';
+            finalResponse.message = n8nResponseData.message || (n8nResponseData.action === 'suggest_google' ? "Thank you! Please share on Google." : "Feedback submitted successfully.");
+            finalResponse.google_url = n8nResponseData.google_url || config.google_review_url;
+        } else {
+            // Default Fallback
+            if (rating_overall >= 4) {
+                finalResponse.action = 'suggest_google';
+                finalResponse.message = "Thank you! Would you mind sharing this on Google?";
+                finalResponse.google_url = config.google_review_url;
+            } else {
+                finalResponse.action = 'message';
+                finalResponse.message = "Thank you for your feedback!";
+            }
+        }
+
+        return res.status(200).json(finalResponse);
 
     } catch (err) {
-        console.error('[submitFeedback] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[submitFeedback] CRITICAL ERR:', err.message);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
     }
 };
 
@@ -337,7 +419,7 @@ export const submitLead = async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT rfs.user_id, rfs.lead_capture_active, u.email as owner_email
+            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.auto_response_message, u.email as owner_email
              FROM review_funnel_settings rfs
              JOIN users u ON rfs.user_id = u.id
              WHERE rfs.automation_id = $1`,
@@ -406,6 +488,8 @@ export const submitLead = async (req, res) => {
                     email,
                     phone,
                     message: message || '',
+                    auto_response_message: result.rows[0].auto_response_message,
+                    instant_response_template: result.rows[0].auto_response_message,
                     filtering_responses,
                     source: 'Public Link',
                     consent: !!consent_given,
@@ -416,8 +500,11 @@ export const submitLead = async (req, res) => {
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
                     access_token: currentGoogleAccessToken || null,
+                    accessToken: currentGoogleAccessToken || null, // Alias
                     refresh_token: googleAuth.refresh_token || null,
+                    refreshToken: googleAuth.refresh_token || null, // Alias
                     whatsapp_access_token: whatsappAuth.access_token || null,
+                    whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
 
                 // Trigger Capture Webhook
