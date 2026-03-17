@@ -94,7 +94,7 @@ export const importLeads = async (req, res) => {
                         lead.email || '',
                         lead.phone || '',
                         lead.notes || '',
-                        'Excel Upload',
+                        lead.source || 'Excel Upload',
                         'New'
                     ]
                 );
