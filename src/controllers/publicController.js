@@ -359,9 +359,10 @@ export const submitFeedback = async (req, res) => {
             debugStatus = "error: " + e.message;
         }
 
-        // Secondary fire-and-forget webhooks (only if configured and different)
-        if (webhookUrl && webhookUrl !== reviewFeedbackWebhook) {
-            fetch(webhookUrl, {
+        // Secondary fire-and-forget webhooks (Generic lead followup if configured)
+        const extraWebhook = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+        if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
+            fetch(extraWebhook, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
