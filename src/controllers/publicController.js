@@ -119,9 +119,7 @@ export const submitReview = async (req, res) => {
                         client_id: process.env.GOOGLE_CLIENT_ID,
                         client_secret: process.env.GOOGLE_CLIENT_SECRET,
                         access_token: currentGoogleAccessToken || null,
-                        accessToken: currentGoogleAccessToken || null, // Alias
                         refresh_token: googleAuth.refresh_token || null,
-                        refreshToken: googleAuth.refresh_token || null, // Alias
                         whatsapp_access_token: whatsappAuth.access_token || null,
                         whatsapp_refresh_token: whatsappAuth.refresh_token || null,
                     })
@@ -326,9 +324,7 @@ export const submitFeedback = async (req, res) => {
             client_id: process.env.GOOGLE_CLIENT_ID,
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
             access_token: currentGoogleAccessToken || null,
-            accessToken: currentGoogleAccessToken || null, // Alias
             refresh_token: googleRefreshToken || null,
-            refreshToken: googleRefreshToken || null, // Alias
             whatsapp_access_token: whatsappAccessToken || null,
             whatsapp_refresh_token: whatsappRefreshToken || null
         };
@@ -500,9 +496,7 @@ export const submitLead = async (req, res) => {
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
                     access_token: currentGoogleAccessToken || null,
-                    accessToken: currentGoogleAccessToken || null, // Alias
                     refresh_token: googleAuth.refresh_token || null,
-                    refreshToken: googleAuth.refresh_token || null, // Alias
                     whatsapp_access_token: whatsappAuth.access_token || null,
                     whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
