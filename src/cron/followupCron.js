@@ -2,7 +2,7 @@ import pool from '../db/pool.js';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 
 const startFollowupCron = () => {
-    console.log('⏳ Background worker started: Checking for pending lead follow-ups every 20 seconds...');
+    console.log('🤖 Background Automation Started: Checking for new lead follow-ups every 5 seconds...');
 
     const processLead = async (lead, isReminder = false) => {
         try {
@@ -57,12 +57,13 @@ const startFollowupCron = () => {
                 })
             });
 
-            const statusField = isReminder ? 'followup_status_reminder' : 'followup_status';
+            const followupStatusField = isReminder ? 'followup_status_reminder' : 'followup_status';
 
             // If its a success, update the lead status
             if (response.ok || response.status === 200) {
+                // Update BOTH followup_status AND lead_status (to 'Contacted')
                 await pool.query(
-                    `UPDATE leads SET ${statusField} = 'success', updated_at = NOW() WHERE id = $1`,
+                    `UPDATE leads SET ${followupStatusField} = 'success', lead_status = 'Contacted', updated_at = NOW() WHERE id = $1`,
                     [lead.lead_id]
                 );
 
@@ -90,7 +91,7 @@ const startFollowupCron = () => {
             } else {
                 // Mark as failed if the webhook returns a hard error
                 await pool.query(
-                    `UPDATE leads SET ${statusField} = 'failed', updated_at = NOW() WHERE id = $1`,
+                    `UPDATE leads SET ${followupStatusField} = 'failed', updated_at = NOW() WHERE id = $1`,
                     [lead.lead_id]
                 );
 
@@ -119,7 +120,7 @@ const startFollowupCron = () => {
         }
     };
 
-    // Run every 20 seconds
+    // Run every 5 seconds
     setInterval(async () => {
         try {
             // 1. Process PRIMARY Follow-ups
@@ -142,6 +143,7 @@ const startFollowupCron = () => {
                 JOIN users u ON l.user_id = u.id
                 LEFT JOIN review_funnel_settings rfs ON l.user_id = rfs.user_id
                 WHERE s.is_active = true 
+                  AND l.lead_status = 'New'
                   AND l.followup_status = 'pending'
                   AND NOW() >= (
                       l.created_at + 
@@ -188,7 +190,7 @@ const startFollowupCron = () => {
         } catch (err) {
             console.error('[FollowupCron] Error querying database:', err.message);
         }
-    }, 20 * 1000); // Check every 20 seconds
+    }, 5 * 1000); // Check every 5 seconds
 };
 
 export default startFollowupCron;

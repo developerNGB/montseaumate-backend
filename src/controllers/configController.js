@@ -212,3 +212,92 @@ export const toggleRecipe = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Server error' });
     }
 };
+
+export const deleteAutomation = async (req, res) => {
+    try {
+        const { recipe, deleteRelatedData, deleteLogs } = req.body;
+        const userId = req.user.id;
+
+        if (recipe === 'reviewFunnel') {
+            // Update the flag. If leadCapture is also inactive, we might delete the whole settings row
+            // but for safety and preserving the automation_id (URLs), we usually just deactivate.
+            // However, the user wants to "Delete", which implies a reset.
+            
+            // Get current state to see if leadCapture is active
+            const current = await pool.query('SELECT lead_capture_active FROM review_funnel_settings WHERE user_id = $1', [userId]);
+            const isLeadCaptureActive = current.rows.length > 0 ? current.rows[0].lead_capture_active : false;
+
+            if (isLeadCaptureActive) {
+                // Just reset review funnel fields
+                await pool.query(
+                    `UPDATE review_funnel_settings SET 
+                        is_active = false, 
+                        google_review_url = '', 
+                        notification_email = '', 
+                        auto_response_message = '',
+                        filtering_questions = '[]',
+                        updated_at = NOW() 
+                     WHERE user_id = $1`,
+                    [userId]
+                );
+            } else {
+                // Both are inactive/deleted or only review funnel existed
+                await pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]);
+            }
+
+            if (deleteRelatedData) {
+                await pool.query('DELETE FROM feedback WHERE user_id = $1', [userId]);
+            }
+        } 
+        else if (recipe === 'leadCapture') {
+            const current = await pool.query('SELECT is_active FROM review_funnel_settings WHERE user_id = $1', [userId]);
+            const isReviewFunnelActive = current.rows.length > 0 ? current.rows[0].is_active : false;
+
+            if (isReviewFunnelActive) {
+                await pool.query(
+                    `UPDATE review_funnel_settings SET 
+                        lead_capture_active = false, 
+                        updated_at = NOW() 
+                     WHERE user_id = $1`,
+                    [userId]
+                );
+            } else {
+                await pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]);
+            }
+
+            if (deleteRelatedData) {
+                // Delete leads from this specific user? 
+                // Careful: leadFollowUp might depend on them. 
+                // But the user specifically asked for "Related triggers / logs / captured data"
+                await pool.query("DELETE FROM leads WHERE user_id = $1 AND source ILIKE '%Capture%'", [userId]);
+            }
+        } 
+        else if (recipe === 'leadFollowUp') {
+            await pool.query('DELETE FROM lead_followup_settings WHERE user_id = $1', [userId]);
+            
+            if (deleteRelatedData) {
+                // If they delete lead follow-up, maybe they want to clear lead follow-up statuses on leads?
+                // Or delete leads? Usually "captured data" implies the leads themselves.
+                await pool.query('DELETE FROM leads WHERE user_id = $1', [userId]);
+            }
+        } else {
+            return res.status(400).json({ success: false, message: 'Unknown automation type.' });
+        }
+
+        if (deleteLogs) {
+            // Map recipe key to log friendly name
+            const logNameMap = {
+                reviewFunnel: 'Review Funnel',
+                leadCapture: 'Lead Capture',
+                leadFollowUp: 'Lead Follow-up'
+            };
+            const automationName = logNameMap[recipe];
+            await pool.query('DELETE FROM activity_logs WHERE user_id = $1 AND automation_name = $2', [userId, automationName]);
+        }
+
+        return res.status(200).json({ success: true, message: 'Automation deleted successfully.' });
+    } catch (err) {
+        console.error('[deleteAutomation] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};

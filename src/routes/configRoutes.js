@@ -1,5 +1,9 @@
 import { Router } from 'express';
-import { getReviewFunnelConfig, saveReviewFunnelConfig, getLeadFollowupConfig, saveLeadFollowupConfig, toggleRecipe } from '../controllers/configController.js';
+import { 
+    getReviewFunnelConfig, saveReviewFunnelConfig, 
+    getLeadFollowupConfig, saveLeadFollowupConfig, 
+    toggleRecipe, deleteAutomation 
+} from '../controllers/configController.js';
 import authenticate from '../middleware/authenticate.js';
 
 const router = Router();
@@ -21,5 +25,8 @@ router.post('/lead-followup', saveLeadFollowupConfig);
 
 // POST /api/config/toggle
 router.post('/toggle', toggleRecipe);
+
+// DELETE /api/config/automation
+router.delete('/automation', deleteAutomation);
 
 export default router;
