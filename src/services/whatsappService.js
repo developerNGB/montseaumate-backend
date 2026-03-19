@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode';
 import pool from '../db/pool.js';
@@ -17,8 +17,10 @@ export const initWhatsAppClient = async (userId) => {
     
     try {
         const { state, saveCreds } = await useMultiFileAuthState(`wa_auth_${userId}`);
+        const { version } = await fetchLatestBaileysVersion();
         
         const sock = makeWASocket({
+            version,
             auth: state,
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }), // Suppress detailed socket logs
@@ -123,5 +125,25 @@ export const restoreActiveSessions = async () => {
         }
     } catch (e) {
         console.error('Failed to restore whatsapp sessions', e);
+    }
+};
+
+export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
+    const sock = clients.get(userId);
+    if (!sock) {
+        throw new Error("WhatsApp session not active for this user.");
+    }
+
+    try {
+        // Strip non-digits and ensure format: 1234567890@s.whatsapp.net
+        const cleaned = targetPhone.replace(/\D/g, '');
+        const jid = `${cleaned}@s.whatsapp.net`;
+        
+        await sock.sendMessage(jid, { text });
+        console.log(`Message successfully sent to ${jid} for user ${userId}`);
+        return true;
+    } catch (e) {
+        console.error(`Failed to send message:`, e);
+        throw e;
     }
 };
