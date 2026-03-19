@@ -390,26 +390,24 @@ export const submitFeedback = async (req, res) => {
             }
         }
 
-        // 6. Return Final Controlled Response to Frontend
+        // 5. Build Response Object
         const finalResponse = {
             success: true,
             _debug: { n8n_status: debugStatus }
         };
 
-        if (n8nResponseData) {
+        // If rating is high, prioritize Google Suggestion regardless of n8n override
+        if (rating_overall >= 4) {
+            finalResponse.action = 'suggest_google';
+            finalResponse.message = n8nResponseData?.message || "Thank you! Your feedback is invaluable. Would you mind sharing your experience on Google as well?";
+            finalResponse.google_url = config.google_review_url;
+        } else if (n8nResponseData) {
             finalResponse.action = n8nResponseData.action || 'message';
-            finalResponse.message = n8nResponseData.message || (n8nResponseData.status === 'success' ? "Feedback received" : "Feedback submitted successfully.");
-            finalResponse.google_url = n8nResponseData.google_url || config.google_review_url;
+            finalResponse.message = n8nResponseData.message || "Feedback received";
+            finalResponse.google_url = config.google_review_url;
         } else {
-            // Default Fallback
-            if (rating_overall >= 4) {
-                finalResponse.action = 'suggest_google';
-                finalResponse.message = "Thank you! Would you mind sharing this on Google?";
-                finalResponse.google_url = config.google_review_url;
-            } else {
-                finalResponse.action = 'message';
-                finalResponse.message = "Thank you for your feedback!";
-            }
+            finalResponse.action = 'message';
+            finalResponse.message = "Thank you for your feedback!";
         }
 
         return res.status(200).json(finalResponse);
