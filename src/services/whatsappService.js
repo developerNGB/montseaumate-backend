@@ -23,7 +23,7 @@ export const initWhatsAppClient = async (userId) => {
             version,
             auth: state,
             printQRInTerminal: false,
-            logger: pino({ level: 'silent' }), // Suppress detailed socket logs
+            logger: pino({ level: 'info' }), // Show connection info in logs
             browser: ['Montseaumate', 'Chrome', '1.0.0']
         });
         
@@ -39,16 +39,21 @@ export const initWhatsAppClient = async (userId) => {
             }
             
             if (connection === 'close') {
-                console.log(`WhatsApp Client for user ${userId} closed.`);
-                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+                console.log(`[WA-Socket] Connection CLOSED for user ${userId}. Code: ${statusCode}`);
+                console.error(`Detailed Error:`, lastDisconnect?.error);
+
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 
                 clients.delete(userId);
                 clientQRs.delete(userId);
                 
                 if (shouldReconnect) {
+                    console.log(`[WA-Socket] Attempting RECONNECT for user ${userId}...`);
                     clientStatus.set(userId, 'restoring');
                     initWhatsAppClient(userId);
                 } else {
+                    console.log(`[WA-Socket] PERMANENT DISCONNECT (Logged Out) for user ${userId}`);
                     clientStatus.set(userId, 'disconnected');
                     try {
                         await pool.query('DELETE FROM integrations WHERE user_id = $1 AND provider = $2', [userId, 'whatsapp']);
@@ -60,7 +65,7 @@ export const initWhatsAppClient = async (userId) => {
                     }
                 }
             } else if (connection === 'open') {
-                console.log(`WhatsApp Client for user ${userId} is ready!`);
+                console.log(`[WA-Socket] ✅ HANDSHAKE COMPLETE! Client for user ${userId} is ready!`);
                 clientStatus.set(userId, 'connected');
                 clientQRs.delete(userId);
                 clients.set(userId, sock);
@@ -78,9 +83,7 @@ export const initWhatsAppClient = async (userId) => {
             }
         });
 
-        // Store the instance initially to prevent multiple attempts
-        clients.set(userId, sock);
-
+        // Wait for connection event to handle storage
     } catch (e) {
         console.error('Client init error', e);
         clientStatus.set(userId, 'error');
@@ -120,8 +123,8 @@ export const restoreActiveSessions = async () => {
     try {
         const result = await pool.query("SELECT DISTINCT user_id FROM integrations WHERE provider = 'whatsapp'");
         for (const row of result.rows) {
-            console.log(`Restoring WhatsApp session for user ${row.user_id}`);
-            await initWhatsAppClient(row.user_id);
+            console.log(`[WA-Restore] Starting background restoration for user ${row.user_id}`);
+            initWhatsAppClient(row.user_id); // Run in background
         }
     } catch (e) {
         console.error('Failed to restore whatsapp sessions', e);
@@ -129,9 +132,19 @@ export const restoreActiveSessions = async () => {
 };
 
 export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
+    const status = clientStatus.get(userId);
+    
+    if (status === 'initializing' || status === 'restoring') {
+        throw new Error("WhatsApp session is still connecting. Please wait 10-15 seconds and try again.");
+    }
+
     const sock = clients.get(userId);
     if (!sock) {
-        throw new Error("WhatsApp session not active for this user.");
+        throw new Error("WhatsApp session not ready or disconnected. Please check status in dashboard.");
+    }
+
+    if (!sock.user) {
+        throw new Error("WhatsApp session is active but user data is missing. Try reconnecting.");
     }
 
     try {

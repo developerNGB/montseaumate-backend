@@ -1,5 +1,7 @@
 import pool from '../db/pool.js';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { injectPlaceholders } from '../utils/templateUtils.js';
+import * as whatsappService from '../services/whatsappService.js';
 
 export const getLeads = async (req, res) => {
     try {
@@ -163,6 +165,10 @@ export const triggerLeadFollowup = async (req, res) => {
             owner_email: lead.owner_email,
             message: lead.message,
             auto_response_message: lead.auto_response_message,
+            injected_message: injectPlaceholders(lead.auto_response_message, {
+                name: lead.full_name,
+                link: `${process.env.FRONTEND_URL}/r/${lead.automation_id || 'default'}`
+            }),
 
             // Integration tokens for n8n
             client_id: process.env.GOOGLE_CLIENT_ID,
@@ -173,7 +179,18 @@ export const triggerLeadFollowup = async (req, res) => {
             whatsapp_refresh_token: whatsappAuth.refresh_token || null
         };
 
-        const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://samdavid.app.n8n.cloud/webhook/review-feedback";
+        // DIRECT NATIVE DISPATCH: Handled locally if it's a native session
+        if (whatsappAuth.access_token === 'whatsapp_native_session') {
+           try {
+               await whatsappService.sendWhatsAppMessage(req.user.id, lead.phone, payload.injected_message);
+               console.log(`[NativeFollowup] Sent manual followup message to ${lead.phone}`);
+           } catch (dispatchErr) {
+               console.error('[NativeFollowup] Failed:', dispatchErr.message);
+               // We continue to fire the n8n webhook as a secondary/logging mechanism anyway
+           }
+        }
+
+        const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
         
         const n8nRes = await fetch(webhookUrl, {
             method: 'POST',

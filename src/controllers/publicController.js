@@ -1,6 +1,8 @@
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { injectPlaceholders } from '../utils/templateUtils.js';
+import * as whatsappService from '../services/whatsappService.js';
 
 /**
  * GET /api/r/:automation_id
@@ -320,6 +322,10 @@ export const submitFeedback = async (req, res) => {
                 email: customer_email,
                 phone: customer_phone
             },
+            injected_message: injectPlaceholders(config.auto_response_message, {
+                name: customer_name,
+                link: `${process.env.FRONTEND_URL}/r/${automation_id}` 
+            }),
             // Integration tokens for n8n (Server-side injected for security)
             client_id: process.env.GOOGLE_CLIENT_ID,
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
@@ -331,7 +337,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook/review-feedback";
+        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
         let n8nResponseData = null;
         let debugStatus = "pending";
 
@@ -367,6 +373,20 @@ export const submitFeedback = async (req, res) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             }).catch(e => {});
+        }
+        // 7. DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session, send the message directly
+        if (whatsappAccessToken === 'whatsapp_native_session' && customer_phone) {
+            const finalMsg = injectPlaceholders(config.auto_response_message, {
+                name: customer_name,
+                link: `${process.env.FRONTEND_URL}/r/${automation_id}`
+            });
+            
+            try {
+                await whatsappService.sendWhatsAppMessage(config.user_id, customer_phone, finalMsg);
+                console.log(`[NativeFeedback] Sent feedback confirmation to ${customer_phone}`);
+            } catch (dispatchErr) {
+                console.error('[NativeFeedback] Failed:', dispatchErr.message);
+            }
         }
 
         // 6. Return Final Controlled Response to Frontend
@@ -456,27 +476,43 @@ export const submitLead = async (req, res) => {
             ]
         );
 
-        // 3. Trigger Webhooks from Backend with Tokens
-        if (captureWebhook || autoResponseWebhook) {
-            try {
-                const freshGoogleToken = await getValidGoogleToken(user_id);
-                const integrationsResult = await pool.query(
-                    `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
-                    [user_id]
-                );
+        // 3. Trigger Webhooks and Handlers
+        try {
+            const freshGoogleToken = await getValidGoogleToken(user_id);
+            const integrationsResult = await pool.query(
+                `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+                [user_id]
+            );
 
-                const integrations = integrationsResult.rows.reduce((acc, curr) => {
-                    acc[curr.provider] = {
-                        access_token: curr.access_token,
-                        refresh_token: curr.refresh_token
-                    };
-                    return acc;
-                }, {});
+            const integrations = integrationsResult.rows.reduce((acc, curr) => {
+                acc[curr.provider] = {
+                    access_token: curr.access_token,
+                    refresh_token: curr.refresh_token
+                };
+                return acc;
+            }, {});
 
-                const googleAuth = integrations['google'] || {};
-                const whatsappAuth = integrations['whatsapp'] || {};
-                const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
+            const googleAuth = integrations['google'] || {};
+            const whatsappAuth = integrations['whatsapp'] || {};
+            const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
+            // DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session, send the message directly
+            if (whatsappAuth.access_token === 'whatsapp_native_session') {
+                const finalMsg = injectPlaceholders(result.rows[0].auto_response_message, {
+                    name: full_name,
+                    link: `${process.env.FRONTEND_URL}/l/${automation_id}`
+                });
+                
+                try {
+                    await whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg);
+                    console.log(`[NativeDispatch] Sent captured lead message to ${phone}`);
+                } catch (dispatchErr) {
+                    console.error('[NativeDispatch] Failed:', dispatchErr.message);
+                }
+            }
+
+            // Webhook Payloads for n8n or external triggers
+            if (captureWebhook || autoResponseWebhook) {
                 const payload = {
                     automation_id,
                     user_id,
@@ -492,8 +528,11 @@ export const submitLead = async (req, res) => {
                     consent: !!consent_given,
                     marketing_consent: !!marketing_consent,
                     date: current_date,
+                    injected_message: injectPlaceholders(result.rows[0].auto_response_message, {
+                        name: full_name,
+                        link: `${process.env.FRONTEND_URL}/l/${automation_id}`
+                    }),
 
-                    // Integration tokens for n8n
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
                     access_token: currentGoogleAccessToken || null,
@@ -502,38 +541,31 @@ export const submitLead = async (req, res) => {
                     whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
 
-                // Trigger Capture Webhook
                 if (captureWebhook) {
                     fetch(captureWebhook, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
-                    }).catch(e => console.error('Capture Webhook Background Error:', e.message));
+                    }).catch(e => {});
                 }
 
-                // Trigger Auto-Response Webhook
                 if (autoResponseWebhook) {
                     fetch(autoResponseWebhook, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
-                    }).catch(e => console.error('AutoResponse Webhook Background Error:', e.message));
+                    }).catch(e => {});
                 }
-
-            } catch (webhookErr) {
-                console.error('[submitLead] Webhook logic failed:', webhookErr.message);
             }
+        } catch (webhookErr) {
+            console.error('[submitLead] Background logic failed:', webhookErr.message);
         }
 
         return res.status(200).json({
             success: true,
             status: 'success',
             message: 'Lead Submitted',
-            data: {
-                user_id,
-                owner_email,
-                date: current_date
-            }
+            data: { user_id, owner_email, date: current_date }
         });
     } catch (err) {
         console.error('[submitLead] Error:', err.message);
