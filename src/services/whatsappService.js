@@ -67,8 +67,8 @@ export const initWhatsAppClient = async (userId) => {
                 
                 try {
                     await pool.query(
-                        `INSERT INTO integrations (user_id, provider, account_id, updated_at) 
-                         VALUES ($1, 'whatsapp', $2, NOW()) 
+                        `INSERT INTO integrations (user_id, provider, account_id, access_token, updated_at) 
+                         VALUES ($1, 'whatsapp', $2, 'whatsapp_native_session', NOW()) 
                          ON CONFLICT (user_id, provider) DO UPDATE SET updated_at = NOW()`,
                         [userId, `wa_session_${userId}`]
                     );
