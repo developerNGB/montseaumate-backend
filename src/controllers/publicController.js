@@ -308,6 +308,7 @@ export const submitFeedback = async (req, res) => {
             event: 'customer_feedback',
             business_name: config.business_name,
             owner_email: config.owner_email,
+            notification_email: config.notification_email || config.owner_email,
             automation_id,
             rating: rating_overall, // Standardized alias
             rating_service,
