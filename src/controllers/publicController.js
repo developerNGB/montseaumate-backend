@@ -2,6 +2,16 @@ import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
+
+/**
+ * Ensures n8n URLs use the /webhook-test/ path for debugging.
+ */
+const ensureTestUrl = (url) => {
+    if (url && url.includes('n8n.cloud/webhook/')) {
+        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
+    }
+    return url;
+};
 import * as whatsappService from '../services/whatsappService.js';
 
 /**
@@ -540,16 +550,19 @@ export const submitLead = async (req, res) => {
                     whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
 
-                if (captureWebhook) {
-                    fetch(captureWebhook, {
+                const finalCaptureWebhook = ensureTestUrl(captureWebhook);
+                const finalAutoResponseWebhook = ensureTestUrl(autoResponseWebhook);
+
+                if (finalCaptureWebhook) {
+                    fetch(finalCaptureWebhook, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
                     }).catch(e => {});
                 }
 
-                if (autoResponseWebhook) {
-                    fetch(autoResponseWebhook, {
+                if (finalAutoResponseWebhook) {
+                    fetch(finalAutoResponseWebhook, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
