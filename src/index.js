@@ -11,7 +11,9 @@ import activityLogsRoutes from './routes/activityLogsRoutes.js';
 import leadsRoutes from './routes/leadsRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
+import whatsappRoutes from './routes/whatsappRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
+import { restoreActiveSessions } from './services/whatsappService.js';
 
 dotenv.config();
 
@@ -90,6 +92,7 @@ app.use('/api/activity-logs', activityLogsRoutes);
 app.use('/api/leads', leadsRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/feedback', feedbackRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
@@ -122,4 +125,7 @@ app.listen(PORT, () => {
 
     // Start background background Cron Worker
     startFollowupCron();
+    
+    // Restore WhatsApp Sessions
+    restoreActiveSessions();
 });
