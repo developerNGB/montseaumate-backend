@@ -21,6 +21,7 @@
         "nodemailer": "^8.0.1",
         "pg": "^8.13.1",
         "qrcode": "^1.5.4",
-        "whatsapp-web.js": "^1.26.0"
+        "@whiskeysockets/baileys": "^6.7.9",
+        "pino": "^9.4.0"
     }
 }

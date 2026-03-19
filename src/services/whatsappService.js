@@ -1,9 +1,9 @@
-import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import pino from 'pino';
 import qrcode from 'qrcode';
 import pool from '../db/pool.js';
+import fs from 'fs';
 
-// Store clients, their current QR codes, and status
 const clients = new Map();
 const clientQRs = new Map();
 const clientStatus = new Map();
@@ -15,69 +15,76 @@ export const initWhatsAppClient = async (userId) => {
 
     clientStatus.set(userId, 'initializing');
     
-    // Use LocalAuth to persist session across restarts
-    const client = new Client({
-        authStrategy: new LocalAuth({ clientId: `user_${userId}` }),
-        puppeteer: {
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--single-process', '--disable-gpu']
-        }
-    });
-
-    client.on('qr', async (qr) => {
-        try {
-            clientStatus.set(userId, 'qr_ready');
-            const qrDataUrl = await qrcode.toDataURL(qr);
-            clientQRs.set(userId, qrDataUrl);
-        } catch (err) {
-            console.error('QR generation error', err);
-        }
-    });
-
-    client.on('ready', async () => {
-        console.log(`WhatsApp Client for user ${userId} is ready!`);
-        clientStatus.set(userId, 'connected');
-        clientQRs.delete(userId);
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(`wa_auth_${userId}`);
         
-        // Ensure integration is recorded in the DB
-        try {
-            await pool.query(
-                `INSERT INTO integrations (user_id, provider, account_id, updated_at) 
-                 VALUES ($1, 'whatsapp', $2, NOW()) 
-                 ON CONFLICT (user_id, provider) DO UPDATE SET updated_at = NOW()`,
-                [userId, `wa_session_${userId}`]
-            );
-        } catch (e) {
-            console.error('Error saving whatsapp status', e);
-        }
-    });
-
-    client.on('disconnected', async (reason) => {
-        console.log(`WhatsApp Client for user ${userId} disconnected:`, reason);
-        clients.delete(userId);
-        clientQRs.delete(userId);
-        clientStatus.delete(userId);
+        const sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }), // Suppress detailed socket logs
+            browser: ['Montseaumate', 'Chrome', '1.0.0']
+        });
         
-        try {
-            await pool.query('DELETE FROM integrations WHERE user_id = $1 AND provider = $2', [userId, 'whatsapp']);
-        } catch (e) {
-            console.error('Error removing whatsapp status', e);
-        }
-    });
+        sock.ev.on('creds.update', saveCreds);
+        
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                clientStatus.set(userId, 'qr_ready');
+                const qrDataUrl = await qrcode.toDataURL(qr);
+                clientQRs.set(userId, qrDataUrl);
+            }
+            
+            if (connection === 'close') {
+                console.log(`WhatsApp Client for user ${userId} closed.`);
+                const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+                
+                clients.delete(userId);
+                clientQRs.delete(userId);
+                
+                if (shouldReconnect) {
+                    clientStatus.set(userId, 'restoring');
+                    initWhatsAppClient(userId);
+                } else {
+                    clientStatus.set(userId, 'disconnected');
+                    try {
+                        await pool.query('DELETE FROM integrations WHERE user_id = $1 AND provider = $2', [userId, 'whatsapp']);
+                        if (fs.existsSync(`wa_auth_${userId}`)) {
+                            fs.rmSync(`wa_auth_${userId}`, { recursive: true, force: true });
+                        }
+                    } catch (e) {
+                        console.error('Error removing whatsapp status', e);
+                    }
+                }
+            } else if (connection === 'open') {
+                console.log(`WhatsApp Client for user ${userId} is ready!`);
+                clientStatus.set(userId, 'connected');
+                clientQRs.delete(userId);
+                clients.set(userId, sock);
+                
+                try {
+                    await pool.query(
+                        `INSERT INTO integrations (user_id, provider, account_id, updated_at) 
+                         VALUES ($1, 'whatsapp', $2, NOW()) 
+                         ON CONFLICT (user_id, provider) DO UPDATE SET updated_at = NOW()`,
+                        [userId, `wa_session_${userId}`]
+                    );
+                } catch (e) {
+                    console.error('Error saving whatsapp status', e);
+                }
+            }
+        });
 
-    // Handle authentication failure
-    client.on('auth_failure', () => {
-        console.error(`WhatsApp auth failed for user ${userId}`);
-        clientStatus.set(userId, 'auth_failed');
-        clients.delete(userId);
-    });
+        // Store the instance initially to prevent multiple attempts
+        clients.set(userId, sock);
 
-    client.initialize().catch(err => {
-        console.error('Client init error', err);
-        clients.delete(userId);
+    } catch (e) {
+        console.error('Client init error', e);
         clientStatus.set(userId, 'error');
-    });
-
-    clients.set(userId, client);
+        clients.delete(userId);
+    }
+    
     return { success: true };
 };
 
@@ -93,17 +100,17 @@ export const getClient = (userId) => {
 };
 
 export const disconnectClient = async (userId) => {
-    const client = clients.get(userId);
-    if (client) {
+    const sock = clients.get(userId);
+    if (sock) {
         try {
-            await client.logout();
-        } catch(e) {}
-        try {
-             await client.destroy();
+            await sock.logout();
         } catch(e) {}
         clients.delete(userId);
         clientQRs.delete(userId);
         clientStatus.delete(userId);
+        if (fs.existsSync(`wa_auth_${userId}`)) {
+            fs.rmSync(`wa_auth_${userId}`, { recursive: true, force: true });
+        }
     }
 };
 
