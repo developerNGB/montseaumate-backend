@@ -147,7 +147,12 @@ const startFollowupCron = () => {
                   AND l.followup_status = 'pending'
                   AND NOW() >= (
                       l.created_at + 
-                      (s.delay_value * CASE WHEN s.delay_unit = 'minutes' THEN interval '1 minute' ELSE interval '1 hour' END)
+                      (s.delay_value * CASE 
+                          WHEN s.delay_unit = 'seconds' THEN interval '1 second' 
+                          WHEN s.delay_unit = 'minutes' THEN interval '1 minute' 
+                          WHEN s.delay_unit = 'days' THEN interval '1 day' 
+                          ELSE interval '1 hour' 
+                      END)
                   )
             `);
 
@@ -179,7 +184,12 @@ const startFollowupCron = () => {
                   AND l.followup_status_reminder = 'pending'
                   AND NOW() >= (
                       l.created_at + 
-                      (s.reminder_delay_value * CASE WHEN s.reminder_delay_unit = 'minutes' THEN interval '1 minute' ELSE interval '1 hour' END)
+                      (s.reminder_delay_value * CASE 
+                          WHEN s.reminder_delay_unit = 'seconds' THEN interval '1 second' 
+                          WHEN s.reminder_delay_unit = 'minutes' THEN interval '1 minute' 
+                          WHEN s.reminder_delay_unit = 'days' THEN interval '1 day' 
+                          ELSE interval '1 hour' 
+                      END)
                   )
             `);
 
