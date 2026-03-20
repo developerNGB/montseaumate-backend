@@ -4,6 +4,16 @@ import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 
 /**
+ * Ensures n8n URLs use the /webhook/ path for production.
+ */
+const ensureProductionUrl = (url) => {
+    if (url && url.includes('n8n.cloud/webhook-test/')) {
+        return url.replace('n8n.cloud/webhook-test/', 'n8n.cloud/webhook/');
+    }
+    return url;
+};
+
+/**
  * Ensures n8n URLs use the /webhook-test/ path for debugging.
  */
 const ensureTestUrl = (url) => {
@@ -91,7 +101,7 @@ export const submitReview = async (req, res) => {
         );
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = ensureTestUrl(n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback");
+        const finalWebhook = ensureProductionUrl(n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook/review-feedback");
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -348,7 +358,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = ensureTestUrl(config.n8n_webhook_url || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback");
+        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || "https://dataanalyst.app.n8n.cloud/webhook/review-feedback");
         let n8nResponseData = null;
         let debugStatus = "pending";
 
@@ -377,7 +387,7 @@ export const submitFeedback = async (req, res) => {
         }
 
         // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = ensureTestUrl(config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK);
+        const extraWebhook = ensureProductionUrl(config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK);
         if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
             fetch(extraWebhook, {
                 method: 'POST',
