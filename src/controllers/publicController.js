@@ -348,7 +348,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
+        const reviewFeedbackWebhook = ensureTestUrl(config.n8n_webhook_url || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback");
         let n8nResponseData = null;
         let debugStatus = "pending";
 
@@ -377,7 +377,7 @@ export const submitFeedback = async (req, res) => {
         }
 
         // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+        const extraWebhook = ensureTestUrl(config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK);
         if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
             fetch(extraWebhook, {
                 method: 'POST',
