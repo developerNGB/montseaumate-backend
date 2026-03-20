@@ -190,7 +190,7 @@ export const triggerLeadFollowup = async (req, res) => {
            }
         }
 
-        const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://samdavid.app.n8n.cloud/webhook-test/review-feedback";
+        const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://dataanalyst.app.n8n.cloud/webhook/review-feedback";
         
         const n8nRes = await fetch(webhookUrl, {
             method: 'POST',

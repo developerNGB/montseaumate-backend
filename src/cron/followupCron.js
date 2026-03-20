@@ -26,7 +26,7 @@ const startFollowupCron = () => {
             const whatsappAuth = integrations['whatsapp'] || {};
             const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
-            const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://samdavid.app.n8n.cloud/webhook-test/lead-followup';
+            const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook/lead-followup';
             const response = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
