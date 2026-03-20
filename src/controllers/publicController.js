@@ -4,11 +4,11 @@ import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 
 /**
- * Ensures n8n URLs use the /webhook/ path for production.
+ * Ensures n8n URLs use the /webhook-test/ path for debugging.
  */
-const ensureProductionUrl = (url) => {
-    if (url && url.includes('n8n.cloud/webhook-test/')) {
-        return url.replace('n8n.cloud/webhook-test/', 'n8n.cloud/webhook/');
+const ensureTestUrl = (url) => {
+    if (url && url.includes('n8n.cloud/webhook/')) {
+        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
     }
     return url;
 };
@@ -91,7 +91,7 @@ export const submitReview = async (req, res) => {
         );
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook/review-feedback";
+        const finalWebhook = n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback";
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -550,8 +550,8 @@ export const submitLead = async (req, res) => {
                     whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
 
-                const finalCaptureWebhook = ensureProductionUrl(captureWebhook);
-                const finalAutoResponseWebhook = ensureProductionUrl(autoResponseWebhook);
+                const finalCaptureWebhook = ensureTestUrl(captureWebhook);
+                const finalAutoResponseWebhook = ensureTestUrl(autoResponseWebhook);
 
                 if (finalCaptureWebhook) {
                     fetch(finalCaptureWebhook, {
