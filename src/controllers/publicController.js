@@ -91,7 +91,7 @@ export const submitReview = async (req, res) => {
         );
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback";
+        const finalWebhook = ensureTestUrl(n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback");
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible

@@ -1,6 +1,13 @@
 import pool from '../db/pool.js';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 
+const ensureTestUrl = (url) => {
+    if (url && url.includes('n8n.cloud/webhook/')) {
+        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
+    }
+    return url;
+};
+
 const startFollowupCron = () => {
     console.log('🤖 Background Automation Started: Checking for new lead follow-ups every 5 seconds...');
 
@@ -26,7 +33,7 @@ const startFollowupCron = () => {
             const whatsappAuth = integrations['whatsapp'] || {};
             const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
-            const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook-test/lead-followup';
+            const webhookUrl = ensureTestUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook-test/lead-followup');
             const response = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
