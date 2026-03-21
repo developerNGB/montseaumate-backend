@@ -570,8 +570,8 @@ export const submitLead = async (req, res) => {
                     whatsapp_refresh_token: whatsappAuth.refresh_token || null
                 };
 
-                const finalCaptureWebhook = ensureTestUrl(captureWebhook);
-                const finalAutoResponseWebhook = ensureTestUrl(autoResponseWebhook);
+                const finalCaptureWebhook = ensureProductionUrl(captureWebhook);
+                const finalAutoResponseWebhook = ensureProductionUrl(autoResponseWebhook);
 
                 if (finalCaptureWebhook) {
                     fetch(finalCaptureWebhook, {

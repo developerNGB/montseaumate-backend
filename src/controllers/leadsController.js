@@ -3,9 +3,9 @@ import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 
-const ensureTestUrl = (url) => {
-    if (url && url.includes('n8n.cloud/webhook/')) {
-        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
+const ensureProductionUrl = (url) => {
+    if (url && url.includes('n8n.cloud/webhook-test/')) {
+        return url.replace('n8n.cloud/webhook-test/', 'n8n.cloud/webhook/');
     }
     return url;
 };
@@ -203,7 +203,7 @@ export const triggerLeadFollowup = async (req, res) => {
            }
         }
 
-        const webhookUrl = ensureTestUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://dataanalyst.app.n8n.cloud/webhook-test/review-feedback");
+        const webhookUrl = ensureProductionUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || "https://dataanalyst.app.n8n.cloud/webhook/lead-followup");
         
         const n8nRes = await fetch(webhookUrl, {
             method: 'POST',

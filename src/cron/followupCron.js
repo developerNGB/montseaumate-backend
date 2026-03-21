@@ -2,15 +2,13 @@ import pool from '../db/pool.js';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 
-const ensureTestUrl = (url) => {
-    if (url && url.includes('n8n.cloud/webhook/')) {
-        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
-    }
+const ensureProductionUrl = (url) => {
+    // User requested move to production for all URLs
     return url;
 };
 
 const startFollowupCron = () => {
-    console.log('🤖 Background Automation Started: Checking for new lead follow-ups every 5 seconds...');
+    console.log('🤖 Background Automation Started: Checking for all consented lead follow-ups...');
 
     const processLead = async (lead, isReminder = false) => {
         try {
@@ -45,7 +43,9 @@ const startFollowupCron = () => {
                 number: whatsapp_number
             });
 
-            const webhookUrl = ensureTestUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook-test/lead-followup');
+            // PRODUCTION WEBHOOK URLs (tested and verified by user)
+            const webhookUrl = ensureProductionUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook/lead-followup');
+            
             const response = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -80,7 +80,6 @@ const startFollowupCron = () => {
 
             const followupStatusField = isReminder ? 'followup_status_reminder' : 'followup_status';
 
-            // If its a success, update the lead status
             if (response.ok || response.status === 200) {
                 // Update BOTH followup_status AND lead_status (to 'Contacted')
                 await pool.query(
@@ -103,19 +102,17 @@ const startFollowupCron = () => {
                             lead_name: lead.full_name,
                             lead_email: lead.lead_email,
                             delay: `${lead.delay_value} ${lead.delay_unit}`,
-                            message_sent: lead.custom_message
+                            message_sent: injectedMessage
                         })
                     ]
                 );
 
                 console.log(`[FollowupCron] 🚀 ${isReminder ? 'Reminder' : 'Followup'} sent successfully for lead: ${lead.full_name}`);
             } else {
-                // If its a 404 or other temporary error, don't mark as 'failed' immediately
-                // This allows the user to re-run it until they fix their webhook
                 console.log(`[FollowupCron] ⚠️ Webhook returned ${response.status} for lead: ${lead.full_name}. Will retry later.`);
                 
-                // Optionally mark as 'retrying' or just leave it 'pending' 
-                // We'll leave it as is so it picks up again next run
+                // If it's NOT a 404, we can mark it as failed, but user asked to keep running until contacted
+                // So we just update the timestamp to avoid tight-loops
                 await pool.query(
                     `UPDATE leads SET updated_at = NOW() WHERE id = $1`,
                     [lead.lead_id]
@@ -126,10 +123,10 @@ const startFollowupCron = () => {
         }
     };
 
-    // Run every 5 seconds
+    // Run every 10 seconds
     setInterval(async () => {
         try {
-            // 1. Process PRIMARY Follow-ups
+            // 1. Process PRIMARY Follow-ups (Now including HISTORICAL leads with consent)
             const primaryResult = await pool.query(`
                 SELECT 
                     l.id as lead_id,
@@ -150,14 +147,15 @@ const startFollowupCron = () => {
                 JOIN users u ON l.user_id = u.id
                 LEFT JOIN review_funnel_settings rfs ON l.user_id = rfs.user_id
                 WHERE s.is_active = true 
-                  AND l.lead_status = 'New'
-                  AND (l.followup_status = 'pending' OR (l.followup_status = 'failed' AND NOW() - l.updated_at > interval '5 minutes'))
+                  AND l.marketing_consent = true
+                  AND LOWER(l.lead_status) = 'new'
+                  AND (l.followup_status = 'pending' OR l.followup_status = 'failed' OR l.followup_status IS NULL)
                   AND NOW() >= (
                       l.created_at + 
                       (s.delay_value * CASE 
-                          WHEN s.delay_unit = 'seconds' THEN interval '1 second' 
-                          WHEN s.delay_unit = 'minutes' THEN interval '1 minute' 
-                          WHEN s.delay_unit = 'days' THEN interval '1 day' 
+                          WHEN LOWER(s.delay_unit) = 'seconds' THEN interval '1 second' 
+                          WHEN LOWER(s.delay_unit) = 'minutes' THEN interval '1 minute' 
+                          WHEN LOWER(s.delay_unit) = 'days' THEN interval '1 day' 
                           ELSE interval '1 hour' 
                       END)
                   )
@@ -167,7 +165,7 @@ const startFollowupCron = () => {
                 await processLead(lead, false);
             }
 
-            // 2. Process SECONDARY Reminders
+            // 2. Process SECONDARY Reminders (Also including HISTORICAL leads)
             const reminderResult = await pool.query(`
                 SELECT 
                     l.id as lead_id,
@@ -188,14 +186,15 @@ const startFollowupCron = () => {
                 JOIN users u ON l.user_id = u.id
                 LEFT JOIN review_funnel_settings rfs ON l.user_id = rfs.user_id
                 WHERE s.reminder_active = true 
-                  AND l.followup_status = 'success' -- Only remind if first follow-up succeeded
-                  AND (l.followup_status_reminder = 'pending' OR (l.followup_status_reminder = 'failed' AND NOW() - l.updated_at > interval '5 minutes'))
+                  AND l.marketing_consent = true
+                  AND l.followup_status = 'success'
+                  AND (l.followup_status_reminder = 'pending' OR l.followup_status_reminder = 'failed' OR l.followup_status_reminder IS NULL)
                   AND NOW() >= (
                       l.created_at + 
                       (s.reminder_delay_value * CASE 
-                          WHEN s.reminder_delay_unit = 'seconds' THEN interval '1 second' 
-                          WHEN s.reminder_delay_unit = 'minutes' THEN interval '1 minute' 
-                          WHEN s.reminder_delay_unit = 'days' THEN interval '1 day' 
+                          WHEN LOWER(s.reminder_delay_unit) = 'seconds' THEN interval '1 second' 
+                          WHEN LOWER(s.reminder_delay_unit) = 'minutes' THEN interval '1 minute' 
+                          WHEN LOWER(s.reminder_delay_unit) = 'days' THEN interval '1 day' 
                           ELSE interval '1 hour' 
                       END)
                   )
@@ -208,7 +207,7 @@ const startFollowupCron = () => {
         } catch (err) {
             console.error('[FollowupCron] Error querying database:', err.message);
         }
-    }, 5 * 1000); // Check every 5 seconds
+    }, 10 * 1000); // Check every 10 seconds
 };
 
 export default startFollowupCron;
