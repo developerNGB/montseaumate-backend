@@ -127,14 +127,14 @@ export const triggerLeadFollowup = async (req, res) => {
         const { id } = req.params;
         
         // Fetch lead and user config
-        const leadResult = await pool.query(
-            `SELECT l.*, u.company_name, u.email as owner_email, rfs.auto_response_message
-             FROM leads l
-             JOIN users u ON l.user_id = u.id
-             LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
-             WHERE l.id = $1 AND l.user_id = $2`,
-            [id, req.user.id]
-        );
+        const query = `
+            SELECT l.*, u.company_name, u.email as owner_email, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback
+            FROM leads l
+            JOIN users u ON l.user_id = u.id
+            LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+            WHERE l.id = $1 AND l.user_id = $2
+        `;
+        const leadResult = await pool.query(query, [id, req.user.id]);
 
         if (leadResult.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Lead not found' });
@@ -145,14 +145,15 @@ export const triggerLeadFollowup = async (req, res) => {
         // Fetch integration tokens
         const freshGoogleToken = await getValidGoogleToken(req.user.id);
         const integrationsResult = await pool.query(
-            `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+            `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
             [req.user.id]
         );
 
         const integrations = integrationsResult.rows.reduce((acc, curr) => {
             acc[curr.provider] = {
                 access_token: curr.access_token,
-                refresh_token: curr.refresh_token
+                refresh_token: curr.refresh_token,
+                account_id: curr.account_id
             };
             return acc;
         }, {});
@@ -170,12 +171,17 @@ export const triggerLeadFollowup = async (req, res) => {
             source: lead.source,
             business_name: lead.company_name,
             owner_email: lead.owner_email,
+            notification_email: lead.notification_email || lead.owner_email,
+            email: lead.notification_email || lead.owner_email, // Set 'email' as the alert email
+            lead_email: lead.email, // Keep lead email as lead_email
             message: lead.message,
             auto_response_message: lead.auto_response_message,
             injected_message: injectPlaceholders(lead.auto_response_message, {
                 name: lead.full_name,
-                link: `${process.env.FRONTEND_URL}/r/${lead.automation_id || 'default'}`
+                link: `${process.env.FRONTEND_URL}/r/${lead.automation_id || 'default'}`,
+                number: integrations['whatsapp']?.account_id || lead.whatsapp_number_fallback || ''
             }),
+            whatsapp_number: integrations['whatsapp']?.account_id || lead.whatsapp_number_fallback || '',
 
             // Integration tokens for n8n
             client_id: process.env.GOOGLE_CLIENT_ID,

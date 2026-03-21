@@ -33,7 +33,7 @@ export const getPublicReviewConfig = async (req, res) => {
         const { automation_id } = req.params;
 
         const result = await pool.query(
-            `SELECT COALESCE(u.company_name, u.name) as business_name, r.filtering_questions
+            `SELECT COALESCE(u.company_name, u.name) as business_name, r.filtering_questions, r.whatsapp_number_fallback
              FROM review_funnel_settings r
              JOIN users u ON u.id = r.user_id 
              WHERE r.automation_id = $1`,
@@ -305,14 +305,15 @@ export const submitFeedback = async (req, res) => {
             currentGoogleAccessToken = await getValidGoogleToken(config.user_id);
 
             const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
                 [config.user_id]
             );
 
             const integrations = integrationsResult.rows.reduce((acc, curr) => {
                 acc[curr.provider] = {
                     access_token: curr.access_token,
-                    refresh_token: curr.refresh_token
+                    refresh_token: curr.refresh_token,
+                    account_id: curr.account_id
                 };
                 return acc;
             }, {});
@@ -328,7 +329,11 @@ export const submitFeedback = async (req, res) => {
             event: 'customer_feedback',
             business_name: config.business_name,
             owner_email: config.owner_email,
+            whatsapp_message: config.auto_response_message,
+            customer_name,
+            number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
             notification_email: config.notification_email || config.owner_email,
+            email: config.notification_email || config.owner_email, // Set 'email' as the alert email
             automation_id,
             rating: rating_overall, // Standardized alias
             rating_service,
@@ -345,8 +350,10 @@ export const submitFeedback = async (req, res) => {
             },
             injected_message: injectPlaceholders(config.auto_response_message, {
                 name: customer_name,
-                link: `${process.env.FRONTEND_URL}/r/${automation_id}` 
+                link: `${process.env.FRONTEND_URL}/r/${automation_id}`,
+                number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || ''
             }),
+            whatsapp_number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
             // Integration tokens for n8n (Server-side injected for security)
             client_id: process.env.GOOGLE_CLIENT_ID,
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
@@ -455,7 +462,7 @@ export const submitLead = async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.auto_response_message, u.email as owner_email
+            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback, u.email as owner_email
              FROM review_funnel_settings rfs
              JOIN users u ON rfs.user_id = u.id
              WHERE rfs.automation_id = $1`,
@@ -499,14 +506,15 @@ export const submitLead = async (req, res) => {
         try {
             const freshGoogleToken = await getValidGoogleToken(user_id);
             const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
                 [user_id]
             );
 
             const integrations = integrationsResult.rows.reduce((acc, curr) => {
                 acc[curr.provider] = {
                     access_token: curr.access_token,
-                    refresh_token: curr.refresh_token
+                    refresh_token: curr.refresh_token,
+                    account_id: curr.account_id
                 };
                 return acc;
             }, {});
@@ -519,7 +527,8 @@ export const submitLead = async (req, res) => {
             if (whatsappAuth.access_token === 'whatsapp_native_session') {
                 const finalMsg = injectPlaceholders(result.rows[0].auto_response_message, {
                     name: full_name,
-                    link: `${process.env.FRONTEND_URL}/l/${automation_id}`
+                    link: `${process.env.FRONTEND_URL}/l/${automation_id}`,
+                    number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || ''
                 });
                 
                 try {
@@ -536,9 +545,10 @@ export const submitLead = async (req, res) => {
                     automation_id,
                     user_id,
                     owner_email,
-                    full_name,
-                    email,
+                    lead_email: email, // Keep the original lead email as lead_email
+                    email: result.rows[0].notification_email || owner_email, // Set 'email' as the alert email
                     phone,
+                    whatsapp_number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || '',
                     message: message || '',
                     auto_response_message: result.rows[0].auto_response_message,
                     instant_response_template: result.rows[0].auto_response_message,

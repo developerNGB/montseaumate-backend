@@ -6,7 +6,7 @@ import qrcode from 'qrcode';
 export const getReviewFunnelConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1',
+            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -49,7 +49,7 @@ export const getReviewFunnelConfig = async (req, res) => {
 // POST /api/config/review-funnel
 export const saveReviewFunnelConfig = async (req, res) => {
     try {
-        const { google_review_url, notification_email, auto_response_message, filtering_questions } = req.body;
+        const { google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback } = req.body;
 
         // Generate an automation ID if one doesn't exist
         const result = await pool.query('SELECT automation_id FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
@@ -58,15 +58,17 @@ export const saveReviewFunnelConfig = async (req, res) => {
 
         await pool.query(
             `INSERT INTO review_funnel_settings 
-                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 google_review_url = EXCLUDED.google_review_url,
                 notification_email = EXCLUDED.notification_email,
                 auto_response_message = EXCLUDED.auto_response_message,
                 filtering_questions = EXCLUDED.filtering_questions,
+                lead_capture_active = EXCLUDED.lead_capture_active,
+                whatsapp_number_fallback = EXCLUDED.whatsapp_number_fallback,
                 updated_at = NOW()`,
-            [req.user.id, automationId, google_review_url, notification_email, auto_response_message, JSON.stringify(filtering_questions || [])]
+            [req.user.id, automationId, google_review_url, notification_email, auto_response_message, JSON.stringify(filtering_questions || []), lead_capture_active || false, whatsapp_number_fallback || '']
         );
 
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';

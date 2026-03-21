@@ -8,6 +8,9 @@ const router = Router();
 // GET /api/r/:automation_id
 router.get('/r/:automation_id', getPublicReviewConfig);
 
+// GET /api/l/:automation_id
+router.get('/l/:automation_id', getPublicReviewConfig);
+
 // POST /api/f/:automation_id/submit
 router.post('/f/:automation_id/submit', submitFeedback);
 
