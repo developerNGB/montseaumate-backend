@@ -32,12 +32,15 @@ export const getReviewFunnelConfig = async (req, res) => {
             success: true,
             config: { 
                 ...config, 
-                publicUrl: surveyUrl, // Default to survey
-                qrCodeDataUrl: surveyQrCode, 
-                reviewUrl, 
+                lead_capture_active: config.lead_capture_active,
+                whatsapp_number_fallback: config.whatsapp_number_fallback,
+                publicUrl: surveyUrl, 
+                surveyUrl,
+                surveyQrCode,
+                reviewUrl,
                 reviewQrCode,
-                leadUrl, 
-                leadQrCode 
+                leadUrl,
+                leadQrCode
             }
         });
     } catch (err) {
