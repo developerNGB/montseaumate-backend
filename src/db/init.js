@@ -82,6 +82,7 @@ const initDB = async () => {
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS n8n_webhook_url VARCHAR(255)`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS auto_response_message TEXT`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS filtering_questions JSONB DEFAULT '[]'`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_number_fallback VARCHAR(50)`);
         console.log('  ✅ review_funnel_settings table ready');
 
         // 5. FEEDBACK TABLE
