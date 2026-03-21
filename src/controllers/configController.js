@@ -35,6 +35,7 @@ export const getReviewFunnelConfig = async (req, res) => {
                 lead_capture_active: config.lead_capture_active,
                 whatsapp_number_fallback: config.whatsapp_number_fallback,
                 publicUrl: surveyUrl, 
+                qrCodeDataUrl: surveyQrCode,
                 surveyUrl,
                 surveyQrCode,
                 reviewUrl,
@@ -75,11 +76,12 @@ export const saveReviewFunnelConfig = async (req, res) => {
         );
 
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-        const publicUrl = `${baseUrl}/r/${automationId}`;
+        const surveyUrl = `${baseUrl}/f/${automationId}`;
+        const surveyQrCode = await qrcode.toDataURL(surveyUrl);
+        const reviewUrl = `${baseUrl}/r/${automationId}`;
+        const reviewQrCode = await qrcode.toDataURL(reviewUrl);
         const leadUrl = `${baseUrl}/l/${automationId}`;
-
-        const qrCodeDataUrl = await qrcode.toDataURL(publicUrl);
-        const leadQrCodeDataUrl = await qrcode.toDataURL(leadUrl);
+        const leadQrCode = await qrcode.toDataURL(leadUrl);
 
         return res.status(200).json({
             success: true,
@@ -90,18 +92,22 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 notification_email,
                 auto_response_message,
                 filtering_questions: filtering_questions || [],
-                publicUrl: `${baseUrl}/f/${automationId}`,
-                qrCodeDataUrl: await qrcode.toDataURL(`${baseUrl}/f/${automationId}`),
-                reviewUrl: `${baseUrl}/r/${automationId}`,
-                reviewQrCode: await qrcode.toDataURL(`${baseUrl}/r/${automationId}`),
-                leadUrl: `${baseUrl}/l/${automationId}`,
-                leadQrCode: await qrcode.toDataURL(`${baseUrl}/l/${automationId}`)
+                lead_capture_active,
+                whatsapp_number_fallback,
+                publicUrl: surveyUrl, 
+                qrCodeDataUrl: surveyQrCode,
+                surveyUrl,
+                surveyQrCode,
+                reviewUrl,
+                reviewQrCode,
+                leadUrl,
+                leadQrCode
             }
         });
 
     } catch (err) {
-        console.error('[saveReviewFunnelConfig] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[saveReviewFunnelConfig] CRITICAL ERR:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
     }
 };
 

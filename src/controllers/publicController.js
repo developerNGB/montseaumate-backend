@@ -2,6 +2,8 @@ import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
+import fetch from 'node-fetch';
+import * as whatsappService from '../services/whatsappService.js';
 
 /**
  * Ensures n8n URLs use the /webhook/ path for production.
@@ -12,18 +14,6 @@ const ensureProductionUrl = (url) => {
     }
     return url;
 };
-
-/**
- * Ensures n8n URLs use the /webhook-test/ path for debugging.
- */
-const ensureTestUrl = (url) => {
-    if (url && url.includes('n8n.cloud/webhook/')) {
-        return url.replace('n8n.cloud/webhook/', 'n8n.cloud/webhook-test/');
-    }
-    return url;
-};
-import fetch from 'node-fetch';
-import * as whatsappService from '../services/whatsappService.js';
 
 /**
  * GET /api/r/:automation_id
@@ -186,7 +176,7 @@ export const submitReview = async (req, res) => {
                         return res.status(200).json({
                             success: true,
                             action: 'message',
-                            message: "Thank you so much for your honest feedback. Our owner has been directly notified so we can make this right!"
+                            message: n8nRes.message || "Thank you so much for your honest feedback. Our owner has been directly notified so we can make this right!"
                         });
                     }
                 }
@@ -235,6 +225,8 @@ export const submitFeedback = async (req, res) => {
             customer_email,
             customer_phone
         } = req.body;
+
+        console.log(`[submitFeedback] Incoming feedback for ${automation_id}:`, { rating_overall, customer_name });
 
         const result = await pool.query(
             `SELECT r.*, COALESCE(u.company_name, u.name) as business_name, u.email as owner_email
@@ -305,6 +297,7 @@ export const submitFeedback = async (req, res) => {
         let googleRefreshToken = null;
         let whatsappAccessToken = null;
         let whatsappRefreshToken = null;
+        let integrations = {};
 
         try {
             // Get fresh Google Token
@@ -315,7 +308,7 @@ export const submitFeedback = async (req, res) => {
                 [config.user_id]
             );
 
-            const integrations = integrationsResult.rows.reduce((acc, curr) => {
+            integrations = integrationsResult.rows.reduce((acc, curr) => {
                 acc[curr.provider] = {
                     access_token: curr.access_token,
                     refresh_token: curr.refresh_token,
@@ -446,8 +439,8 @@ export const submitFeedback = async (req, res) => {
         return res.status(200).json(finalResponse);
 
     } catch (err) {
-        console.error('[submitFeedback] CRITICAL ERR:', err.message);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+        console.error('[submitFeedback] CRITICAL ERR:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
     }
 };
 
@@ -606,7 +599,7 @@ export const submitLead = async (req, res) => {
             data: { user_id, owner_email, date: current_date }
         });
     } catch (err) {
-        console.error('[submitLead] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[submitLead] CRITICAL ERR:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
     }
 };
