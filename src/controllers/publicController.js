@@ -22,6 +22,7 @@ const ensureTestUrl = (url) => {
     }
     return url;
 };
+import fetch from 'node-fetch';
 import * as whatsappService from '../services/whatsappService.js';
 
 /**
@@ -59,6 +60,8 @@ export const submitReview = async (req, res) => {
     try {
         const { automation_id } = req.params;
         const { rating, feedback, filtering_responses, n8nWebhook } = req.body;
+
+        console.log(`[submitReview] Incoming review for ${automation_id}:`, { rating, feedback });
 
         const result = await pool.query(
             `SELECT r.*, COALESCE(u.company_name, u.name) as business_name
@@ -100,6 +103,8 @@ export const submitReview = async (req, res) => {
             ]
         );
 
+        console.log(`[submitReview] Activity logged. Triggering n8n...`);
+
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
         const finalWebhook = ensureProductionUrl(n8nWebhook || "https://dataanalyst.app.n8n.cloud/webhook/review-feedback");
         if (finalWebhook) {
@@ -127,6 +132,7 @@ export const submitReview = async (req, res) => {
                 // Use the fresh token if we got one, otherwise use the stored one
                 const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
+                console.log(`[submitReview] n8n fetch initiated for ${finalWebhook}`);
                 const n8nRes = await fetch(finalWebhook, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -207,8 +213,8 @@ export const submitReview = async (req, res) => {
         }
 
     } catch (err) {
-        console.error('[submitReview] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[submitReview] CRASH:', err);
+        return res.status(500).json({ success: false, message: 'Server error', error: err.message });
     }
 };
 

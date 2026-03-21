@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import fetch from 'node-fetch';
 
 /**
  * Ensures a user's Google access token is valid.

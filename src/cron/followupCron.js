@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import fetch from 'node-fetch';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 
