@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { injectPlaceholders } from '../utils/templateUtils.js';
 
 const ensureTestUrl = (url) => {
     if (url && url.includes('n8n.cloud/webhook/')) {
@@ -34,6 +35,16 @@ const startFollowupCron = () => {
             const whatsappAuth = integrations['whatsapp'] || {};
             const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
+            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumate-ii-fe.pages.dev';
+            const whatsapp_number = whatsappAuth.account_id || lead.whatsapp_number_fallback || '';
+            const link = `${baseUrl}/r/${lead.automation_id}`;
+
+            const injectedMessage = injectPlaceholders(lead.custom_message, {
+                name: lead.full_name,
+                link: link,
+                number: whatsapp_number
+            });
+
             const webhookUrl = ensureTestUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook-test/lead-followup');
             const response = await fetch(webhookUrl, {
                 method: 'POST',
@@ -51,8 +62,9 @@ const startFollowupCron = () => {
                     captured_date: lead.captured_date,
                     delay_value: lead.delay_value,
                     delay_unit: lead.delay_unit,
-                    whatsapp_number: whatsappAuth.account_id || lead.whatsapp_number_fallback || '',
-                    custom_message: lead.custom_message, 
+                    whatsapp_number: whatsapp_number,
+                    custom_message: injectedMessage, 
+                    injected_message: injectedMessage,
 
                     // Integration tokens for n8n
                     client_id: process.env.GOOGLE_CLIENT_ID,
