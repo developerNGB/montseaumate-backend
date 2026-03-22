@@ -533,131 +533,97 @@ export const submitLead = async (req, res) => {
             ]
         );
 
-        // 3. === WHATSAPP DISPATCH (INDEPENDENT — never blocked by Google/n8n) ===
-        try {
-            console.log(`\n==================== [LEAD SUBMITTED - WA DISPATCH] ====================`);
-            console.log(`👤 Name:  ${full_name}`);
-            console.log(`📧 Email: ${email}`);
-            console.log(`📱 Phone: ${phone}`);
-
-            const integrationsResult = await pool.query(
-                `SELECT provider, access_token, account_id FROM integrations WHERE user_id = $1`,
-                [user_id]
-            );
-            const integrations = integrationsResult.rows.reduce((acc, curr) => {
-                acc[curr.provider] = { access_token: curr.access_token, account_id: curr.account_id };
-                return acc;
-            }, {});
-
-            const whatsappAuth = integrations['whatsapp'] || {};
-            console.log(`[WA-Check] access_token = "${whatsappAuth.access_token}" | account_id = "${whatsappAuth.account_id}"`);
-
-            if (whatsappAuth.access_token === 'whatsapp_native_session') {
-                const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
-
-                // A. OWNER NOTIFICATION (full data dump)
-                const ownerPhone = whatsappAuth.account_id;
-                if (ownerPhone) {
-                    let questionsStr = '';
-                    if (filtering_responses && typeof filtering_responses === 'object') {
-                        questionsStr = '\n\n📝 Responses:\n' + Object.entries(filtering_responses)
-                            .map(([q, a]) => `• ${q}: ${a}`).join('\n');
-                    }
-                    const ownerMsg = `🚀 [NEW LEAD]\n\n👤 ${full_name}\n📧 ${email}\n📱 ${phone}\n💬 ${message || 'No message'}${questionsStr}\n\n🔗 ${baseUrl}/dashboard/leads`;
-                    console.log(`[WA-Owner] Sending to owner: ${ownerPhone}`);
-                    await whatsappService.sendWhatsAppMessage(user_id, ownerPhone, ownerMsg);
-                    console.log(`[WA-Owner] ✅ Owner notified`);
-                } else {
-                    console.log(`[WA-Owner] ⚠️ No owner phone (account_id) found in integrations`);
-                }
-
-                // B. CUSTOMER AUTO-RESPONSE
-                if (phone) {
-                    const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
-                    const finalMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
-                        name: full_name || 'there',
-                        link: `${baseUrl}/l/${automation_id}`,
-                        number: whatsappAuth.account_id || ''
-                    });
-                    console.log(`[WA-Customer] Sending to: ${phone}`);
-                    await whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg);
-                    console.log(`[WA-Customer] ✅ Customer notified: ${phone}`);
-                }
-            } else {
-                console.log(`[WA-Native] ⚠️ WhatsApp NOT active. Token: "${whatsappAuth.access_token}". Skipping.`);
-            }
-            console.log(`========================================================================\n`);
-        } catch (waErr) {
-            console.error(`[WA-Dispatch] ❌ WhatsApp dispatch failed:`, waErr.message);
-        }
-
-        // 4. Background: Google tokens + n8n webhooks (non-blocking)
-        try {
-            const freshGoogleToken = await getValidGoogleToken(user_id);
-            const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
-                [user_id]
-            );
-            const integrations = integrationsResult.rows.reduce((acc, curr) => {
-                acc[curr.provider] = {
-                    access_token: curr.access_token,
-                    refresh_token: curr.refresh_token,
-                    account_id: curr.account_id
-                };
-                return acc;
-            }, {});
-
-            const googleAuth = integrations['google'] || {};
-            const whatsappAuth = integrations['whatsapp'] || {};
-            const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
-
-            if (captureWebhook || autoResponseWebhook) {
-                const payload = {
-                    automation_id, user_id, owner_email,
-                    lead_email: email,
-                    email: result.rows[0].notification_email || owner_email,
-                    phone,
-                    whatsapp_number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || '',
-                    message: message || '',
-                    auto_response_message: result.rows[0].auto_response_message,
-                    instant_response_template: result.rows[0].auto_response_message,
-                    filtering_responses,
-                    source: 'Public Link',
-                    consent: !!consent_given,
-                    marketing_consent: !!marketing_consent,
-                    date: current_date,
-                    injected_message: injectPlaceholders(result.rows[0].auto_response_message, {
-                        name: full_name,
-                        link: `${process.env.FRONTEND_URL}/l/${automation_id}`
-                    }),
-                    client_id: process.env.GOOGLE_CLIENT_ID,
-                    client_secret: process.env.GOOGLE_CLIENT_SECRET,
-                    access_token: currentGoogleAccessToken || null,
-                    refresh_token: googleAuth.refresh_token || null,
-                    whatsapp_access_token: whatsappAuth.access_token || null,
-                    whatsapp_refresh_token: whatsappAuth.refresh_token || null
-                };
-
-                const finalCaptureWebhook = ensureProductionUrl(captureWebhook);
-                const finalAutoResponseWebhook = ensureProductionUrl(autoResponseWebhook);
-
-                if (finalCaptureWebhook) {
-                    fetch(finalCaptureWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(e => {});
-                }
-                if (finalAutoResponseWebhook) {
-                    fetch(finalAutoResponseWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(e => {});
-                }
-            }
-        } catch (webhookErr) {
-            console.error('[submitLead] Background webhook/google logic failed:', webhookErr.message);
-        }
-
-        return res.status(200).json({
+        // ✅ RESPOND IMMEDIATELY — never block the form on WhatsApp or n8n
+        res.status(200).json({
             success: true,
             status: 'success',
             message: 'Lead Submitted',
             data: { user_id, owner_email, date: current_date }
         });
+
+        // === BACKGROUND: WhatsApp + Webhooks (fire-and-forget, never blocks response) ===
+        setImmediate(async () => {
+            try {
+                console.log(`\n==================== [LEAD BG DISPATCH] ====================`);
+                console.log(`👤 Name:  ${full_name}`);
+                console.log(`📧 Email: ${email}`);
+                console.log(`📱 Phone: ${phone}`);
+
+                const intRes = await pool.query(
+                    `SELECT provider, access_token, account_id FROM integrations WHERE user_id = $1`,
+                    [user_id]
+                );
+                const integrations = intRes.rows.reduce((acc, curr) => {
+                    acc[curr.provider] = { access_token: curr.access_token, account_id: curr.account_id };
+                    return acc;
+                }, {});
+
+                const whatsappAuth = integrations['whatsapp'] || {};
+                console.log(`[WA-Check] token="${whatsappAuth.access_token}" | account="${whatsappAuth.account_id}"`);
+
+                if (whatsappAuth.access_token === 'whatsapp_native_session') {
+                    const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+
+                    // A. OWNER — full data dump
+                    const ownerPhone = whatsappAuth.account_id;
+                    if (ownerPhone) {
+                        let questionsStr = '';
+                        if (filtering_responses && typeof filtering_responses === 'object') {
+                            questionsStr = '\n\n📝 Responses:\n' + Object.entries(filtering_responses)
+                                .map(([q, a]) => `• ${q}: ${a}`).join('\n');
+                        }
+                        const ownerMsg = `🚀 [NEW LEAD]\n\n👤 ${full_name}\n📧 ${email}\n📱 ${phone}\n💬 ${message || 'No message'}${questionsStr}\n\n🔗 ${baseUrl}/dashboard/leads`;
+                        console.log(`[WA-Owner] → ${ownerPhone}`);
+                        whatsappService.sendWhatsAppMessage(user_id, ownerPhone, ownerMsg)
+                            .then(() => console.log(`[WA-Owner] ✅ Sent`))
+                            .catch(e => console.error(`[WA-Owner] ❌ ${e.message}`));
+                    } else {
+                        console.log(`[WA-Owner] ⚠️ No account_id in DB — owner not notified`);
+                    }
+
+                    // B. CUSTOMER — auto-response
+                    if (phone) {
+                        const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
+                        const finalMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
+                            name: full_name || 'there',
+                            link: `${baseUrl}/l/${automation_id}`,
+                            number: whatsappAuth.account_id || ''
+                        });
+                        console.log(`[WA-Customer] → ${phone}`);
+                        whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg)
+                            .then(() => console.log(`[WA-Customer] ✅ Sent`))
+                            .catch(e => console.error(`[WA-Customer] ❌ ${e.message}`));
+                    }
+                } else {
+                    console.log(`[WA-Native] ⚠️ Not active. Token: "${whatsappAuth.access_token}"`);
+                }
+                console.log(`============================================================\n`);
+            } catch (bgErr) {
+                console.error(`[BG-Dispatch] ❌ Error:`, bgErr.message);
+            }
+
+            // n8n / webhook (optional)
+            try {
+                if (captureWebhook || autoResponseWebhook) {
+                    const freshGoogleToken = await getValidGoogleToken(user_id).catch(() => null);
+                    const payload = {
+                        automation_id, user_id, owner_email,
+                        lead_email: email,
+                        email: result.rows[0].notification_email || owner_email,
+                        full_name, phone, message: message || '',
+                        filtering_responses, source: 'Public Link',
+                        consent: !!consent_given, marketing_consent: !!marketing_consent,
+                        date: current_date,
+                        access_token: freshGoogleToken || null,
+                    };
+                    if (captureWebhook) fetch(ensureProductionUrl(captureWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+                    if (autoResponseWebhook) fetch(ensureProductionUrl(autoResponseWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+                }
+            } catch (e) {
+                console.error('[BG-Webhook] ❌', e.message);
+            }
+        });
+
     } catch (err) {
         console.error('[submitLead] CRITICAL ERR:', err);
         return res.status(500).json({ success: false, message: 'Internal server error', error: err.message });
