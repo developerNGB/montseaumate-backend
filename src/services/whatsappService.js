@@ -157,7 +157,23 @@ export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
         throw new Error("WhatsApp session active but user data missing. Try reconnecting.");
     }
 
-    const cleaned = targetPhone.replace(/\D/g, '');
+    // Smart E.164 normalization:
+    // react-phone-input-2 already gives us digits + country code (e.g. "923021044751")
+    // But handle edge cases: "+92...", "0321...", already correct "921234..."
+    let cleaned = String(targetPhone).replace(/\D/g, ''); // strip all non-digits
+
+    // If number starts with 0 (local format like 03021044751), prepend country code
+    // Derive country code from the session owner's registered number
+    if (cleaned.startsWith('0') && cleaned.length <= 11) {
+        const ownerNumber = (sock.user.id || '').split(':')[0].split('@')[0]; // e.g. "923197129228"
+        // Country code is typically 2-3 digits at the start of the owner's number
+        // For PK: 92, for US: 1, etc. — we take digits until the local MSN starts
+        const ccMatch = ownerNumber.match(/^(\d{1,3})/);
+        const countryCode = ccMatch ? ccMatch[1] : '92'; // default to Pakistan if unknown
+        cleaned = countryCode + cleaned.slice(1); // replace leading 0 with country code
+        console.log(`[WA-Send] Normalized local number: ${targetPhone} → ${cleaned}`);
+    }
+
     if (!cleaned || cleaned.length < 7) {
         throw new Error(`Invalid phone number: "${targetPhone}"`);
     }
@@ -169,3 +185,4 @@ export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
     console.log(`[WA-Send] ✅ Message delivered to ${jid}`);
     return true;
 };
+
