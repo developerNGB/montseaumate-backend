@@ -1,221 +1,199 @@
 import pool from '../db/pool.js';
-import fetch from 'node-fetch';
-import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 
-const ensureProductionUrl = (url) => {
-    // User requested move to production for all URLs
-    return url;
-};
-
 const startFollowupCron = () => {
-    console.log('🤖 Background Automation Started: Checking for all consented lead follow-ups...');
+    console.log('🤖 Follow-up Cron Started: max 1 primary + 1 reminder per lead.');
 
     const processLead = async (lead, isReminder = false) => {
-        try {
-            // Refresh token logic
-            const freshGoogleToken = await getValidGoogleToken(lead.user_id);
+        const followupField = isReminder ? 'followup_status_reminder' : 'followup_status';
+        const label         = isReminder ? 'REMINDER' : 'PRIMARY';
 
-            const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
-                [lead.user_id]
-            );
+        // ── STEP 1: CLAIM the lead atomically ────────────────────────────────
+        // Set 'processing' immediately so the next 30s cycle ignores this lead.
+        // If another cycle already claimed it, rowCount=0 → bail out safely.
+        const claim = await pool.query(
+            `UPDATE leads
+                SET ${followupField} = 'processing', updated_at = NOW()
+              WHERE id = $1
+                AND (${followupField} IS NULL OR ${followupField} = 'pending')
+              RETURNING id`,
+            [lead.lead_id]
+        );
+        if (claim.rowCount === 0) {
+            console.log(`[FollowupCron] ⏭️  Lead "${lead.full_name}" already claimed — skipping.`);
+            return;
+        }
+        console.log(`[FollowupCron] 🔒 Claimed ${label} for: ${lead.full_name} (${lead.lead_id})`);
 
-            const integrations = integrationsResult.rows.reduce((acc, curr) => {
-                acc[curr.provider] = {
-                    access_token: curr.access_token,
-                    refresh_token: curr.refresh_token,
-                    account_id: curr.account_id
-                };
-                return acc;
-            }, {});
+        // ── STEP 2: Check WhatsApp session ────────────────────────────────────
+        const intRes = await pool.query(
+            `SELECT access_token, account_id FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
+            [lead.user_id]
+        );
+        const waAuth = intRes.rows[0] || {};
 
-            const googleAuth = integrations['google'] || {};
-            const whatsappAuth = integrations['whatsapp'] || {};
-            const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
-
-            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
-            const whatsapp_number = whatsappAuth.account_id || lead.whatsapp_number_fallback || '';
-            const link = `${baseUrl}/r/${lead.automation_id}`;
-
-            const injectedMessage = injectPlaceholders(lead.custom_message, {
-                name: lead.full_name,
-                link: link,
-                number: whatsapp_number
-            });
-
-            // 1. Direct WhatsApp Dispatch (Native)
-            if (whatsappAuth.access_token === 'whatsapp_native_session' && lead.phone) {
-                // Check session status BEFORE attempting — if still restoring, skip gracefully
-                const sessionStatus = whatsappService.getSessionStatus(lead.user_id);
-                if (sessionStatus.status === 'initializing' || sessionStatus.status === 'restoring') {
-                    console.log(`[FollowupCron] ⏳ Session still restoring for user ${lead.user_id}. Skipping lead "${lead.full_name}" — will retry next cycle.`);
-                    return; // Silent skip — lead stays pending, cron retries in 10s
-                }
-                if (sessionStatus.status !== 'connected') {
-                    console.warn(`[FollowupCron] ⚠️ Session not connected (status: ${sessionStatus.status}). Skipping lead "${lead.full_name}".`);
-                    return;
-                }
-
-                try {
-                    await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, injectedMessage);
-                    console.log(`[FollowupCron] ✅ Native WhatsApp ${isReminder ? 'Reminder' : 'Followup'} sent to ${lead.phone}`);
-                } catch (dispatchErr) {
-                    // If it fails mid-send, log it but don't mark as failed — let it retry
-                    console.error(`[FollowupCron] ❌ Native dispatch FAILED for "${lead.full_name}":`, dispatchErr.message);
-                    return; // Retry next cycle
-                }
-            } else {
-                console.warn(`[FollowupCron] ⚠️ Skipping lead "${lead.full_name}" — no native WhatsApp session configured.`);
-                return;
-            }
-
-            // 2. Optional Notification Webhook
-            const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
-            if (webhookUrl) {
-                fetch(webhookUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        event: isReminder ? 'lead_reminder' : 'lead_followup',
-                        lead_id: lead.lead_id,
-                        full_name: lead.full_name,
-                        phone: lead.phone,
-                        message: injectedMessage
-                    })
-                }).catch(e => {});
-            }
-
-            const followupStatusField = isReminder ? 'followup_status_reminder' : 'followup_status';
-
-            // Mark Success
+        if (waAuth.access_token !== 'whatsapp_native_session' || !lead.phone) {
+            console.warn(`[FollowupCron] ⚠️  No native WhatsApp for "${lead.full_name}". Marking failed (no retry).`);
             await pool.query(
-                `UPDATE leads SET ${followupStatusField} = 'success', lead_status = 'Contacted', updated_at = NOW() WHERE id = $1`,
+                `UPDATE leads SET ${followupField} = 'failed', updated_at = NOW() WHERE id = $1`,
                 [lead.lead_id]
             );
-
-            // 📝 LOG ACTIVITY: SUCCESS
-            await pool.query(
-                `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
-                  VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-                [
-                    lead.user_id,
-                    isReminder ? 'Lead Reminder' : 'Lead Follow-up',
-                    isReminder ? 'Scheduled Reminder' : 'Scheduled Followup',
-                    'Success',
-                    `${isReminder ? 'Reminder' : 'Follow-up'} sent to: ${lead.full_name}`,
-                    JSON.stringify({
-                        lead_name: lead.full_name,
-                        lead_email: lead.lead_email,
-                        message_sent: injectedMessage
-                    })
-                ]
-            );
-
-            console.log(`[FollowupCron] 🚀 ${isReminder ? 'Reminder' : 'Followup'} marked success in DB for: ${lead.full_name}`);
-        } catch (webhookErr) {
-            console.error('[FollowupCron] Webhook connection failed for lead', lead.lead_id, webhookErr.message);
+            return;
         }
+
+        const sessionStatus = whatsappService.getSessionStatus(lead.user_id);
+        if (sessionStatus.status !== 'connected') {
+            // Release the claim → lead retries on next cycle once session is live
+            console.log(`[FollowupCron] ⏳ Session ${sessionStatus.status} — releasing claim for "${lead.full_name}". Will retry.`);
+            await pool.query(
+                `UPDATE leads SET ${followupField} = 'pending', updated_at = NOW() WHERE id = $1`,
+                [lead.lead_id]
+            );
+            return;
+        }
+
+        // ── STEP 3: Build & Send message ──────────────────────────────────────
+        const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+        const link    = `${baseUrl}/r/${lead.automation_id || ''}`;
+        const msg     = injectPlaceholders(lead.custom_message || '', {
+            name:   lead.full_name,
+            link:   link,
+            number: waAuth.account_id || ''
+        });
+
+        try {
+            await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg);
+            console.log(`[FollowupCron] ✅ ${label} sent → ${lead.phone} for "${lead.full_name}"`);
+        } catch (sendErr) {
+            console.error(`[FollowupCron] ❌ Send FAILED for "${lead.full_name}":`, sendErr.message);
+            // Mark failed — NOT retried because 'failed' is excluded from WHERE clause
+            await pool.query(
+                `UPDATE leads SET ${followupField} = 'failed', updated_at = NOW() WHERE id = $1`,
+                [lead.lead_id]
+            );
+            return;
+        }
+
+        // ── STEP 4: Mark success ───────────────────────────────────────────────
+        await pool.query(
+            `UPDATE leads
+                SET ${followupField} = 'success',
+                    lead_status      = 'Contacted',
+                    updated_at       = NOW()
+              WHERE id = $1`,
+            [lead.lead_id]
+        );
+
+        // ── STEP 5: Activity log ──────────────────────────────────────────────
+        await pool.query(
+            `INSERT INTO activity_logs
+                (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+             VALUES ($1, $2, $3, 'Success', $4, $5, NOW())`,
+            [
+                lead.user_id,
+                isReminder ? 'Lead Reminder' : 'Lead Follow-up',
+                isReminder ? 'Scheduled Reminder' : 'Scheduled Followup',
+                `${isReminder ? 'Reminder' : 'Follow-up'} sent to: ${lead.full_name}`,
+                JSON.stringify({ lead_name: lead.full_name, phone: lead.phone, message_sent: msg })
+            ]
+        );
+
+        console.log(`[FollowupCron] 🚀 ${label} complete for: ${lead.full_name}`);
     };
 
-    // Run every 10 seconds
+    // ── Poll every 30 seconds ─────────────────────────────────────────────────
     setInterval(async () => {
         try {
-            // 1. Process PRIMARY Follow-ups (Now including HISTORICAL leads with consent)
-            const primaryResult = await pool.query(`
-                SELECT 
-                    l.id as lead_id,
+
+            // PRIMARY: only New leads, only if never sent (NULL or pending)
+            const primary = await pool.query(`
+                SELECT
+                    l.id            AS lead_id,
                     l.user_id,
                     l.full_name,
-                    l.email as lead_email,
+                    l.email         AS lead_email,
                     l.phone,
-                    l.message as original_message,
-                    l.created_at as captured_date,
+                    l.created_at    AS captured_date,
                     s.delay_value,
                     s.delay_unit,
-                    s.message as custom_message,
-                    u.email as owner_email,
+                    s.message       AS custom_message,
                     rfs.automation_id,
                     rfs.whatsapp_number_fallback
                 FROM leads l
-                JOIN lead_followup_settings s ON l.user_id = s.user_id
-                JOIN users u ON l.user_id = u.id
+                JOIN lead_followup_settings s   ON l.user_id = s.user_id
+                JOIN users u                    ON l.user_id = u.id
                 LEFT JOIN review_funnel_settings rfs ON l.user_id = rfs.user_id
-                WHERE s.is_active = true 
+                WHERE s.is_active         = true
                   AND l.marketing_consent = true
                   AND LOWER(l.lead_status) = 'new'
-                  AND (l.followup_status = 'pending' OR l.followup_status = 'failed' OR l.followup_status IS NULL)
+                  AND (l.followup_status IS NULL OR l.followup_status = 'pending')
                   AND NOW() >= (
-                      l.created_at + 
-                      (s.delay_value * CASE 
-                          WHEN LOWER(s.delay_unit) = 'seconds' THEN interval '1 second' 
-                          WHEN LOWER(s.delay_unit) = 'minutes' THEN interval '1 minute' 
-                          WHEN LOWER(s.delay_unit) = 'days' THEN interval '1 day' 
-                          ELSE interval '1 hour' 
-                      END)
+                      l.created_at +
+                      s.delay_value * CASE LOWER(s.delay_unit)
+                          WHEN 'seconds' THEN INTERVAL '1 second'
+                          WHEN 'minutes' THEN INTERVAL '1 minute'
+                          WHEN 'days'    THEN INTERVAL '1 day'
+                          ELSE                INTERVAL '1 hour'
+                      END
                   )
+                LIMIT 20
             `);
 
-            const pendingCount = primaryResult.rows.length;
-            if (pendingCount > 0) {
-                console.log(`[FollowupCron] 📋 Found ${pendingCount} PRIMARY leads matching follow-up criteria.`);
+            if (primary.rows.length > 0) {
+                console.log(`[FollowupCron] 📋 ${primary.rows.length} PRIMARY lead(s) ready.`);
             }
-
-            for (const lead of primaryResult.rows) {
-                console.log(`[FollowupCron] 🔄 Processing PRIMARY follow-up for lead: ${lead.full_name} (${lead.lead_id})`);
+            for (const lead of primary.rows) {
+                console.log(`[FollowupCron] 🔄 PRIMARY → ${lead.full_name} (${lead.lead_id})`);
                 await processLead(lead, false);
             }
 
-            // 2. Process SECONDARY Reminders (Also including HISTORICAL leads)
-            const reminderResult = await pool.query(`
-                SELECT 
-                    l.id as lead_id,
+            // SECONDARY: only if primary was already sent (success), reminder not sent yet
+            const reminder = await pool.query(`
+                SELECT
+                    l.id            AS lead_id,
                     l.user_id,
                     l.full_name,
-                    l.email as lead_email,
+                    l.email         AS lead_email,
                     l.phone,
-                    l.message as original_message,
-                    l.created_at as captured_date,
-                    s.reminder_delay_value as delay_value,
-                    s.reminder_delay_unit as delay_unit,
-                    s.reminder_message as custom_message,
-                    u.email as owner_email,
+                    l.created_at    AS captured_date,
+                    s.reminder_delay_value  AS delay_value,
+                    s.reminder_delay_unit   AS delay_unit,
+                    s.reminder_message      AS custom_message,
                     rfs.automation_id,
                     rfs.whatsapp_number_fallback
                 FROM leads l
-                JOIN lead_followup_settings s ON l.user_id = s.user_id
-                JOIN users u ON l.user_id = u.id
+                JOIN lead_followup_settings s   ON l.user_id = s.user_id
+                JOIN users u                    ON l.user_id = u.id
                 LEFT JOIN review_funnel_settings rfs ON l.user_id = rfs.user_id
-                WHERE s.reminder_active = true 
-                  AND l.marketing_consent = true
-                  AND l.followup_status = 'success'
-                  AND (l.followup_status_reminder = 'pending' OR l.followup_status_reminder = 'failed' OR l.followup_status_reminder IS NULL)
+                WHERE s.reminder_active      = true
+                  AND l.marketing_consent     = true
+                  AND l.followup_status        = 'success'
+                  AND (l.followup_status_reminder IS NULL OR l.followup_status_reminder = 'pending')
                   AND NOW() >= (
-                      l.created_at + 
-                      (s.reminder_delay_value * CASE 
-                          WHEN LOWER(s.reminder_delay_unit) = 'seconds' THEN interval '1 second' 
-                          WHEN LOWER(s.reminder_delay_unit) = 'minutes' THEN interval '1 minute' 
-                          WHEN LOWER(s.reminder_delay_unit) = 'days' THEN interval '1 day' 
-                          ELSE interval '1 hour' 
-                      END)
+                      l.created_at +
+                      s.reminder_delay_value * CASE LOWER(s.reminder_delay_unit)
+                          WHEN 'seconds' THEN INTERVAL '1 second'
+                          WHEN 'minutes' THEN INTERVAL '1 minute'
+                          WHEN 'days'    THEN INTERVAL '1 day'
+                          ELSE                INTERVAL '1 hour'
+                      END
                   )
+                LIMIT 20
             `);
 
-            const reminderCount = reminderResult.rows.length;
-            if (reminderCount > 0) {
-                console.log(`[FollowupCron] 📋 Found ${reminderCount} SECONDARY reminder leads matching criteria.`);
+            if (reminder.rows.length > 0) {
+                console.log(`[FollowupCron] 📋 ${reminder.rows.length} SECONDARY reminder(s) ready.`);
             }
-
-            for (const lead of reminderResult.rows) {
-                console.log(`[FollowupCron] 🔄 Processing SECONDARY reminder for lead: ${lead.full_name} (${lead.lead_id})`);
+            for (const lead of reminder.rows) {
+                console.log(`[FollowupCron] 🔄 REMINDER → ${lead.full_name} (${lead.lead_id})`);
                 await processLead(lead, true);
             }
 
         } catch (err) {
-            console.error('[FollowupCron] Error querying database:', err.message);
+            console.error('[FollowupCron] ❌ DB query error:', err.message);
         }
-    }, 10 * 1000); // Check every 10 seconds
+    }, 30 * 1000);
 };
 
 export default startFollowupCron;
