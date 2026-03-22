@@ -6,7 +6,7 @@ import qrcode from 'qrcode';
 export const getReviewFunnelConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback FROM review_funnel_settings WHERE user_id = $1',
+            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -41,7 +41,9 @@ export const getReviewFunnelConfig = async (req, res) => {
                 reviewUrl,
                 reviewQrCode,
                 leadUrl,
-                leadQrCode
+                leadQrCode,
+                lead_source,
+                capture_source: config.capture_source || 'qr'
             }
         });
     } catch (err) {
@@ -53,17 +55,25 @@ export const getReviewFunnelConfig = async (req, res) => {
 // POST /api/config/review-funnel
 export const saveReviewFunnelConfig = async (req, res) => {
     try {
-        const { google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback } = req.body;
+        const { google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source } = req.body;
 
         // Generate an automation ID if one doesn't exist
         const result = await pool.query('SELECT automation_id FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
 
-        let automationId = result.rows.length > 0 ? result.rows[0].automation_id : crypto.randomBytes(4).toString('hex');
+        const validatedLeadSource = (lead_source === 'qr' || lead_source === 'excel') ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
+        const validatedCaptureSource = (capture_source === 'qr' || capture_source === 'excel') ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
+
+        // Get existing to avoid overwrites if not provided
+        const existingConfigRes = await pool.query('SELECT lead_source, capture_source FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
+        const existingConfig = existingConfigRes.rows[0] || {};
+
+        const finalLeadSource = validatedLeadSource || existingConfig.lead_source || 'qr';
+        const finalCaptureSource = validatedCaptureSource || existingConfig.capture_source || 'qr';
 
         await pool.query(
             `INSERT INTO review_funnel_settings 
-                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 google_review_url = EXCLUDED.google_review_url,
                 notification_email = EXCLUDED.notification_email,
@@ -71,8 +81,10 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 filtering_questions = EXCLUDED.filtering_questions,
                 lead_capture_active = EXCLUDED.lead_capture_active,
                 whatsapp_number_fallback = EXCLUDED.whatsapp_number_fallback,
+                lead_source = EXCLUDED.lead_source,
+                capture_source = EXCLUDED.capture_source,
                 updated_at = NOW()`,
-            [req.user.id, automationId, google_review_url, notification_email, auto_response_message, JSON.stringify(filtering_questions || []), lead_capture_active || false, whatsapp_number_fallback || '']
+            [req.user.id, automationId, google_review_url, notification_email, auto_response_message, JSON.stringify(filtering_questions || []), lead_capture_active || false, whatsapp_number_fallback || '', finalLeadSource, finalCaptureSource]
         );
 
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -101,7 +113,9 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 reviewUrl,
                 reviewQrCode,
                 leadUrl,
-                leadQrCode
+                leadQrCode,
+                lead_source: finalLeadSource,
+                capture_source: finalCaptureSource
             }
         });
 
@@ -115,7 +129,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
 export const getLeadFollowupConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source FROM lead_followup_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -137,7 +151,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
 
         // Fetch existing config first
         const existingRes = await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source FROM lead_followup_settings WHERE user_id = $1',
             [req.user.id]
         );
         const existing = existingRes.rows.length > 0 ? existingRes.rows[0] : {};
@@ -147,6 +161,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
         const delay_value = passed.delay_value !== undefined ? passed.delay_value : (existing.delay_value ?? 24);
         const delay_unit = passed.delay_unit !== undefined ? passed.delay_unit : (existing.delay_unit ?? 'hours');
         const message = passed.message !== undefined ? passed.message : (existing.message ?? 'Hey, just following up on your inquiry from yesterday. Are you still looking for help with this? Let me know!');
+        const lead_source = passed.lead_source !== undefined ? passed.lead_source : (existing.lead_source ?? 'excel');
 
         const reminder_active = passed.reminder_active !== undefined ? passed.reminder_active : (existing.reminder_active ?? false);
         const reminder_delay_value = passed.reminder_delay_value !== undefined ? passed.reminder_delay_value : (existing.reminder_delay_value ?? 48);
@@ -156,8 +171,8 @@ export const saveLeadFollowupConfig = async (req, res) => {
         await pool.query(
             `INSERT INTO lead_followup_settings 
                 (user_id, is_active, delay_value, delay_unit, message, 
-                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 is_active = EXCLUDED.is_active,
                 delay_value = EXCLUDED.delay_value,
@@ -167,9 +182,10 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 reminder_delay_value = EXCLUDED.reminder_delay_value,
                 reminder_delay_unit = EXCLUDED.reminder_delay_unit,
                 reminder_message = EXCLUDED.reminder_message,
+                lead_source = EXCLUDED.lead_source,
                 updated_at = NOW()`,
             [req.user.id, is_active, delay_value, delay_unit, message,
-                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message]
+                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source]
         );
 
         return res.status(200).json({
@@ -177,7 +193,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
             message: 'Lead follow-up settings saved successfully!',
             config: {
                 is_active, delay_value, delay_unit, message,
-                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message
+                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source
             }
         });
 
