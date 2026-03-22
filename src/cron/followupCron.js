@@ -2,6 +2,7 @@ import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
+import * as whatsappService from '../services/whatsappService.js';
 
 const ensureProductionUrl = (url) => {
     // User requested move to production for all URLs
@@ -34,7 +35,7 @@ const startFollowupCron = () => {
             const whatsappAuth = integrations['whatsapp'] || {};
             const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
-            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumate-ii-fe.pages.dev';
+            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
             const whatsapp_number = whatsappAuth.account_id || lead.whatsapp_number_fallback || '';
             const link = `${baseUrl}/r/${lead.automation_id}`;
 
@@ -44,81 +45,63 @@ const startFollowupCron = () => {
                 number: whatsapp_number
             });
 
-            // PRODUCTION WEBHOOK URLs (tested and verified by user)
-            const webhookUrl = ensureProductionUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK || 'https://dataanalyst.app.n8n.cloud/webhook/lead-followup');
-            
-            const response = await fetch(webhookUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    lead_id: lead.lead_id,
-                    is_reminder: isReminder,
-                    automation_id: lead.automation_id,
-                    "Automation ID": lead.automation_id,
-                    owner_email: lead.owner_email,
-                    full_name: lead.full_name,
-                    email: lead.lead_email,
-                    phone: lead.phone,
-                    original_message: lead.original_message,
-                    captured_date: lead.captured_date,
-                    delay_value: lead.delay_value,
-                    delay_unit: lead.delay_unit,
-                    whatsapp_number: whatsapp_number,
-                    custom_message: injectedMessage, 
-                    injected_message: injectedMessage,
+            // 1. Direct WhatsApp Dispatch (Native)
+            if (whatsappAuth.access_token === 'whatsapp_native_session' && lead.phone) {
+                try {
+                    await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, injectedMessage);
+                    console.log(`[FollowupCron] ✅ Native WhatsApp ${isReminder ? 'Reminder' : 'Followup'} sent to ${lead.phone}`);
+                } catch (dispatchErr) {
+                    console.error(`[FollowupCron] ❌ Native dispatch FAILED:`, dispatchErr.message);
+                    throw dispatchErr; 
+                }
+            } else {
+                console.warn(`[FollowupCron] Skipping lead ${lead.full_name} because no native WhatsApp session is active.`);
+                return;
+            }
 
-                    // Integration tokens for n8n
-                    client_id: process.env.GOOGLE_CLIENT_ID,
-                    client_secret: process.env.GOOGLE_CLIENT_SECRET,
-                    access_token: currentGoogleAccessToken || null,
-                    refresh_token: googleAuth.refresh_token || null,
-                    whatsapp_access_token: whatsappAuth.access_token || null,
-                    whatsapp_refresh_token: whatsappAuth.refresh_token || null,
-
-                    timestamp: new Date().toISOString()
-                })
-            });
+            // 2. Optional Notification Webhook
+            const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+            if (webhookUrl) {
+                fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        event: isReminder ? 'lead_reminder' : 'lead_followup',
+                        lead_id: lead.lead_id,
+                        full_name: lead.full_name,
+                        phone: lead.phone,
+                        message: injectedMessage
+                    })
+                }).catch(e => {});
+            }
 
             const followupStatusField = isReminder ? 'followup_status_reminder' : 'followup_status';
 
-            if (response.ok || response.status === 200) {
-                // Update BOTH followup_status AND lead_status (to 'Contacted')
-                await pool.query(
-                    `UPDATE leads SET ${followupStatusField} = 'success', lead_status = 'Contacted', updated_at = NOW() WHERE id = $1`,
-                    [lead.lead_id]
-                );
+            // Mark Success
+            await pool.query(
+                `UPDATE leads SET ${followupStatusField} = 'success', lead_status = 'Contacted', updated_at = NOW() WHERE id = $1`,
+                [lead.lead_id]
+            );
 
-                // 📝 LOG ACTIVITY: SUCCESS
-                await pool.query(
-                    `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-                    [
-                        lead.user_id,
-                        isReminder ? 'Lead Reminder' : 'Lead Follow-up',
-                        isReminder ? 'Scheduled Reminder' : 'Scheduled Followup',
-                        'Success',
-                        `${isReminder ? 'Reminder' : 'Follow-up'} sent to: ${lead.full_name}`,
-                        JSON.stringify({
-                            owner_email: lead.owner_email,
-                            lead_name: lead.full_name,
-                            lead_email: lead.lead_email,
-                            delay: `${lead.delay_value} ${lead.delay_unit}`,
-                            message_sent: injectedMessage
-                        })
-                    ]
-                );
+            // 📝 LOG ACTIVITY: SUCCESS
+            await pool.query(
+                `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+                  VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+                [
+                    lead.user_id,
+                    isReminder ? 'Lead Reminder' : 'Lead Follow-up',
+                    isReminder ? 'Scheduled Reminder' : 'Scheduled Followup',
+                    'Success',
+                    `${isReminder ? 'Reminder' : 'Follow-up'} sent to: ${lead.full_name}`,
+                    JSON.stringify({
+                        lead_name: lead.full_name,
+                        lead_email: lead.lead_email,
+                        message_sent: injectedMessage
+                    })
+                ]
+            );
 
-                console.log(`[FollowupCron] 🚀 ${isReminder ? 'Reminder' : 'Followup'} sent successfully for lead: ${lead.full_name}`);
-            } else {
-                console.log(`[FollowupCron] ⚠️ Webhook returned ${response.status} for lead: ${lead.full_name}. Will retry later.`);
-                
-                // If it's NOT a 404, we can mark it as failed, but user asked to keep running until contacted
-                // So we just update the timestamp to avoid tight-loops
-                await pool.query(
-                    `UPDATE leads SET updated_at = NOW() WHERE id = $1`,
-                    [lead.lead_id]
-                );
-            }
+            console.log(`[FollowupCron] 🚀 ${isReminder ? 'Reminder' : 'Followup'} marked success in DB for: ${lead.full_name}`);
         } catch (webhookErr) {
             console.error('[FollowupCron] Webhook connection failed for lead', lead.lead_id, webhookErr.message);
         }
@@ -162,7 +145,13 @@ const startFollowupCron = () => {
                   )
             `);
 
+            const pendingCount = primaryResult.rows.length;
+            if (pendingCount > 0) {
+                console.log(`[FollowupCron] 📋 Found ${pendingCount} PRIMARY leads matching follow-up criteria.`);
+            }
+
             for (const lead of primaryResult.rows) {
+                console.log(`[FollowupCron] 🔄 Processing PRIMARY follow-up for lead: ${lead.full_name} (${lead.lead_id})`);
                 await processLead(lead, false);
             }
 
@@ -201,7 +190,13 @@ const startFollowupCron = () => {
                   )
             `);
 
+            const reminderCount = reminderResult.rows.length;
+            if (reminderCount > 0) {
+                console.log(`[FollowupCron] 📋 Found ${reminderCount} SECONDARY reminder leads matching criteria.`);
+            }
+
             for (const lead of reminderResult.rows) {
+                console.log(`[FollowupCron] 🔄 Processing SECONDARY reminder for lead: ${lead.full_name} (${lead.lead_id})`);
                 await processLead(lead, true);
             }
 

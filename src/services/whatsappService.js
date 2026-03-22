@@ -1,8 +1,8 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode';
 import pool from '../db/pool.js';
-import fs from 'fs';
+import { useDBAuthState } from '../utils/dbAuthState.js';
 
 const clients = new Map();
 const clientQRs = new Map();
@@ -10,20 +10,25 @@ const clientStatus = new Map();
 
 export const initWhatsAppClient = async (userId) => {
     if (clients.has(userId)) {
+        console.log(`[WA-Init] Client already exists for user ${userId}, skipping.`);
         return { success: true, message: 'Client already initializing or ready' };
     }
 
     clientStatus.set(userId, 'initializing');
+    console.log(`[WA-Init] Initializing WhatsApp client for user ${userId} (DB-backed session)...`);
     
     try {
-        const { state, saveCreds } = await useMultiFileAuthState(`wa_auth_${userId}`);
+        // Use DB-backed auth state — survives Render restarts
+        const { state, saveCreds } = await useDBAuthState(userId);
         const { version } = await fetchLatestBaileysVersion();
+
+        console.log(`[WA-Init] Baileys version: ${version}. Creating socket...`);
         
         const sock = makeWASocket({
             version,
             auth: state,
             printQRInTerminal: false,
-            logger: pino({ level: 'info' }), // Show connection info in logs
+            logger: pino({ level: 'silent' }), // Keep logs clean; we have our own logs
             browser: ['Montseaumate', 'Chrome', '1.0.0']
         });
         
@@ -34,6 +39,7 @@ export const initWhatsAppClient = async (userId) => {
             
             if (qr) {
                 clientStatus.set(userId, 'qr_ready');
+                console.log(`[WA-Socket] QR code generated for user ${userId}`);
                 const qrDataUrl = await qrcode.toDataURL(qr);
                 clientQRs.set(userId, qrDataUrl);
             }
@@ -41,36 +47,33 @@ export const initWhatsAppClient = async (userId) => {
             if (connection === 'close') {
                 const statusCode = (lastDisconnect?.error)?.output?.statusCode;
                 console.log(`[WA-Socket] Connection CLOSED for user ${userId}. Code: ${statusCode}`);
-                console.error(`Detailed Error:`, lastDisconnect?.error);
 
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
                 clients.delete(userId);
                 clientQRs.delete(userId);
                 
                 if (shouldReconnect) {
                     console.log(`[WA-Socket] Attempting RECONNECT for user ${userId}...`);
                     clientStatus.set(userId, 'restoring');
-                    initWhatsAppClient(userId);
+                    setTimeout(() => initWhatsAppClient(userId), 3000); // 3s delay before retry
                 } else {
-                    console.log(`[WA-Socket] PERMANENT DISCONNECT (Logged Out) for user ${userId}`);
+                    console.log(`[WA-Socket] PERMANENT DISCONNECT (Logged Out) for user ${userId}. Cleaning up DB.`);
                     clientStatus.set(userId, 'disconnected');
                     try {
                         await pool.query('DELETE FROM integrations WHERE user_id = $1 AND provider = $2', [userId, 'whatsapp']);
-                        if (fs.existsSync(`wa_auth_${userId}`)) {
-                            fs.rmSync(`wa_auth_${userId}`, { recursive: true, force: true });
-                        }
+                        await pool.query('DELETE FROM whatsapp_sessions WHERE user_id = $1', [userId]);
                     } catch (e) {
-                        console.error('Error removing whatsapp status', e);
+                        console.error('[WA-Socket] Error cleaning up DB after logout:', e.message);
                     }
                 }
             } else if (connection === 'open') {
-                console.log(`[WA-Socket] ✅ HANDSHAKE COMPLETE! Client for user ${userId} is ready!`);
+                console.log(`[WA-Socket] ✅ CONNECTED! Session is live for user ${userId}`);
                 clientStatus.set(userId, 'connected');
                 clientQRs.delete(userId);
                 clients.set(userId, sock);
                 
                 const phoneNumber = (sock.user.id || '').split(':')[0].split('@')[0];
+                console.log(`[WA-Socket] Phone number registered: ${phoneNumber}`);
 
                 try {
                     await pool.query(
@@ -78,18 +81,18 @@ export const initWhatsAppClient = async (userId) => {
                          VALUES ($1, 'whatsapp', $2, 'whatsapp_native_session', NOW()) 
                          ON CONFLICT (user_id, provider) DO UPDATE SET 
                             account_id = EXCLUDED.account_id,
+                            access_token = 'whatsapp_native_session',
                             updated_at = NOW()`,
                         [userId, phoneNumber]
                     );
                 } catch (e) {
-                    console.error('Error saving whatsapp status', e);
+                    console.error('[WA-Socket] Error saving integration record:', e.message);
                 }
             }
         });
 
-        // Wait for connection event to handle storage
     } catch (e) {
-        console.error('Client init error', e);
+        console.error(`[WA-Init] Client init error for user ${userId}:`, e.message);
         clientStatus.set(userId, 'error');
         clients.delete(userId);
     }
@@ -111,56 +114,58 @@ export const getClient = (userId) => {
 export const disconnectClient = async (userId) => {
     const sock = clients.get(userId);
     if (sock) {
-        try {
-            await sock.logout();
-        } catch(e) {}
+        try { await sock.logout(); } catch(e) {}
         clients.delete(userId);
         clientQRs.delete(userId);
         clientStatus.delete(userId);
-        if (fs.existsSync(`wa_auth_${userId}`)) {
-            fs.rmSync(`wa_auth_${userId}`, { recursive: true, force: true });
-        }
+    }
+    // Clean up DB session data
+    try {
+        await pool.query('DELETE FROM whatsapp_sessions WHERE user_id = $1', [userId]);
+    } catch(e) {
+        console.error('[WA-Disconnect] Error cleaning DB sessions:', e.message);
     }
 };
 
 export const restoreActiveSessions = async () => {
     try {
-        const result = await pool.query("SELECT DISTINCT user_id FROM integrations WHERE provider = 'whatsapp'");
+        const result = await pool.query("SELECT DISTINCT user_id FROM integrations WHERE provider = 'whatsapp' AND access_token = 'whatsapp_native_session'");
+        console.log(`[WA-Restore] Found ${result.rows.length} session(s) to restore from DB...`);
         for (const row of result.rows) {
-            console.log(`[WA-Restore] Starting background restoration for user ${row.user_id}`);
-            initWhatsAppClient(row.user_id); // Run in background
+            console.log(`[WA-Restore] Restoring session for user ${row.user_id}`);
+            initWhatsAppClient(row.user_id);
         }
     } catch (e) {
-        console.error('Failed to restore whatsapp sessions', e);
+        console.error('[WA-Restore] Failed to restore sessions:', e.message);
     }
 };
 
 export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
     const status = clientStatus.get(userId);
-    
+    console.log(`[WA-Send] Attempting to send to ${targetPhone} | userId=${userId} | status=${status}`);
+
     if (status === 'initializing' || status === 'restoring') {
-        throw new Error("WhatsApp session is still connecting. Please wait 10-15 seconds and try again.");
+        throw new Error(`WhatsApp session is still connecting (status: ${status}). Please wait and try again.`);
     }
 
     const sock = clients.get(userId);
     if (!sock) {
-        throw new Error("WhatsApp session not ready or disconnected. Please check status in dashboard.");
+        throw new Error(`WhatsApp socket not found for user ${userId}. Status: ${status}. Please reconnect in dashboard.`);
     }
 
     if (!sock.user) {
-        throw new Error("WhatsApp session is active but user data is missing. Try reconnecting.");
+        throw new Error("WhatsApp session active but user data missing. Try reconnecting.");
     }
 
-    try {
-        // Strip non-digits and ensure format: 1234567890@s.whatsapp.net
-        const cleaned = targetPhone.replace(/\D/g, '');
-        const jid = `${cleaned}@s.whatsapp.net`;
-        
-        await sock.sendMessage(jid, { text });
-        console.log(`Message successfully sent to ${jid} for user ${userId}`);
-        return true;
-    } catch (e) {
-        console.error(`Failed to send message:`, e);
-        throw e;
+    const cleaned = targetPhone.replace(/\D/g, '');
+    if (!cleaned || cleaned.length < 7) {
+        throw new Error(`Invalid phone number: "${targetPhone}"`);
     }
+
+    const jid = `${cleaned}@s.whatsapp.net`;
+    console.log(`[WA-Send] Sending message to JID: ${jid}`);
+
+    await sock.sendMessage(jid, { text });
+    console.log(`[WA-Send] ✅ Message delivered to ${jid}`);
+    return true;
 };

@@ -226,7 +226,7 @@ export const submitFeedback = async (req, res) => {
             customer_phone
         } = req.body;
 
-        console.log(`[submitFeedback] Incoming feedback for ${automation_id}:`, { rating_overall, customer_name });
+        console.log(`[submitFeedback] Incoming feedback for ${automation_id}:`, { rating_overall, customer_name, contact_requested });
 
         const result = await pool.query(
             `SELECT r.*, COALESCE(u.company_name, u.name) as business_name, u.email as owner_email
@@ -273,7 +273,7 @@ export const submitFeedback = async (req, res) => {
                     `Feedback Comment: ${comment}`,
                     `Feedback Funnel: ${automation_id}`,
                     true,
-                    false
+                    !!contact_requested
                 ]
             );
         }
@@ -288,7 +288,16 @@ export const submitFeedback = async (req, res) => {
                 'Feedback Received',
                 rating_overall > 3 ? 'Success' : 'Attention',
                 `Rating: ${rating_overall} stars from ${customer_name || 'Guest'}`,
-                JSON.stringify({ rating_service, rating_product, rating_overall, comment, contact_requested })
+                JSON.stringify({ 
+                    rating_service, 
+                    rating_product, 
+                    rating_overall, 
+                    comment, 
+                    contact_requested,
+                    customer_name,
+                    customer_email,
+                    customer_phone
+                })
             ]
         );
 
@@ -401,20 +410,42 @@ export const submitFeedback = async (req, res) => {
                 body: JSON.stringify(payload)
             }).catch(e => {});
         }
-        // 7. DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session, send the message directly
-        if (whatsappAccessToken === 'whatsapp_native_session' && customer_phone) {
-            const finalMsg = injectPlaceholders(config.auto_response_message, {
-                name: customer_name,
-                link: `${process.env.FRONTEND_URL}/r/${automation_id}`
-            });
+        console.log(`\n==================== [FEEDBACK SUBMITTED] ====================`);
+        console.log(`👤 Customer: ${customer_name || 'Guest'}`);
+        console.log(`⭐ Rating: ${rating_overall}/5`);
+        console.log(`📱 Contact Requested: ${contact_requested ? 'YES' : 'NO'}`);
+        console.log(`📱 Phone: ${customer_phone || 'None'}`);
+
+        // 7. DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session
+        if (whatsappAccessToken === 'whatsapp_native_session') {
+            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
             
-            try {
-                await whatsappService.sendWhatsAppMessage(config.user_id, customer_phone, finalMsg);
-                console.log(`[NativeFeedback] Sent feedback confirmation to ${customer_phone}`);
-            } catch (dispatchErr) {
-                console.error('[NativeFeedback] Failed:', dispatchErr.message);
+            // A. NOTIFY OWNER (INSTANT FULL DATA DUMP)
+            const ownerPhone = integrations['whatsapp']?.account_id;
+            if (ownerPhone) {
+                const ownerMsg = `📥 [FEEDBACK RECEIVED]\n\n👤 Customer: ${customer_name || 'Guest'}\n📧 Email: ${customer_email || 'N/A'}\n📱 Phone: ${customer_phone || 'N/A'}\n\n⭐ Rating: ${rating_overall}/5\n💬 Comment: ${comment || 'No comment'}\n\n🔗 Dashboard: ${baseUrl}/dashboard/feedback`;
+                
+                whatsappService.sendWhatsAppMessage(config.user_id, ownerPhone, ownerMsg)
+                    .then(() => console.log(`[WA-OwnerNotify] ✅ Success for owner: ${ownerPhone}`))
+                    .catch(e => console.error(`[WA-OwnerNotify] ❌ Failed for owner:`, e.message));
             }
+
+            // B. NOTIFY CUSTOMER (If number provided)
+            if (customer_phone) {
+                const defaultMsg = "Thank you! We've received your feedback and will get back to you shortly if needed.";
+                const finalMsg = injectPlaceholders(config.auto_response_message || defaultMsg, {
+                    name: customer_name || 'there',
+                    link: `${baseUrl}/r/${automation_id}`
+                });
+                
+                whatsappService.sendWhatsAppMessage(config.user_id, customer_phone, finalMsg)
+                    .then(() => console.log(`[NativeFeedback] ✅ Success for customer: ${customer_phone}`))
+                    .catch(e => console.error(`[NativeFeedback] ❌ Failed for customer:`, e.message));
+            }
+        } else {
+            console.log(`[WA-Native] ⚠️ WhatsApp NOT connected (native session). Skipping dispatches.`);
         }
+        console.log(`===============================================================\n`);
 
         // 5. Build Response Object
         const finalResponse = {
@@ -451,6 +482,7 @@ export const submitLead = async (req, res) => {
     try {
         const { automation_id } = req.params;
         const { full_name, email, phone, message, filtering_responses, captureWebhook, autoResponseWebhook, consent_given, marketing_consent } = req.body;
+        console.log(`[submitLead] Incoming lead for ${automation_id}:`, { full_name, email, marketing_consent });
 
         if (!full_name || !email || !phone) {
             return res.status(400).json({ success: false, message: 'Please provide full name, email, and phone number.' });
@@ -501,14 +533,71 @@ export const submitLead = async (req, res) => {
             ]
         );
 
-        // 3. Trigger Webhooks and Handlers
+        // 3. === WHATSAPP DISPATCH (INDEPENDENT — never blocked by Google/n8n) ===
+        try {
+            console.log(`\n==================== [LEAD SUBMITTED - WA DISPATCH] ====================`);
+            console.log(`👤 Name:  ${full_name}`);
+            console.log(`📧 Email: ${email}`);
+            console.log(`📱 Phone: ${phone}`);
+
+            const integrationsResult = await pool.query(
+                `SELECT provider, access_token, account_id FROM integrations WHERE user_id = $1`,
+                [user_id]
+            );
+            const integrations = integrationsResult.rows.reduce((acc, curr) => {
+                acc[curr.provider] = { access_token: curr.access_token, account_id: curr.account_id };
+                return acc;
+            }, {});
+
+            const whatsappAuth = integrations['whatsapp'] || {};
+            console.log(`[WA-Check] access_token = "${whatsappAuth.access_token}" | account_id = "${whatsappAuth.account_id}"`);
+
+            if (whatsappAuth.access_token === 'whatsapp_native_session') {
+                const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+
+                // A. OWNER NOTIFICATION (full data dump)
+                const ownerPhone = whatsappAuth.account_id;
+                if (ownerPhone) {
+                    let questionsStr = '';
+                    if (filtering_responses && typeof filtering_responses === 'object') {
+                        questionsStr = '\n\n📝 Responses:\n' + Object.entries(filtering_responses)
+                            .map(([q, a]) => `• ${q}: ${a}`).join('\n');
+                    }
+                    const ownerMsg = `🚀 [NEW LEAD]\n\n👤 ${full_name}\n📧 ${email}\n📱 ${phone}\n💬 ${message || 'No message'}${questionsStr}\n\n🔗 ${baseUrl}/dashboard/leads`;
+                    console.log(`[WA-Owner] Sending to owner: ${ownerPhone}`);
+                    await whatsappService.sendWhatsAppMessage(user_id, ownerPhone, ownerMsg);
+                    console.log(`[WA-Owner] ✅ Owner notified`);
+                } else {
+                    console.log(`[WA-Owner] ⚠️ No owner phone (account_id) found in integrations`);
+                }
+
+                // B. CUSTOMER AUTO-RESPONSE
+                if (phone) {
+                    const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
+                    const finalMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
+                        name: full_name || 'there',
+                        link: `${baseUrl}/l/${automation_id}`,
+                        number: whatsappAuth.account_id || ''
+                    });
+                    console.log(`[WA-Customer] Sending to: ${phone}`);
+                    await whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg);
+                    console.log(`[WA-Customer] ✅ Customer notified: ${phone}`);
+                }
+            } else {
+                console.log(`[WA-Native] ⚠️ WhatsApp NOT active. Token: "${whatsappAuth.access_token}". Skipping.`);
+            }
+            console.log(`========================================================================\n`);
+        } catch (waErr) {
+            console.error(`[WA-Dispatch] ❌ WhatsApp dispatch failed:`, waErr.message);
+        }
+
+        // 4. Background: Google tokens + n8n webhooks (non-blocking)
         try {
             const freshGoogleToken = await getValidGoogleToken(user_id);
             const integrationsResult = await pool.query(
                 `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
                 [user_id]
             );
-
             const integrations = integrationsResult.rows.reduce((acc, curr) => {
                 acc[curr.provider] = {
                     access_token: curr.access_token,
@@ -522,30 +611,11 @@ export const submitLead = async (req, res) => {
             const whatsappAuth = integrations['whatsapp'] || {};
             const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
-            // DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session, send the message directly
-            if (whatsappAuth.access_token === 'whatsapp_native_session') {
-                const finalMsg = injectPlaceholders(result.rows[0].auto_response_message, {
-                    name: full_name,
-                    link: `${process.env.FRONTEND_URL}/l/${automation_id}`,
-                    number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || ''
-                });
-                
-                try {
-                    await whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg);
-                    console.log(`[NativeDispatch] Sent captured lead message to ${phone}`);
-                } catch (dispatchErr) {
-                    console.error('[NativeDispatch] Failed:', dispatchErr.message);
-                }
-            }
-
-            // Webhook Payloads for n8n or external triggers
             if (captureWebhook || autoResponseWebhook) {
                 const payload = {
-                    automation_id,
-                    user_id,
-                    owner_email,
-                    lead_email: email, // Keep the original lead email as lead_email
-                    email: result.rows[0].notification_email || owner_email, // Set 'email' as the alert email
+                    automation_id, user_id, owner_email,
+                    lead_email: email,
+                    email: result.rows[0].notification_email || owner_email,
                     phone,
                     whatsapp_number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || '',
                     message: message || '',
@@ -560,7 +630,6 @@ export const submitLead = async (req, res) => {
                         name: full_name,
                         link: `${process.env.FRONTEND_URL}/l/${automation_id}`
                     }),
-
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
                     access_token: currentGoogleAccessToken || null,
@@ -573,23 +642,14 @@ export const submitLead = async (req, res) => {
                 const finalAutoResponseWebhook = ensureProductionUrl(autoResponseWebhook);
 
                 if (finalCaptureWebhook) {
-                    fetch(finalCaptureWebhook, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    }).catch(e => {});
+                    fetch(finalCaptureWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(e => {});
                 }
-
                 if (finalAutoResponseWebhook) {
-                    fetch(finalAutoResponseWebhook, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    }).catch(e => {});
+                    fetch(finalAutoResponseWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(e => {});
                 }
             }
         } catch (webhookErr) {
-            console.error('[submitLead] Background logic failed:', webhookErr.message);
+            console.error('[submitLead] Background webhook/google logic failed:', webhookErr.message);
         }
 
         return res.status(200).json({
