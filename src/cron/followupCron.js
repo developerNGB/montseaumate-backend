@@ -47,15 +47,27 @@ const startFollowupCron = () => {
 
             // 1. Direct WhatsApp Dispatch (Native)
             if (whatsappAuth.access_token === 'whatsapp_native_session' && lead.phone) {
+                // Check session status BEFORE attempting — if still restoring, skip gracefully
+                const sessionStatus = whatsappService.getSessionStatus(lead.user_id);
+                if (sessionStatus.status === 'initializing' || sessionStatus.status === 'restoring') {
+                    console.log(`[FollowupCron] ⏳ Session still restoring for user ${lead.user_id}. Skipping lead "${lead.full_name}" — will retry next cycle.`);
+                    return; // Silent skip — lead stays pending, cron retries in 10s
+                }
+                if (sessionStatus.status !== 'connected') {
+                    console.warn(`[FollowupCron] ⚠️ Session not connected (status: ${sessionStatus.status}). Skipping lead "${lead.full_name}".`);
+                    return;
+                }
+
                 try {
                     await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, injectedMessage);
                     console.log(`[FollowupCron] ✅ Native WhatsApp ${isReminder ? 'Reminder' : 'Followup'} sent to ${lead.phone}`);
                 } catch (dispatchErr) {
-                    console.error(`[FollowupCron] ❌ Native dispatch FAILED:`, dispatchErr.message);
-                    throw dispatchErr; 
+                    // If it fails mid-send, log it but don't mark as failed — let it retry
+                    console.error(`[FollowupCron] ❌ Native dispatch FAILED for "${lead.full_name}":`, dispatchErr.message);
+                    return; // Retry next cycle
                 }
             } else {
-                console.warn(`[FollowupCron] Skipping lead ${lead.full_name} because no native WhatsApp session is active.`);
+                console.warn(`[FollowupCron] ⚠️ Skipping lead "${lead.full_name}" — no native WhatsApp session configured.`);
                 return;
             }
 
