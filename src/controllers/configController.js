@@ -42,7 +42,7 @@ export const getReviewFunnelConfig = async (req, res) => {
                 reviewQrCode,
                 leadUrl,
                 leadQrCode,
-                lead_source,
+                lead_source: config.lead_source || 'qr',
                 capture_source: config.capture_source || 'qr'
             }
         });
@@ -55,36 +55,54 @@ export const getReviewFunnelConfig = async (req, res) => {
 // POST /api/config/review-funnel
 export const saveReviewFunnelConfig = async (req, res) => {
     try {
-        const { google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source } = req.body;
+        const { 
+            google_review_url, notification_email, auto_response_message, 
+            filtering_questions, lead_capture_active, is_active, 
+            whatsapp_number_fallback, lead_source, capture_source 
+        } = req.body;
 
         // Generate an automation ID if one doesn't exist
         const result = await pool.query('SELECT automation_id FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
+        let automationId = result.rows.length > 0 ? result.rows[0].automation_id : crypto.randomBytes(4).toString('hex');
 
         const validatedLeadSource = (lead_source === 'qr' || lead_source === 'excel') ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
         const validatedCaptureSource = (capture_source === 'qr' || capture_source === 'excel') ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
 
         // Get existing to avoid overwrites if not provided
-        const existingConfigRes = await pool.query('SELECT lead_source, capture_source FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
+        const existingConfigRes = await pool.query('SELECT * FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
         const existingConfig = existingConfigRes.rows[0] || {};
 
         const finalLeadSource = validatedLeadSource || existingConfig.lead_source || 'qr';
         const finalCaptureSource = validatedCaptureSource || existingConfig.capture_source || 'qr';
+        const finalReviewActive = is_active !== undefined ? is_active : (existingConfig.is_active || false);
+        const finalCaptureActive = lead_capture_active !== undefined ? lead_capture_active : (existingConfig.lead_capture_active || false);
 
         await pool.query(
             `INSERT INTO review_funnel_settings 
-                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 google_review_url = EXCLUDED.google_review_url,
                 notification_email = EXCLUDED.notification_email,
                 auto_response_message = EXCLUDED.auto_response_message,
                 filtering_questions = EXCLUDED.filtering_questions,
                 lead_capture_active = EXCLUDED.lead_capture_active,
+                is_active = EXCLUDED.is_active,
                 whatsapp_number_fallback = EXCLUDED.whatsapp_number_fallback,
                 lead_source = EXCLUDED.lead_source,
                 capture_source = EXCLUDED.capture_source,
                 updated_at = NOW()`,
-            [req.user.id, automationId, google_review_url, notification_email, auto_response_message, JSON.stringify(filtering_questions || []), lead_capture_active || false, whatsapp_number_fallback || '', finalLeadSource, finalCaptureSource]
+            [
+                req.user.id, automationId, 
+                google_review_url !== undefined ? google_review_url : existingConfig.google_review_url || '', 
+                notification_email !== undefined ? notification_email : existingConfig.notification_email || '', 
+                auto_response_message !== undefined ? auto_response_message : existingConfig.auto_response_message || '', 
+                JSON.stringify(filtering_questions || existingConfig.filtering_questions || []), 
+                finalCaptureActive, 
+                finalReviewActive, 
+                whatsapp_number_fallback !== undefined ? whatsapp_number_fallback : existingConfig.whatsapp_number_fallback || '', 
+                finalLeadSource, finalCaptureSource
+            ]
         );
 
         const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
