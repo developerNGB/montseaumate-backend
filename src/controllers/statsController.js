@@ -97,8 +97,8 @@ export const getDashboardStats = async (req, res) => {
                 leadFollowUp: leadFollowUpActive
             },
             configured: {
-                reviewFunnel: !!recipesRes.rows[0]?.google_review_url,
-                leadCapture: !!recipesRes.rows[0]?.automation_id && (!!recipesRes.rows[0]?.google_review_url || !!recipesRes.rows[0]?.auto_response_message),
+                reviewFunnel: !!recipesRes.rows[0],
+                leadCapture: !!recipesRes.rows[0],
                 leadFollowUp: !!followUpConfigRes.rows[0]
             },
             lastTriggers: {

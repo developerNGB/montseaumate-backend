@@ -54,6 +54,7 @@ export const getReviewFunnelConfig = async (req, res) => {
 
 // POST /api/config/review-funnel
 export const saveReviewFunnelConfig = async (req, res) => {
+    console.log('[saveReviewFunnelConfig] Received:', req.body);
     try {
         const { 
             google_review_url, notification_email, auto_response_message, 
