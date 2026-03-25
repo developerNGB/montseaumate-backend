@@ -17,10 +17,19 @@ export const getStatus = async (req, res) => {
         
         // Ensure DB consistency if it somehow shows disconnected in-memory but connected in DB
         // e.g. server restarted but restore hasn't completed
-        if (statusData.status === 'disconnected') {
-            const dbCheck = await pool.query('SELECT 1 FROM integrations WHERE user_id = $1 AND provider = $2', [req.user.id, 'whatsapp']);
-            if (dbCheck.rows.length > 0) {
-                 statusData.status = 'restoring'; // UI should reflect that it is restoring or "connected" eventually
+        const dbCheck = await pool.query(
+            "SELECT account_id FROM integrations WHERE user_id = $1 AND provider = $2", 
+            [req.user.id, 'whatsapp']
+        );
+
+        if (dbCheck.rows.length > 0) {
+            // Even if in-memory status says disconnected/initializing, the DB knows we have a link
+            if (statusData.status === 'disconnected') {
+                statusData.status = 'restoring';
+            }
+            // Always prefer DB phone number if memory one is missing
+            if (!statusData.phone) {
+                statusData.phone = dbCheck.rows[0].account_id;
             }
         }
 

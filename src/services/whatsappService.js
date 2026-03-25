@@ -101,9 +101,11 @@ export const initWhatsAppClient = async (userId) => {
 };
 
 export const getSessionStatus = (userId) => {
+    const sock = clients.get(userId);
     return {
         status: clientStatus.get(userId) || 'disconnected',
-        qr: clientQRs.get(userId) || null
+        qr: clientQRs.get(userId) || null,
+        phone: sock?.user?.id?.split(':')[0]?.split('@')[0] || null
     };
 };
 
