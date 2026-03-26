@@ -240,6 +240,7 @@ export const login = async (req, res) => {
  */
 export const getProfile = async (req, res) => {
     try {
+        console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
             `SELECT id, name, email, company_name, phone, plan, role, status, created_at
              FROM users
@@ -250,7 +251,7 @@ export const getProfile = async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: 'User not found.',
+                message: 'User account no longer exists.',
             });
         }
 
@@ -259,10 +260,10 @@ export const getProfile = async (req, res) => {
             user: result.rows[0],
         });
     } catch (err) {
-        console.error('[getProfile] Error:', err.message);
+        console.error('[getProfile] CRITICAL:', err.message, err.stack);
         return res.status(500).json({
             success: false,
-            message: 'Server error. Please try again later.',
+            message: 'Server synchronization error. Refreshing your session may help.',
         });
     }
 };
