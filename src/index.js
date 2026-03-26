@@ -28,16 +28,43 @@ const PORT = process.env.PORT || 5000;
 // Trust Render's proxy for headers (needed for rate-limiting and reliable CORS)
 app.set('trust proxy', 1);
 
-// CORS configuration
-app.use(
-    cors({
-        origin: true, // Echoes back the request origin; very fast for various domains
-        credentials: true,
-        optionsSuccessStatus: 200,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept']
-    })
-);
+// CORS Whitelist for production and local environments
+const whitelist = [
+    'https://montseaumateii.pages.dev',
+    'https://www.montseaumate.com',
+    'http://localhost:5173',
+    'http://localhost:3000'
+];
+
+// Robust CORS Middleware
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (whitelist.includes(origin) || !origin) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+    }
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    // Handle Preflight OPTIONS request immediately
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
+// For compatibility with libraries Expecting standard cors middleware
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || whitelist.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+    optionsSuccessStatus: 200
+}));
 
 // Parse JSON bodies (limit to 10kb to prevent abuse)
 app.use(express.json({ limit: '10kb' }));
@@ -114,6 +141,16 @@ app.use((req, res) => {
 // ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
     console.error('[UnhandledError]', err);
+    
+    // Ensure CORS headers are attached on errors too
+    const origin = req.headers.origin;
+    if (whitelist.includes(origin) || !origin) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+    }
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With');
+    res.header('Access-Control-Allow-Credentials', 'true');
+
     res.status(err.status || 500).json({
         success: false,
         message: err.message || 'An unexpected server error occurred.',

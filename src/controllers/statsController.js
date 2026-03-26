@@ -94,6 +94,11 @@ export const getDashboardStats = async (req, res) => {
             return percentage > 0 ? `+${Math.round(percentage)}%` : `${Math.round(percentage)}%`;
         };
 
+        // Ensure no caching for stats to prevent stale "Awaiting Setup" states
+        res.header('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.header('Pragma', 'no-cache');
+        res.header('Expires', '0');
+
         return res.status(200).json({
             success: true,
             stats: {
@@ -112,8 +117,9 @@ export const getDashboardStats = async (req, res) => {
                 leadFollowUp: leadFollowUpActive
             },
             configured: {
-                reviewFunnel: !!recipesRes.rows[0],
-                leadCapture: !!recipesRes.rows[0],
+                // More precise configuration checks
+                reviewFunnel: !!recipesRes.rows[0]?.google_review_url,
+                leadCapture: !!recipesRes.rows[0]?.lead_capture_active || !!recipesRes.rows[0],
                 leadFollowUp: !!followUpConfigRes.rows[0]
             },
             lastTriggers: {
