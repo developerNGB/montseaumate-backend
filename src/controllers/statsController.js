@@ -6,86 +6,87 @@ export const getDashboardStats = async (req, res) => {
 
         // Execute all independent queries in parallel for maximum performance
         const [
-            leadsStatsRes,
-            activityStatsRes,
-            feedbackStatsRes,
-            configStatsRes,
+            leadsRes, 
+            reviewsRes, 
+            messagesRes, 
+            feedbackRes, 
+            recipesRes, 
+            followUpConfigRes, 
+            revTriggerRes, 
+            captureTriggerRes, 
+            followTriggerRes, 
             pipelineRes
         ] = await Promise.all([
-            // 1. Consolidated Leads Stats
+            // 1. Leads
             pool.query(
-                `SELECT 
-                    COUNT(*) as total_leads,
-                    SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as leads_recent,
-                    SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as leads_prev,
-                    SUM(CASE WHEN followup_status = 'success' THEN 1 ELSE 0 END) as total_messages,
-                    SUM(CASE WHEN followup_status = 'success' AND created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as messages_recent,
-                    SUM(CASE WHEN followup_status = 'success' AND created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as messages_prev,
-                    MAX(created_at) as last_capture,
-                    MAX(CASE WHEN followup_status = 'success' THEN updated_at ELSE NULL END) as last_followup
-                FROM leads WHERE user_id = $1`,
+                "SELECT COUNT(*) as count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1",
                 [userId]
             ),
-            // 2. Consolidated Activity/Review Stats
+            // 2. Reviews
             pool.query(
-                `SELECT 
-                    COUNT(*) as total_reviews,
-                    SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as reviews_recent,
-                    SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as reviews_prev,
-                    MAX(created_at) as last_review
-                FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'`,
+                "SELECT COUNT(*) as count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'",
                 [userId]
             ),
-            // 3. Feedback Stats
+            // 3. Messages
+            pool.query(
+                "SELECT COUNT(*) as count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1 AND followup_status = 'success'",
+                [userId]
+            ),
+            // 4. Feedback
             pool.query(
                 "SELECT COUNT(*) as count, AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1",
                 [userId]
             ),
-            // 4. Recipe Configurations
+            // 5. Recipe Config
             pool.query(
-                `SELECT 
-                    rfs.is_active as review_active, 
-                    rfs.lead_capture_active, 
-                    rfs.google_review_url,
-                    rfs.notification_email,
-                    lfs.is_active as followup_active,
-                    lfs.id as followup_id
-                FROM users u
-                LEFT JOIN review_funnel_settings rfs ON u.id = rfs.user_id
-                LEFT JOIN lead_followup_settings lfs ON u.id = lfs.user_id
-                WHERE u.id = $1`,
+                "SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1",
                 [userId]
             ),
-            // 5. Pipeline
+            // 6. Follow-up Config
+            pool.query(
+                "SELECT is_active FROM lead_followup_settings WHERE user_id = $1",
+                [userId]
+            ),
+            // 7. Last Review Trigger
+            pool.query(
+                "SELECT MAX(created_at) as last_active FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'",
+                [userId]
+            ),
+            // 8. Last Capture Trigger
+            pool.query(
+                "SELECT MAX(created_at) as last_active FROM leads WHERE user_id = $1",
+                [userId]
+            ),
+            // 9. Last Follow-up Trigger
+            pool.query(
+                "SELECT MAX(updated_at) as last_active FROM leads WHERE user_id = $1 AND followup_status = 'success'",
+                [userId]
+            ),
+            // 10. Pipeline
             pool.query(
                 "SELECT id, full_name as name, email, source, followup_status as status, created_at FROM leads WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5",
                 [userId]
             )
         ]);
 
-        const leadsRow = leadsStatsRes.rows[0];
-        const activityRow = activityStatsRes.rows[0];
-        const feedbackRow = feedbackStatsRes.rows[0];
-        const configRow = configStatsRes.rows[0];
+        const leadsReceived = parseInt(leadsRes.rows[0].count, 10);
+        const leadsRecent = parseInt(leadsRes.rows[0].recent_count || 0, 10);
+        const leadsPrev = parseInt(leadsRes.rows[0].previous_count || 0, 10);
 
-        const leadsReceived = parseInt(leadsRow.total_leads || 0, 10);
-        const leadsRecent = parseInt(leadsRow.leads_recent || 0, 10);
-        const leadsPrev = parseInt(leadsRow.leads_prev || 0, 10);
+        const reviewsGenerated = parseInt(reviewsRes.rows[0].count, 10);
+        const reviewsRecent = parseInt(reviewsRes.rows[0].recent_count || 0, 10);
+        const reviewsPrev = parseInt(reviewsRes.rows[0].previous_count || 0, 10);
 
-        const reviewsGenerated = parseInt(activityRow.total_reviews || 0, 10);
-        const reviewsRecent = parseInt(activityRow.reviews_recent || 0, 10);
-        const reviewsPrev = parseInt(activityRow.reviews_prev || 0, 10);
+        const messagesSent = parseInt(messagesRes.rows[0].count, 10);
+        const messagesRecent = parseInt(messagesRes.rows[0].recent_count || 0, 10);
+        const messagesPrev = parseInt(messagesRes.rows[0].previous_count || 0, 10);
 
-        const messagesSent = parseInt(leadsRow.total_messages || 0, 10);
-        const messagesRecent = parseInt(leadsRow.messages_recent || 0, 10);
-        const messagesPrev = parseInt(leadsRow.messages_prev || 0, 10);
+        const totalFeedback = parseInt(feedbackRes.rows[0].count, 10);
+        const avgRating = parseFloat(feedbackRes.rows[0].avg_rating || 0).toFixed(1);
 
-        const totalFeedback = parseInt(feedbackRow.count || 0, 10);
-        const avgRating = parseFloat(feedbackRow.avg_rating || 0).toFixed(1);
-
-        const reviewFunnelActive = !!configRow?.review_active;
-        const leadCaptureActive = !!configRow?.lead_capture_active;
-        const leadFollowUpActive = !!configRow?.followup_active;
+        const reviewFunnelActive = !!recipesRes.rows[0]?.is_active;
+        const leadCaptureActive = !!recipesRes.rows[0]?.lead_capture_active;
+        const leadFollowUpActive = !!followUpConfigRes.rows[0]?.is_active;
 
         const calculateTrend = (recent, previous) => {
             if (previous === 0) return recent > 0 ? '+100%' : '0%';
@@ -116,14 +117,15 @@ export const getDashboardStats = async (req, res) => {
                 leadFollowUp: leadFollowUpActive
             },
             configured: {
-                reviewFunnel: !!configRow?.review_active && !!configRow?.google_review_url && configRow.google_review_url !== '',
-                leadCapture: !!configRow?.lead_capture_active && !!configRow?.notification_email && configRow.notification_email !== '',
-                leadFollowUp: !!configRow?.followup_id
+                // More precise configuration checks
+                reviewFunnel: !!recipesRes.rows[0]?.is_active,
+                leadCapture: !!recipesRes.rows[0]?.lead_capture_active || !!recipesRes.rows[0],
+                leadFollowUp: !!followUpConfigRes.rows[0]
             },
             lastTriggers: {
-                reviewFunnel: activityRow?.last_review || null,
-                leadCapture: leadsRow?.last_capture || null,
-                leadFollowUp: leadsRow?.last_followup || null
+                reviewFunnel: revTriggerRes.rows[0]?.last_active || null,
+                leadCapture: captureTriggerRes.rows[0]?.last_active || null,
+                leadFollowUp: followTriggerRes.rows[0]?.last_active || null
             },
             pipeline: pipelineRes.rows
         });

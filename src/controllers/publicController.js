@@ -615,11 +615,6 @@ export const submitLead = async (req, res) => {
                         consent: !!consent_given, marketing_consent: !!marketing_consent,
                         date: current_date,
                         access_token: freshGoogleToken || null,
-                        injected_message: injectPlaceholders(result.rows[0].auto_response_message, {
-                            name: full_name,
-                            link: `${process.env.FRONTEND_URL}/l/${automation_id}`,
-                            number: integrations['whatsapp']?.account_id || result.rows[0].whatsapp_number_fallback || ''
-                        })
                     };
                     if (captureWebhook) fetch(ensureProductionUrl(captureWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
                     if (autoResponseWebhook) fetch(ensureProductionUrl(autoResponseWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
