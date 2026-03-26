@@ -129,10 +129,18 @@ app.use((req, res) => {
 // Global error handler
 // ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
+    // Ensure CORS headers are present even on error responses
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+
     console.error('[UnhandledError]', err);
-    res.status(500).json({
+    res.status(err.status || 500).json({
         success: false,
-        message: 'An unexpected server error occurred.',
+        message: err.message || 'An unexpected server error occurred.',
+        debug: process.env.NODE_ENV === 'production' ? undefined : err.stack
     });
 });
 

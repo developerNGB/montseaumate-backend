@@ -263,7 +263,8 @@ export const getProfile = async (req, res) => {
         console.error('[getProfile] CRITICAL:', err.message, err.stack);
         return res.status(500).json({
             success: false,
-            message: 'Server synchronization error. Refreshing your session may help.',
+            message: `Server sync error: ${err.message}`,
+            hint: 'This usually means a database column is missing or unreachable.'
         });
     }
 };
