@@ -8,6 +8,7 @@ const clients = new Map();
 const clientQRs = new Map();
 const clientStatus = new Map();
 
+let cachedVersion;
 export const initWhatsAppClient = async (userId) => {
     if (clients.has(userId)) {
         console.log(`[WA-Init] Client already exists for user ${userId}, skipping.`);
@@ -20,7 +21,17 @@ export const initWhatsAppClient = async (userId) => {
     try {
         // Use DB-backed auth state — survives Render restarts
         const { state, saveCreds } = await useDBAuthState(userId);
-        const { version } = await fetchLatestBaileysVersion();
+        
+        // Cache world-wide version to speed up multiple re-connections
+        if (!cachedVersion) {
+            try {
+                const { version } = await fetchLatestBaileysVersion();
+                cachedVersion = version;
+            } catch (vErr) {
+                cachedVersion = [2, 3000, 1015951307]; // Robust fallback
+            }
+        }
+        const version = cachedVersion;
 
         console.log(`[WA-Init] Baileys version: ${version}. Creating socket...`);
         

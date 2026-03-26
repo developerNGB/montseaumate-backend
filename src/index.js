@@ -29,27 +29,11 @@ const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
 
 // CORS configuration
-const allowedOrigins = [
-    'https://montseaumateii.pages.dev',
-    'http://localhost:5173',
-    process.env.FRONTEND_URL
-].filter(Boolean);
-
 app.use(
     cors({
-        origin: function (origin, callback) {
-            // Allow requests with no origin (e.g., mobile apps, curl)
-            if (!origin) return callback(null, true);
-            
-            if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                console.warn(`[CORS] Unrecognized origin: ${origin}. Allowing for now but monitor.`);
-                callback(null, true); // Still allowing to prevent lockouts during migration
-            }
-        },
+        origin: true, // Echoes back the request origin; very fast for various domains
         credentials: true,
-        optionsSuccessStatus: 200, // Legacy support (IE, some proxies)
+        optionsSuccessStatus: 200,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept']
     })
@@ -129,13 +113,6 @@ app.use((req, res) => {
 // Global error handler
 // ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-    // Ensure CORS headers are present even on error responses
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-
     console.error('[UnhandledError]', err);
     res.status(err.status || 500).json({
         success: false,
@@ -158,8 +135,18 @@ app.listen(PORT, () => {
     // Restore WhatsApp Sessions
     restoreActiveSessions();
 
-    // Startup Migration: Ensure users table has the phone column
-    pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)')
-        .then(() => console.log('✅ Startup migration: phone column verified.'))
-        .catch(err => console.error('❌ Startup migration failed:', err.message));
+    // Startup Migrations: Ensure schema and indices are optimized
+    const runMigrations = async () => {
+        try {
+            await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)');
+            await pool.query('CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)');
+            await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
+            await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
+            await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
+            console.log('✅ Startup migrations & performance indices verified.');
+        } catch (err) {
+            console.error('❌ Startup migration failed:', err.message);
+        }
+    };
+    runMigrations();
 });
