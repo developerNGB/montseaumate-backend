@@ -83,6 +83,10 @@ const initDB = async () => {
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS auto_response_message TEXT`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS filtering_questions JSONB DEFAULT '[]'`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_number_fallback VARCHAR(50)`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'qr'`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_source VARCHAR(50) DEFAULT 'qr'`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT true`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT true`);
         console.log('  ✅ review_funnel_settings table ready');
 
         // 5. FEEDBACK TABLE
@@ -153,6 +157,9 @@ const initDB = async () => {
             );
         `);
         await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_active BOOLEAN DEFAULT false`);
+        await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'excel'`);
+        await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT true`);
+        await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT true`);
         console.log('  ✅ lead_followup_settings table ready');
 
         // 8. HELPERS (Resets, Logs, History)

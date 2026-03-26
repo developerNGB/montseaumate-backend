@@ -47,6 +47,7 @@ export const getDashboardStats = async (req, res) => {
                     rfs.is_active as review_active, 
                     rfs.lead_capture_active, 
                     rfs.google_review_url,
+                    rfs.notification_email,
                     lfs.is_active as followup_active,
                     lfs.id as followup_id
                 FROM users u
@@ -115,8 +116,8 @@ export const getDashboardStats = async (req, res) => {
                 leadFollowUp: leadFollowUpActive
             },
             configured: {
-                reviewFunnel: !!configRow?.google_review_url,
-                leadCapture: !!configRow?.lead_capture_active,
+                reviewFunnel: !!configRow?.review_active && !!configRow?.google_review_url && configRow.google_review_url !== '',
+                leadCapture: !!configRow?.lead_capture_active && !!configRow?.notification_email && configRow.notification_email !== '',
                 leadFollowUp: !!configRow?.followup_id
             },
             lastTriggers: {

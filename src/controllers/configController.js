@@ -78,6 +78,15 @@ export const saveReviewFunnelConfig = async (req, res) => {
 
         const finalLeadSource = validatedLeadSource || existingConfig.lead_source || 'qr';
         const finalCaptureSource = validatedCaptureSource || existingConfig.capture_source || 'qr';
+
+        const finalGoogleUrl = google_review_url !== undefined && google_review_url !== '' ? google_review_url : (existingConfig.google_review_url || '');
+        const finalEmail = notification_email !== undefined && notification_email !== '' ? notification_email : (existingConfig.notification_email || '');
+        const finalMsg = auto_response_message !== undefined && auto_response_message !== '' ? auto_response_message : (existingConfig.auto_response_message || '');
+        const finalQuestions = filtering_questions !== undefined ? filtering_questions : (existingConfig.filtering_questions || []);
+        const finalFallback = whatsapp_number_fallback !== undefined ? whatsapp_number_fallback : (existingConfig.whatsapp_number_fallback || '');
+        const finalWaEnabled = whatsapp_enabled !== undefined ? whatsapp_enabled : (existingConfig.whatsapp_enabled ?? true);
+        const finalEmailEnabled = email_enabled !== undefined ? email_enabled : (existingConfig.email_enabled ?? true);
+
         const finalReviewActive = is_active !== undefined ? is_active : (existingConfig.is_active || false);
         const finalCaptureActive = lead_capture_active !== undefined ? lead_capture_active : (existingConfig.lead_capture_active || false);
 
@@ -99,17 +108,10 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 email_enabled = EXCLUDED.email_enabled,
                 updated_at = NOW()`,
             [
-                req.user.id, automationId, 
-                google_review_url !== undefined ? google_review_url : existingConfig.google_review_url || '', 
-                notification_email !== undefined ? notification_email : existingConfig.notification_email || '', 
-                auto_response_message !== undefined ? auto_response_message : existingConfig.auto_response_message || '', 
-                JSON.stringify(filtering_questions || existingConfig.filtering_questions || []), 
-                finalCaptureActive, 
-                finalReviewActive, 
-                whatsapp_number_fallback !== undefined ? whatsapp_number_fallback : existingConfig.whatsapp_number_fallback || '', 
-                finalLeadSource, finalCaptureSource,
-                whatsapp_enabled !== undefined ? whatsapp_enabled : (existingConfig.whatsapp_enabled ?? true),
-                email_enabled !== undefined ? email_enabled : (existingConfig.email_enabled ?? true)
+                req.user.id, automationId, finalGoogleUrl, finalEmail, 
+                finalMsg, JSON.stringify(finalQuestions), finalCaptureActive, 
+                finalReviewActive, finalFallback, finalLeadSource, finalCaptureSource,
+                finalWaEnabled, finalEmailEnabled
             ]
         );
 
@@ -126,12 +128,13 @@ export const saveReviewFunnelConfig = async (req, res) => {
             message: 'Review funnel settings saved successfully!',
             config: {
                 automation_id: automationId,
-                google_review_url,
-                notification_email,
-                auto_response_message,
-                filtering_questions: filtering_questions || [],
-                lead_capture_active,
-                whatsapp_number_fallback,
+                google_review_url: finalGoogleUrl,
+                notification_email: finalEmail,
+                auto_response_message: finalMsg,
+                filtering_questions: finalQuestions,
+                lead_capture_active: finalCaptureActive,
+                is_active: finalReviewActive,
+                whatsapp_number_fallback: finalFallback,
                 publicUrl: surveyUrl, 
                 qrCodeDataUrl: surveyQrCode,
                 surveyUrl,
