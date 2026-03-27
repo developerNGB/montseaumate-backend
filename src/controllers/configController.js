@@ -284,6 +284,7 @@ export const deleteAutomation = async (req, res) => {
             const isLeadCaptureActive = current.rows.length > 0 ? current.rows[0].lead_capture_active : false;
 
             if (isLeadCaptureActive) {
+                // Reset review funnel to setup state while keeping lead capture
                 queries.push(pool.query(
                     `UPDATE review_funnel_settings SET 
                         is_active = false, 
@@ -296,6 +297,7 @@ export const deleteAutomation = async (req, res) => {
                     [userId]
                 ));
             } else {
+                // Both are inactive, delete entire record to reset to setup state
                 queries.push(pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]));
             }
 
@@ -311,14 +313,20 @@ export const deleteAutomation = async (req, res) => {
             const isReviewFunnelActive = current.rows.length > 0 ? current.rows[0].is_active : false;
 
             if (isReviewFunnelActive) {
+                // Reset lead capture to setup state while keeping review funnel
                 queries.push(pool.query(
                     `UPDATE review_funnel_settings SET 
-                        lead_capture_active = false, 
+                        lead_capture_active = false,
+                        notification_email = '',
+                        auto_response_message = '',
+                        filtering_questions = '[]',
+                        whatsapp_number_fallback = '',
                         updated_at = NOW() 
                      WHERE user_id = $1`,
                     [userId]
                 ));
             } else {
+                // Both are inactive, delete entire record to reset to setup state
                 queries.push(pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]));
             }
 
@@ -329,6 +337,7 @@ export const deleteAutomation = async (req, res) => {
             await Promise.all(queries);
         } 
         else if (recipe === 'leadFollowUp') {
+            // Delete entire record to reset to setup state
             const queries = [pool.query('DELETE FROM lead_followup_settings WHERE user_id = $1', [userId])];
             
             if (deleteRelatedData) {
