@@ -36,6 +36,19 @@ const whitelist = [
     'http://localhost:3000'
 ];
 
+// Handle preflight OPTIONS requests BEFORE any other middleware
+app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    if (!origin || whitelist.indexOf(origin) !== -1) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        res.header('Access-Control-Max-Age', '86400'); // 24 hours
+    }
+    res.status(204).end();
+});
+
 // CORS Middleware - Simplified and more reliable
 app.use(cors({
     origin: function(origin, callback) {
@@ -51,19 +64,8 @@ app.use(cors({
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
-    optionsSuccessStatus: 200 // Some legacy browsers choke on 204
+    optionsSuccessStatus: 204 // Proper status code for OPTIONS
 }));
-
-// Additional CORS headers for preflight
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Credentials', 'true');
-    
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    next();
-});
 
 // Parse JSON bodies (limit to 10kb to prevent abuse)
 app.use(express.json({ limit: '10kb' }));
