@@ -15,7 +15,10 @@ export const getDashboardStats = async (req, res) => {
             revTriggerRes, 
             captureTriggerRes, 
             followTriggerRes, 
-            pipelineRes
+            pipelineRes,
+            leadsSparkRes,
+            feedbackSparkRes,
+            reviewsSparkRes
         ] = await Promise.all([
             // 1. Leads
             pool.query(
@@ -66,7 +69,28 @@ export const getDashboardStats = async (req, res) => {
             pool.query(
                 "SELECT id, full_name as name, email, source, followup_status as status, created_at FROM leads WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5",
                 [userId]
-            )
+            ),
+            // 11. Leads sparkline — daily count for last 7 days
+            pool.query(
+                `SELECT DATE(created_at) as day, COUNT(*) as count
+                 FROM leads WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
+                 GROUP BY DATE(created_at) ORDER BY day ASC`,
+                [userId]
+            ),
+            // 12. Feedback sparkline — daily count for last 7 days
+            pool.query(
+                `SELECT DATE(created_at) as day, COUNT(*) as count
+                 FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
+                 GROUP BY DATE(created_at) ORDER BY day ASC`,
+                [userId]
+            ),
+            // 13. Reviews sparkline — daily count for last 7 days
+            pool.query(
+                `SELECT DATE(created_at) as day, COUNT(*) as count
+                 FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review' AND created_at >= NOW() - INTERVAL '7 days'
+                 GROUP BY DATE(created_at) ORDER BY day ASC`,
+                [userId]
+            ),
         ]);
 
         const leadsReceived = parseInt(leadsRes.rows[0].count, 10);
@@ -87,6 +111,24 @@ export const getDashboardStats = async (req, res) => {
         const reviewFunnelActive = !!recipesRes.rows[0]?.is_active;
         const leadCaptureActive = !!recipesRes.rows[0]?.lead_capture_active;
         const leadFollowUpActive = !!followUpConfigRes.rows[0]?.is_active;
+
+        // Build 7-day sparkline arrays. Fill missing days with 0.
+        const buildSparkline = (rows) => {
+            const map = {};
+            rows.forEach(r => { map[r.day.toISOString().split('T')[0]] = parseInt(r.count, 10); });
+            const result = [];
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(d.getDate() - i);
+                const key = d.toISOString().split('T')[0];
+                result.push(map[key] || 0);
+            }
+            return result;
+        };
+
+        const leadsSparkline = buildSparkline(leadsSparkRes.rows);
+        const feedbackSparkline = buildSparkline(feedbackSparkRes.rows);
+        const reviewsSparkline = buildSparkline(reviewsSparkRes.rows);
 
         const calculateTrend = (recent, previous) => {
             if (previous === 0) return recent > 0 ? '+100%' : '0%';
@@ -109,7 +151,10 @@ export const getDashboardStats = async (req, res) => {
                 messagesSent,
                 messagesTrend: calculateTrend(messagesRecent, messagesPrev),
                 totalFeedback,
-                avgRating
+                avgRating,
+                leadsSparkline,
+                feedbackSparkline,
+                reviewsSparkline
             },
             recipes: {
                 reviewFunnel: reviewFunnelActive,
