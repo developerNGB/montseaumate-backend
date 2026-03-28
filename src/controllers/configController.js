@@ -78,8 +78,18 @@ export const saveReviewFunnelConfig = async (req, res) => {
 
         const finalLeadSource = validatedLeadSource || existingConfig.lead_source || 'qr';
         const finalCaptureSource = validatedCaptureSource || existingConfig.capture_source || 'qr';
-        const finalReviewActive = is_active !== undefined ? is_active : (existingConfig.is_active || false);
-        const finalCaptureActive = lead_capture_active !== undefined ? lead_capture_active : (existingConfig.lead_capture_active || false);
+
+        // CRITICAL: Each goal only controls its own flag — never touch the other engine's flag
+        let finalReviewActive, finalCaptureActive;
+        if (req.body.goal === 'capture') {
+            // Only update Lead Capture flag; preserve Review Funnel's existing state
+            finalReviewActive = existingConfig.is_active ?? false;
+            finalCaptureActive = lead_capture_active !== undefined ? lead_capture_active : (existingConfig.lead_capture_active ?? false);
+        } else {
+            // Only update Review Funnel flag; preserve Lead Capture's existing state
+            finalReviewActive = is_active !== undefined ? is_active : (existingConfig.is_active ?? false);
+            finalCaptureActive = existingConfig.lead_capture_active ?? false;
+        }
 
         await pool.query(
             `INSERT INTO review_funnel_settings 

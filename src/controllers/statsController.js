@@ -119,7 +119,7 @@ export const getDashboardStats = async (req, res) => {
             configured: {
                 // More precise configuration checks
                 reviewFunnel: !!recipesRes.rows[0]?.is_active,
-                leadCapture: !!recipesRes.rows[0]?.lead_capture_active || !!recipesRes.rows[0],
+                leadCapture: !!recipesRes.rows[0]?.lead_capture_active,
                 leadFollowUp: !!followUpConfigRes.rows[0]
             },
             lastTriggers: {
