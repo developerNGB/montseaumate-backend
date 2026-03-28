@@ -72,21 +72,21 @@ export const getDashboardStats = async (req, res) => {
             ),
             // 11. Leads sparkline — daily count for last 7 days
             pool.query(
-                `SELECT DATE(created_at) as day, COUNT(*) as count
+                `SELECT TO_CHAR(DATE(created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
                  FROM leads WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
                  GROUP BY DATE(created_at) ORDER BY day ASC`,
                 [userId]
             ),
             // 12. Feedback sparkline — daily count for last 7 days
             pool.query(
-                `SELECT DATE(created_at) as day, COUNT(*) as count
+                `SELECT TO_CHAR(DATE(created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
                  FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
                  GROUP BY DATE(created_at) ORDER BY day ASC`,
                 [userId]
             ),
             // 13. Reviews sparkline — daily count for last 7 days
             pool.query(
-                `SELECT DATE(created_at) as day, COUNT(*) as count
+                `SELECT TO_CHAR(DATE(created_at), 'YYYY-MM-DD') as day, COUNT(*)::int as count
                  FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review' AND created_at >= NOW() - INTERVAL '7 days'
                  GROUP BY DATE(created_at) ORDER BY day ASC`,
                 [userId]
@@ -113,14 +113,16 @@ export const getDashboardStats = async (req, res) => {
         const leadFollowUpActive = !!followUpConfigRes.rows[0]?.is_active;
 
         // Build 7-day sparkline arrays. Fill missing days with 0.
+        // r.day is already a 'YYYY-MM-DD' string via TO_CHAR
         const buildSparkline = (rows) => {
             const map = {};
-            rows.forEach(r => { map[r.day.toISOString().split('T')[0]] = parseInt(r.count, 10); });
+            rows.forEach(r => { map[r.day] = r.count; });
             const result = [];
             for (let i = 6; i >= 0; i--) {
                 const d = new Date();
-                d.setDate(d.getDate() - i);
-                const key = d.toISOString().split('T')[0];
+                d.setUTCHours(0, 0, 0, 0);
+                d.setUTCDate(d.getUTCDate() - i);
+                const key = d.toISOString().split('T')[0]; // always 'YYYY-MM-DD' UTC
                 result.push(map[key] || 0);
             }
             return result;
