@@ -135,10 +135,19 @@ export const getDashboardStats = async (req, res) => {
         const calculateTrend = (recent, previous) => {
             if (previous === 0) return recent > 0 ? '+100%' : 'No data yet';
             if (recent === 0 && previous === 0) return 'No data yet';
-            // Protection for low volume—don't show scary % for single lead changes
-            if (Math.abs(recent - previous) < 3 && previous < 5) return (recent >= previous) ? 'Steady' : 'Tracking';
+            
+            // ELIMINATE SCARY NEGATIVE PERCENTAGES FOR LOW VOLUMES
+            // If the business has low volume, any change results in massive % swings that look like bugs.
+            if (previous < 10) {
+                if (recent >= previous) return 'Growth';
+                return 'Tracking';
+            }
 
             const percentage = ((recent - previous) / previous) * 100;
+            
+            // Safeguard: If we have very few leads (e.g. < 5) and dip, don't show -X%. Show "Maintaining" or "Steady".
+            if (percentage < 0 && recent < 5) return 'Steady';
+
             return percentage > 0 ? `+${Math.round(percentage)}%` : `${Math.round(percentage)}%`;
         };
 
