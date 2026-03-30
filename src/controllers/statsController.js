@@ -133,7 +133,11 @@ export const getDashboardStats = async (req, res) => {
         const reviewsSparkline = buildSparkline(reviewsSparkRes.rows);
 
         const calculateTrend = (recent, previous) => {
-            if (previous === 0) return recent > 0 ? '+100%' : '0%';
+            if (previous === 0) return recent > 0 ? '+100%' : 'No data yet';
+            if (recent === 0 && previous === 0) return 'No data yet';
+            // Protection for low volume—don't show scary % for single lead changes
+            if (Math.abs(recent - previous) < 3 && previous < 5) return (recent >= previous) ? 'Steady' : 'Tracking';
+
             const percentage = ((recent - previous) / previous) * 100;
             return percentage > 0 ? `+${Math.round(percentage)}%` : `${Math.round(percentage)}%`;
         };
