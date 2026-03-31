@@ -53,8 +53,15 @@ export const connectProvider = async (req, res) => {
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
             if (clientId) {
-                // Real Google OAuth Redirect
-                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=email%20profile%20https://mail.google.com/&access_type=offline&prompt=consent&state=${state}`;
+                // Real Google OAuth Redirect with Business Profile + Gmail scopes
+                const scopes = [
+                    'email',
+                    'profile',
+                    'https://mail.google.com/',
+                    'https://www.googleapis.com/auth/business.manage'
+                ].join(' ');
+                
+                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${state}`;
                 return res.redirect(authUrl);
             } else {
                 // Mock OAuth Redirect
@@ -125,7 +132,7 @@ export const providerCallback = async (req, res) => {
             // Real Google Token Exchange
             const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                headers: { 'Content-Type': 'application/x-form-urlencoded' },
                 body: new URLSearchParams({
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
@@ -139,7 +146,37 @@ export const providerCallback = async (req, res) => {
 
             accessToken = tokenData.access_token;
             refreshToken = tokenData.refresh_token || null;
-            accountId = 'google_account_fetched_via_api';
+            
+            // ATTEMPT TO FETCH GMB REVIEW URL
+            try {
+                // 1. Get Accounts
+                const accountsRes = await fetch('https://mybusinessbusinessinformation.googleapis.com/v1/accounts', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                const accountsData = await accountsRes.json();
+                
+                if (accountsData.accounts && accountsData.accounts.length > 0) {
+                    const accountName = accountsData.accounts[0].name;
+                    // 2. Get Locations for the first account
+                    const locationsRes = await fetch(`https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?readMask=name,title,metadata`, {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    });
+                    const locationsData = await locationsRes.json();
+                    
+                    if (locationsData.locations && locationsData.locations.length > 0) {
+                        const loc = locationsData.locations[0];
+                        // Some locations have direct review URLs in metadata, otherwise we use mapsUrl
+                        accountId = loc.metadata?.newReviewUrl || loc.metadata?.mapsUri || 'Google Business Connected';
+                    } else {
+                        accountId = 'Google Account (No Locations Found)';
+                    }
+                } else {
+                    accountId = 'Google Account Connected';
+                }
+            } catch (gmbErr) {
+                console.error('[GMB Fetch Error]:', gmbErr);
+                accountId = 'Google Account Connected';
+            }
 
             if (tokenData.expires_in) {
                 expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
@@ -164,7 +201,10 @@ export const providerCallback = async (req, res) => {
             if (code === 'mock_auth_code_approved') {
                 accessToken = `mock_${provider}_access_token_${Date.now()}`;
                 refreshToken = `mock_${provider}_refresh_token_never_expires`;
-                accountId = `mock_${provider}_account_id`;
+                // Provide a mock review link for Google
+                accountId = provider === 'google' 
+                    ? 'https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4' 
+                    : `mock_${provider}_account_id`;
                 expiresAt = new Date(Date.now() + 3600 * 1000); // 1 hour
             } else {
                 return res.redirect(`${frontendRedirect}?error=mock_auth_failed`);
