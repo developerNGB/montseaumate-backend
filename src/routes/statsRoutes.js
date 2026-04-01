@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDashboardStats } from '../controllers/statsController.js';
+import { getDashboardStats, sendMonthlyReport } from '../controllers/statsController.js';
 import authenticate from '../middleware/authenticate.js';
 
 const router = Router();
@@ -9,5 +9,8 @@ router.use(authenticate);
 
 // GET /api/stats
 router.get('/', getDashboardStats);
+
+// POST /api/stats/monthly-report
+router.post('/monthly-report', sendMonthlyReport);
 
 export default router;
