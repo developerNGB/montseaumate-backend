@@ -29,7 +29,7 @@ export const getIntegrations = async (req, res) => {
 export const connectProvider = async (req, res) => {
     try {
         const { provider } = req.params;
-        const { token } = req.query;
+        const { token, jobId } = req.query;
 
         if (!token) {
             return res.status(401).send('Unauthorized: No token provided');
@@ -44,7 +44,8 @@ export const connectProvider = async (req, res) => {
         }
 
         // We use the JWT as the 'state' variable so it passes safely through the OAuth flow
-        const state = token;
+        // We append jobId to the state to maintain context
+        const state = jobId ? `${token}___${jobId}` : token;
 
         // Redirect URL logic
         const backendBaseUrl = process.env.BACKEND_URL || 'https://montseaumate-backend.onrender.com';
@@ -98,8 +99,20 @@ export const providerCallback = async (req, res) => {
         const { provider } = req.params;
         const { code, state, error } = req.query;
 
+        // Extract token and jobId from state
+        let actualToken = state;
+        let jobId = '';
+        if (state && typeof state === 'string' && state.includes('___')) {
+            const parts = state.split('___');
+            actualToken = parts[0];
+            jobId = parts[1];
+        }
+
         // Redirect to frontend fallback
-        const frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/integrations`;
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/employee`;
+        if (jobId) {
+            frontendRedirect += `/${jobId}`;
+        }
 
         if (error) {
             console.error(`[${provider} OAuth Error]:`, error);
@@ -110,10 +123,10 @@ export const providerCallback = async (req, res) => {
             return res.redirect(`${frontendRedirect}?error=invalid_callback`);
         }
 
-        // Verify the state (which is the user's JWT)
+        // Verify the state (which is the user's actualToken)
         let decoded;
         try {
-            decoded = jwt.verify(state, process.env.JWT_SECRET);
+            decoded = jwt.verify(actualToken, process.env.JWT_SECRET);
         } catch (e) {
             return res.redirect(`${frontendRedirect}?error=invalid_state`);
         }
@@ -230,7 +243,14 @@ export const providerCallback = async (req, res) => {
 
     } catch (err) {
         console.error('[providerCallback] CRITICAL ERROR:', err);
-        const frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/integrations`;
+        // Extract jobId for fallback redirect
+        let jobId = '';
+        if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
+            jobId = req.query.state.split('___')[1];
+        }
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/employee`;
+        if (jobId) frontendRedirect += `/${jobId}`;
+        
         // Pass the error message to the frontend for easier debugging
         return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(err.message)}`);
     }
