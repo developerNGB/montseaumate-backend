@@ -69,8 +69,8 @@ export const saveReviewFunnelConfig = async (req, res) => {
         const result = await pool.query('SELECT automation_id FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
         let automationId = result.rows.length > 0 ? result.rows[0].automation_id : crypto.randomBytes(4).toString('hex');
 
-        const validatedLeadSource = (lead_source === 'qr' || lead_source === 'excel') ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
-        const validatedCaptureSource = (capture_source === 'qr' || capture_source === 'excel') ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
+        const validatedLeadSource = (lead_source === 'qr' || lead_source === 'excel' || lead_source === 'website') ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
+        const validatedCaptureSource = (capture_source === 'qr' || capture_source === 'excel' || capture_source === 'website') ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
 
         // Get existing to avoid overwrites if not provided
         const existingConfigRes = await pool.query('SELECT * FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
@@ -165,7 +165,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
 export const getLeadFollowupConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence FROM lead_followup_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -173,7 +173,14 @@ export const getLeadFollowupConfig = async (req, res) => {
             return res.status(200).json({ success: true, config: null });
         }
 
-        return res.status(200).json({ success: true, config: result.rows[0] });
+        const config = result.rows[0];
+        return res.status(200).json({ 
+            success: true, 
+            config: {
+                ...config,
+                followup_sequence: typeof config.followup_sequence === 'string' ? JSON.parse(config.followup_sequence) : (config.followup_sequence || [])
+            } 
+        });
     } catch (err) {
         console.error('[getLeadFollowupConfig] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });
@@ -205,12 +212,13 @@ export const saveLeadFollowupConfig = async (req, res) => {
         const reminder_delay_value = passed.reminder_delay_value !== undefined ? passed.reminder_delay_value : (existing.reminder_delay_value ?? 48);
         const reminder_delay_unit = passed.reminder_delay_unit !== undefined ? passed.reminder_delay_unit : (existing.reminder_delay_unit ?? 'hours');
         const reminder_message = passed.reminder_message !== undefined ? passed.reminder_message : (existing.reminder_message ?? 'Hi again! Just a friendly reminder about your inquiry. We haven\'t heard back and want to make sure you got our last message.');
+        const followup_sequence = passed.followup_sequence || existing.followup_sequence || [];
 
         await pool.query(
             `INSERT INTO lead_followup_settings 
                 (user_id, is_active, delay_value, delay_unit, message, 
-                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 is_active = EXCLUDED.is_active,
                 delay_value = EXCLUDED.delay_value,
@@ -223,10 +231,11 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 lead_source = EXCLUDED.lead_source,
                 whatsapp_enabled = EXCLUDED.whatsapp_enabled,
                 email_enabled = EXCLUDED.email_enabled,
+                followup_sequence = EXCLUDED.followup_sequence,
                 updated_at = NOW()`,
             [req.user.id, is_active, delay_value, delay_unit, message,
                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
-                whatsapp_enabled, email_enabled]
+                whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence)]
         );
 
         return res.status(200).json({
@@ -234,7 +243,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
             message: 'Lead follow-up settings saved successfully!',
             config: {
                 is_active, delay_value, delay_unit, message,
-                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source
+                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, followup_sequence
             }
         });
 
