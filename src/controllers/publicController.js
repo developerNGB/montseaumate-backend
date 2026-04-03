@@ -493,7 +493,7 @@ export const submitLead = async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback, u.email as owner_email
+            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.is_active, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback, u.email as owner_email
              FROM review_funnel_settings rfs
              JOIN users u ON rfs.user_id = u.id
              WHERE rfs.automation_id = $1`,
@@ -504,7 +504,7 @@ export const submitLead = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Business not found.' });
         }
 
-        if (!result.rows[0].lead_capture_active) {
+        if (!result.rows[0].lead_capture_active && !result.rows[0].is_active) {
             return res.status(403).json({ success: false, message: 'This automation is currently disabled by the owner.' });
         }
 
