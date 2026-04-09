@@ -30,6 +30,8 @@ app.set('trust proxy', 1);
 
 // CORS Whitelist for production and local environments
 const whitelist = [
+    'https://www.equipoexperto.com',
+    'https://equipoexperto.com',
     'https://montseaumateii.pages.dev',
     'https://www.montseaumate.com',
     'http://localhost:5173',

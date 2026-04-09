@@ -109,7 +109,7 @@ export const providerCallback = async (req, res) => {
         }
 
         // Redirect to frontend fallback
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/employee`;
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee`;
         if (jobId) {
             frontendRedirect += `/${jobId}`;
         }
@@ -248,7 +248,7 @@ export const providerCallback = async (req, res) => {
         if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
             jobId = req.query.state.split('___')[1];
         }
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/dashboard/employee`;
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee`;
         if (jobId) frontendRedirect += `/${jobId}`;
         
         // Pass the error message to the frontend for easier debugging
@@ -304,7 +304,7 @@ export const renderMockOAuth = (req, res) => {
         <body>
             <div class="card">
                 <h1>Grant Permission</h1>
-                <p><strong>Montseaumate</strong> wants to access your <span class="provider">${provider}</span> account to perform actions on your behalf.</p>
+                <p><strong>Equipo Experto</strong> wants to access your <span class="provider">${provider}</span> account to perform actions on your behalf.</p>
                 
                 <a href="${approveUrl}" class="btn btn-approve">Allow Access</a>
                 <a href="${denyUrl}" class="btn btn-deny">Deny</a>

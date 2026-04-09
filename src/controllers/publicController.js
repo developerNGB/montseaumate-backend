@@ -9,8 +9,8 @@ import * as whatsappService from '../services/whatsappService.js';
  * Ensures n8n URLs use the /webhook/ path for production.
  */
 const ensureProductionUrl = (url) => {
-    if (url && url.includes('n8n.cloud/webhook-test/')) {
-        return url.replace('n8n.cloud/webhook-test/', 'n8n.cloud/webhook/');
+    if (url && url.includes('/webhook-test/')) {
+        return url.replace('/webhook-test/', '/webhook/');
     }
     return url;
 };
@@ -96,7 +96,7 @@ export const submitReview = async (req, res) => {
         console.log(`[submitReview] Activity logged. Triggering n8n...`);
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = ensureProductionUrl(n8nWebhook || "https://cyprusthered.app.n8n.cloud/webhook/review-feedback");
+        const finalWebhook = ensureProductionUrl(n8nWebhook || "https://n8n.srv882475.hstgr.cloud/webhook/review-feedback");
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -373,7 +373,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || "https://cyprusthered.app.n8n.cloud/webhook/review-feedback");
+        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || "https://n8n.srv882475.hstgr.cloud/webhook/review-feedback");
         let n8nResponseData = null;
         let debugStatus = "pending";
 
@@ -418,7 +418,7 @@ export const submitFeedback = async (req, res) => {
 
         // 7. DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session
         if (whatsappAccessToken === 'whatsapp_native_session') {
-            const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+            const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
             
             // A. NOTIFY OWNER (INSTANT FULL DATA DUMP)
             const ownerPhone = integrations['whatsapp']?.account_id;
@@ -562,7 +562,7 @@ export const submitLead = async (req, res) => {
                 console.log(`[WA-Check] token="${whatsappAuth.access_token}" | account="${whatsappAuth.account_id}"`);
 
                 if (whatsappAuth.access_token === 'whatsapp_native_session') {
-                    const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+                    const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
 
                     // A. OWNER — full data dump
                     const ownerPhone = whatsappAuth.account_id;

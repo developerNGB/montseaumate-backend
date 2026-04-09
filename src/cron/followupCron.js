@@ -54,7 +54,7 @@ const startFollowupCron = () => {
         }
 
         // ── STEP 3: Build & Send message ──────────────────────────────────────
-        const baseUrl = process.env.FRONTEND_URL || 'https://montseaumateii.pages.dev';
+        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
         const link    = `${baseUrl}/r/${lead.automation_id || ''}`;
         const msg     = injectPlaceholders(lead.custom_message || '', {
             name:   lead.full_name,
