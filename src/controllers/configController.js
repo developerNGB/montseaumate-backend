@@ -15,7 +15,7 @@ export const getReviewFunnelConfig = async (req, res) => {
         }
 
         const config = result.rows[0];
-        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
         
         // Survey Funnel (New Multi-Rating System)
         const surveyUrl = `${baseUrl}/f/${config.automation_id}`;
@@ -123,7 +123,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
             ]
         );
 
-        const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
         const surveyUrl = `${baseUrl}/f/${automationId}`;
         const surveyQrCode = await qrcode.toDataURL(surveyUrl);
         const reviewUrl = `${baseUrl}/r/${automationId}`;
