@@ -170,7 +170,6 @@ export const providerCallback = async (req, res) => {
                 
                 if (accountsData.accounts && accountsData.accounts.length > 0) {
                     const accountName = accountsData.accounts[0].name;
-                    // 2. Get Locations for the first account
                     const locationsRes = await fetch(`https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?readMask=name,title,metadata`, {
                         headers: { 'Authorization': `Bearer ${accessToken}` }
                     });
@@ -178,10 +177,10 @@ export const providerCallback = async (req, res) => {
                     
                     if (locationsData.locations && locationsData.locations.length > 0) {
                         const loc = locationsData.locations[0];
-                        // Some locations have direct review URLs in metadata, otherwise we use mapsUrl
+                        // Prioritize the review URL, fallback to mapsUri
                         accountId = loc.metadata?.newReviewUrl || loc.metadata?.mapsUri || 'Google Business Connected';
                     } else {
-                        accountId = 'Google Account (No Locations Found)';
+                        accountId = 'Google Account Connected';
                     }
                 } else {
                     accountId = 'Google Account Connected';

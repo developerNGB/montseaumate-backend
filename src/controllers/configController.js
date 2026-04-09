@@ -91,6 +91,15 @@ export const saveReviewFunnelConfig = async (req, res) => {
             finalCaptureActive = existingConfig.lead_capture_active ?? false;
         }
 
+        // Try to fetch google_review_url from integrations if not provided
+        let finalGoogleReviewUrl = google_review_url;
+        if (!finalGoogleReviewUrl || finalGoogleReviewUrl.trim() === '') {
+            const googleIntRes = await pool.query('SELECT account_id FROM integrations WHERE user_id = $1 AND provider = $2', [req.user.id, 'google']);
+            if (googleIntRes.rows.length > 0 && googleIntRes.rows[0].account_id.startsWith('http')) {
+                finalGoogleReviewUrl = googleIntRes.rows[0].account_id;
+            }
+        }
+
         await pool.query(
             `INSERT INTO review_funnel_settings 
                 (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled, updated_at) 
@@ -110,7 +119,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 updated_at = NOW()`,
             [
                 req.user.id, automationId, 
-                google_review_url !== undefined ? google_review_url : existingConfig.google_review_url || '', 
+                finalGoogleReviewUrl !== undefined ? finalGoogleReviewUrl : existingConfig.google_review_url || '', 
                 notification_email !== undefined ? notification_email : existingConfig.notification_email || '', 
                 auto_response_message !== undefined ? auto_response_message : existingConfig.auto_response_message || '', 
                 JSON.stringify(filtering_questions || existingConfig.filtering_questions || []), 
