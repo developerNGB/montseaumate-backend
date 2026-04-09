@@ -187,7 +187,12 @@ export const providerCallback = async (req, res) => {
                 }
             } catch (gmbErr) {
                 console.error('[GMB Fetch Error]:', gmbErr);
-                accountId = 'Google Account Connected';
+                accountId = 'Connected';
+            }
+            
+            // If still no link, use 'Connected' so it shows as connected in UI
+            if (!accountId || !accountId.startsWith('http')) {
+                accountId = 'Connected';
             }
 
             if (tokenData.expires_in) {
