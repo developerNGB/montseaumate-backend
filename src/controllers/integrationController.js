@@ -48,7 +48,7 @@ export const connectProvider = async (req, res) => {
         const state = jobId ? `${token}___${jobId}` : token;
 
         // Redirect URL logic
-        const backendBaseUrl = process.env.BACKEND_URL || 'https://montseaumate-backend.onrender.com';
+        const backendBaseUrl = process.env.BACKEND_URL || 'https://api.equipoexperto.com';
         const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
 
         if (provider === 'google') {
@@ -137,7 +137,7 @@ export const providerCallback = async (req, res) => {
         let accountId = '';
         let expiresAt = null;
 
-        const backendBaseUrl = process.env.BACKEND_URL || 'https://montseaumate-backend.onrender.com';
+        const backendBaseUrl = process.env.BACKEND_URL || 'https://api.equipoexperto.com';
         const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
 
         // 1. Exchange 'code' for tokens based on the provider

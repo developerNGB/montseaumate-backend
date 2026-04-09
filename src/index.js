@@ -107,7 +107,7 @@ app.use(generalLimiter);
 app.get('/', (req, res) => {
     res.json({
         success: true,
-        service: 'Montseaumate API',
+        service: 'Equipo Experto API',
         version: '1.0.0',
         status: 'running',
         timestamp: new Date().toISOString(),
@@ -165,7 +165,7 @@ app.use((err, req, res, next) => {
 // START
 // ────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-    console.log(`\n🚀 Montseaumate API running on http://localhost:${PORT}`);
+    console.log(`\n🚀 Equipo Experto API running on http://localhost:${PORT}`);
     console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
     console.log(`   CORS origin : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
 

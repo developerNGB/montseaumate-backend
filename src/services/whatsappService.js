@@ -40,7 +40,7 @@ export const initWhatsAppClient = async (userId) => {
             auth: state,
             printQRInTerminal: false,
             logger: pino({ level: 'silent' }), // Keep logs clean; we have our own logs
-            browser: ['Montseaumate', 'Chrome', '1.0.0']
+            browser: ['Equipo Experto', 'Chrome', '1.0.0']
         });
         
         sock.ev.on('creds.update', saveCreds);
