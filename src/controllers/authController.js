@@ -7,7 +7,7 @@ import pool from '../db/pool.js';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-const SALT_ROUNDS = 12;
+const SALT_ROUNDS = 10; // Optimized for performance while maintaining high security
 
 /**
  * Generate a signed JWT for a given user payload.
