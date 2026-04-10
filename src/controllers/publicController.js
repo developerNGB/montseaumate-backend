@@ -6,6 +6,56 @@ import fetch from 'node-fetch';
 import * as whatsappService from '../services/whatsappService.js';
 
 /**
+ * POST /api/support/contact
+ * Handles contact form submissions from the main landing page
+ */
+export const submitContactForm = async (req, res) => {
+    try {
+        const { name, email, message } = req.body;
+
+        if (!name || !email || !message) {
+            return res.status(400).json({ success: false, message: 'Please provide name, email and message.' });
+        }
+
+        console.log(`[submitContactForm] New message from ${name} (${email})`);
+
+        // Send Email Alert to Support/Owner
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: process.env.SUPPORT_EMAIL || process.env.EMAIL_USER,
+            subject: `🚀 [LANDING] New Contact Message from ${name}`,
+            text: `
+                Name: ${name}
+                Email: ${email}
+                
+                Message:
+                ${message}
+            `
+        };
+
+        // Fire and forget (don't block the UI)
+        transporter.sendMail(mailOptions).catch(err => console.error('[submitContactForm] Email failed:', err));
+
+        return res.status(200).json({ 
+            success: true, 
+            message: 'Your message has been received! Our team will get back to you shortly.' 
+        });
+
+    } catch (err) {
+        console.error('[submitContactForm] CRITICAL ERR:', err);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+};
+
+/**
  * Ensures n8n URLs use the /webhook/ path for production.
  */
 const ensureProductionUrl = (url) => {

@@ -1,9 +1,12 @@
 import { Router } from 'express';
-import { getPublicReviewConfig, submitReview, submitLead, submitFeedback } from '../controllers/publicController.js';
+import { getPublicReviewConfig, submitReview, submitLead, submitFeedback, submitContactForm } from '../controllers/publicController.js';
 
 const router = Router();
 
 // Routes are mounted at /api in index.js
+
+// Landing Page Contact
+router.post('/support/contact', submitContactForm);
 
 // GET /api/r/:automation_id
 router.get('/r/:automation_id', getPublicReviewConfig);
