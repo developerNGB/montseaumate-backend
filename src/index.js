@@ -73,8 +73,12 @@ app.use(cors({
 // Parse JSON bodies (limit to 10kb to prevent abuse)
 app.use(express.json({ limit: '10kb' }));
 
-// Remove fingerprinting header
+// Remove fingerprinting header and set COOP for Google Auth
 app.disable('x-powered-by');
+app.use((req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    next();
+});
 
 // ────────────────────────────────────────────────────────────
 // RATE LIMITING
