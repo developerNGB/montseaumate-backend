@@ -135,7 +135,7 @@ export const register = async (req, res) => {
         const result = await pool.query(
             `INSERT INTO users (name, email, password_hash, company_name)
              VALUES ($1, $2, $3, $4)
-             RETURNING id, name, email, company_name, plan, role, created_at`,
+             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled`,
             [name.trim(), emailLower, password_hash, company_name.trim()]
         );
 
@@ -181,7 +181,7 @@ export const login = async (req, res) => {
 
         // ── Fetch user ───────────────────────────────
         const result = await pool.query(
-            `SELECT id, name, email, password_hash, company_name, plan, role, status, created_at
+            `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
              FROM users
              WHERE email = $1`,
             [email.toLowerCase().trim()]
@@ -242,7 +242,7 @@ export const getProfile = async (req, res) => {
     try {
         console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status, created_at
+            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
              FROM users
              WHERE id = $1`,
             [req.user.id]
@@ -275,7 +275,7 @@ export const getProfile = async (req, res) => {
  */
 export const updateProfile = async (req, res) => {
     try {
-        const { company_name, email, phone } = req.body;
+        const { company_name, email, phone, weekly_reports_enabled } = req.body;
 
         if (!email) {
             return res.status(400).json({ success: false, message: 'Email is required.' });
@@ -293,13 +293,14 @@ export const updateProfile = async (req, res) => {
 
         const result = await pool.query(
             `UPDATE users 
-             SET company_name = $1, email = $2, phone = $3, updated_at = NOW()
-             WHERE id = $4
-             RETURNING id, name, email, company_name, phone, plan, role, status, created_at`,
+             SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, updated_at = NOW()
+             WHERE id = $5
+             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled`,
             [
                 company_name ? company_name.trim() : null,
                 email.toLowerCase().trim(),
                 phone ? phone.trim() : null,
+                weekly_reports_enabled !== undefined ? weekly_reports_enabled : true,
                 req.user.id
             ]
         );
@@ -574,7 +575,7 @@ export const googleLogin = async (req, res) => {
 
         // Find existing user
         let result = await pool.query(
-            `SELECT id, name, email, company_name, plan, role, status FROM users WHERE email = $1`,
+            `SELECT id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled FROM users WHERE email = $1`,
             [emailLower]
         );
 
@@ -589,7 +590,7 @@ export const googleLogin = async (req, res) => {
             const insertResult = await pool.query(
                 `INSERT INTO users (name, email, password_hash, company_name)
                  VALUES ($1, $2, $3, $4)
-                 RETURNING id, name, email, company_name, plan, role, status, created_at`,
+                 RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled`,
                 [name, emailLower, '', '']
             );
             user = insertResult.rows[0];

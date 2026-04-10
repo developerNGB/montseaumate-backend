@@ -14,6 +14,7 @@ import feedbackRoutes from './routes/feedbackRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import translationRoutes from './routes/translationRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
+import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
 import pool from './db/pool.js';
 
@@ -177,6 +178,7 @@ app.listen(PORT, () => {
 
     // Start background background Cron Worker
     startFollowupCron();
+    startWeeklyReportCron();
     
     // Restore WhatsApp Sessions
     restoreActiveSessions();
@@ -185,6 +187,7 @@ app.listen(PORT, () => {
     const runMigrations = async () => {
         try {
             await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)');
+            await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE');
             await pool.query('CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)');
             await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
             await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
