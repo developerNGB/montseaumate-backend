@@ -12,6 +12,7 @@ import leadsRoutes from './routes/leadsRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
+import translationRoutes from './routes/translationRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
 import pool from './db/pool.js';
@@ -128,6 +129,7 @@ app.use('/api/leads', leadsRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/translations', translationRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
@@ -183,6 +185,7 @@ app.listen(PORT, () => {
             await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
             await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
             await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
+            await pool.query('CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())');
             console.log('✅ Startup migrations & performance indices verified.');
         } catch (err) {
             console.error('❌ Startup migration failed:', err.message);
