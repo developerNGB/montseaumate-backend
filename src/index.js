@@ -13,6 +13,7 @@ import statsRoutes from './routes/statsRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import translationRoutes from './routes/translationRoutes.js';
+import reportRoutes from './routes/reportRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
@@ -135,6 +136,7 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/translations', translationRoutes);
+app.use('/api/reports', reportRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
