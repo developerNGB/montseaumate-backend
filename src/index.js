@@ -54,6 +54,12 @@ app.options('*', (req, res) => {
     res.status(204).end();
 });
 
+// Enable COOP for Google login
+app.use((req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    next();
+});
+
 // CORS Middleware - Simplified and more reliable
 app.use(cors({
     origin: function(origin, callback) {
