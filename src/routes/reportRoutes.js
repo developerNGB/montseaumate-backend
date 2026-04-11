@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateToken } from '../middleware/authMiddleware.js';
+import { authenticateToken } from '../middleware/authenticate.js';
 import { getWeeklyStats, sendWeeklyReport } from '../services/reportService.js';
 import pool from '../db/pool.js';
 
