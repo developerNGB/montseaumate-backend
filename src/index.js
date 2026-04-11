@@ -130,10 +130,8 @@ app.get('/', (req, res) => {
 // Auth endpoints
 app.use('/auth', authRoutes);
 
-// Public Facing Funnels (No Auth)
-app.use('/api', publicRoutes);
-
 // Protected Dashboard Endpoints
+app.use('/api/reports', reportRoutes);
 app.use('/api/integrations', integrationRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/activity-logs', activityLogsRoutes);
@@ -142,7 +140,9 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/translations', translationRoutes);
-app.use('/api/reports', reportRoutes);
+
+// Public Facing Funnels (No Auth)
+app.use('/api', publicRoutes);
 
 // ────────────────────────────────────────────────────────────
 // 404 handler
@@ -177,34 +177,40 @@ app.use((err, req, res, next) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// START
-// ────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-    console.log(`\n🚀 Equipo Experto API running on http://localhost:${PORT}`);
-    console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
-    console.log(`   CORS origin : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
+// Startup Migrations: Ensure schema and indices are optimized
+const runMigrations = async () => {
+    try {
+        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)');
+        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
+        await pool.query('CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())');
+        console.log('✅ Startup migrations & performance indices verified.');
+        
+        // Finalize Startup
+        startServer();
+    } catch (err) {
+        console.error('❌ Startup migration failed:', err.message);
+        // Start server anyway to allow debugging/logs
+        startServer();
+    }
+};
 
-    // Start background background Cron Worker
-    startFollowupCron();
-    startWeeklyReportCron();
-    
-    // Restore WhatsApp Sessions
-    restoreActiveSessions();
+const startServer = () => {
+    app.listen(PORT, () => {
+        console.log(`\n🚀 Equipo Experto API running on http://localhost:${PORT}`);
+        console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
+        console.log(`   CORS origin : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
 
-    // Startup Migrations: Ensure schema and indices are optimized
-    const runMigrations = async () => {
-        try {
-            await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)');
-            await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE');
-            await pool.query('CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)');
-            await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
-            await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
-            await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
-            await pool.query('CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())');
-            console.log('✅ Startup migrations & performance indices verified.');
-        } catch (err) {
-            console.error('❌ Startup migration failed:', err.message);
-        }
-    };
-    runMigrations();
-});
+        // Start background background Cron Worker
+        startFollowupCron();
+        startWeeklyReportCron();
+        
+        // Restore WhatsApp Sessions
+        restoreActiveSessions();
+    });
+};
+
+runMigrations();
