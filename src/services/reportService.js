@@ -37,7 +37,7 @@ export const getWeeklyStats = async (userId) => {
 };
 
 export const generateReportHtml = (user, stats) => {
-    // Generate dates for "Week of April 7-13" (Last 7 days strictly)
+    // Generate dates for "Week of April 7-13"
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - 7);
@@ -45,10 +45,10 @@ export const generateReportHtml = (user, stats) => {
     const month = start.toLocaleString('en-US', { month: 'long' });
     let dateStr = '';
     if (start.getMonth() === end.getMonth()) {
-        dateStr = `Week of ${month} ${start.getDate()}-${end.getDate()}`;
+        dateStr = `Week of ${month} ${start.getDate()} - ${end.getDate()}, ${end.getFullYear()}`;
     } else {
         const endMonth = end.toLocaleString('en-US', { month: 'short' });
-        dateStr = `Week of ${month} ${start.getDate()} - ${endMonth} ${end.getDate()}`;
+        dateStr = `Week of ${month} ${start.getDate()} - ${endMonth} ${end.getDate()}, ${end.getFullYear()}`;
     }
 
     return `
@@ -56,33 +56,195 @@ export const generateReportHtml = (user, stats) => {
         <html>
         <head>
             <style>
-                body { font-family: 'Inter', Helvetica, Arial, sans-serif; background-color: #f9fafb; color: #111827; margin: 0; padding: 40px; }
-                .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 40px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-                .header { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #111827; }
-                .divider { color: #d1d5db; letter-spacing: 2px; margin: 15px 0; font-family: monospace; }
-                .metric { font-size: 16px; margin: 10px 0; color: #374151; display: flex; align-items: center; }
-                .metric-label { font-weight: 400; color: #4b5563; }
-                .metric-value { font-weight: 600; color: #111827; margin-left: 6px; }
-                .footer { font-size: 14px; color: #6b7280; font-style: italic; margin-top: 20px; }
+                body { 
+                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+                    background-color: #f8fafc; 
+                    color: #0f172a; 
+                    margin: 0; 
+                    padding: 0; 
+                    -webkit-font-smoothing: antialiased;
+                }
+                .wrapper {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    background: #ffffff;
+                    border-radius: 16px;
+                    overflow: hidden;
+                    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+                    border: 1px solid #f1f5f9;
+                }
+                .header { 
+                    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); 
+                    padding: 48px 40px; 
+                    text-align: left; 
+                }
+                .header h1 { 
+                    color: #ffffff; 
+                    margin: 0 0 8px 0; 
+                    font-size: 28px; 
+                    font-weight: 800; 
+                    letter-spacing: -0.02em;
+                }
+                .header p { 
+                    color: #94a3b8; 
+                    margin: 0; 
+                    font-size: 15px; 
+                    font-weight: 500;
+                }
+                .content { 
+                    padding: 40px; 
+                }
+                .greeting { 
+                    font-size: 20px; 
+                    font-weight: 600; 
+                    color: #0f172a;
+                    margin-bottom: 8px; 
+                }
+                .intro-text {
+                    font-size: 15px;
+                    color: #64748b;
+                    line-height: 1.6;
+                    margin-bottom: 32px;
+                }
+                .grid-container {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                    gap: 20px;
+                    margin-bottom: 32px;
+                }
+                .stat-card { 
+                    background: #f8fafc; 
+                    border: 1px solid #f1f5f9;
+                    padding: 24px; 
+                    border-radius: 12px; 
+                }
+                .stat-label { 
+                    font-size: 13px; 
+                    color: #64748b; 
+                    font-weight: 600; 
+                    text-transform: uppercase; 
+                    letter-spacing: 0.06em; 
+                    margin-bottom: 12px; 
+                }
+                .stat-value { 
+                    font-size: 32px; 
+                    font-weight: 800; 
+                    color: #0f172a; 
+                    line-height: 1;
+                }
+                .highlight-section {
+                    background: #f0fdf4;
+                    border: 1px solid #bbf7d0;
+                    border-radius: 12px;
+                    padding: 24px;
+                    margin-bottom: 32px;
+                }
+                .highlight-grid {
+                    display: grid;
+                    grid-template-columns: repeat(3, 1fr);
+                    gap: 20px;
+                }
+                .highlight-item {
+                    text-align: center;
+                }
+                .highlight-item .label {
+                    font-size: 13px;
+                    color: #166534;
+                    font-weight: 600;
+                    margin-bottom: 8px;
+                }
+                .highlight-item .value {
+                    font-size: 18px;
+                    font-weight: 700;
+                    color: #14532d;
+                }
+                .rating-badge {
+                    display: inline-flex;
+                    align-items: center;
+                    background: #fef08a;
+                    color: #854d0e;
+                    padding: 4px 12px;
+                    border-radius: 9999px;
+                    font-size: 18px;
+                    font-weight: 800;
+                }
+                .footer { 
+                    background: #f8fafc; 
+                    padding: 32px 40px; 
+                    text-align: center; 
+                    border-top: 1px solid #f1f5f9; 
+                }
+                .footer-logo {
+                    font-size: 16px;
+                    font-weight: 800;
+                    color: #0f172a;
+                    margin-bottom: 8px;
+                }
+                .footer p { 
+                    font-size: 13px; 
+                    color: #94a3b8; 
+                    margin: 0; 
+                    line-height: 1.5;
+                }
             </style>
         </head>
         <body>
-            <div class="container">
-                <div class="header">${dateStr}</div>
-                <div class="divider">─────────────────</div>
-                
-                <div class="metric"><span class="metric-label">New Leads:</span> <span class="metric-value">${stats.newLeads}</span></div>
-                <div class="metric"><span class="metric-label">Messages Sent:</span> <span class="metric-value">${stats.messagesSent > stats.newLeads ? stats.messagesSent : stats.newLeads}</span></div>
-                <div class="metric"><span class="metric-label">Responses Received:</span> <span class="metric-value">${stats.responsesReceived}</span></div>
-                <div class="metric"><span class="metric-label">Google Reviews Collected:</span> <span class="metric-value">${stats.reviewsCollected}</span></div>
-                <div class="metric"><span class="metric-label">Average Rating:</span> <span class="metric-value">${stats.avgRating > 0 ? stats.avgRating : 'N/A'}</span></div>
-                
-                <div class="divider">─────────────────</div>
-                
-                <div class="metric"><span class="metric-label">Top performing day:</span> <span class="metric-value">${stats.topDay}</span></div>
-                <div class="metric"><span class="metric-label">Most active engine:</span> <span class="metric-value">${stats.activeEngine}</span></div>
-                
-                <div class="footer">Report generated for ${user.company_name || user.name || 'Partner'}.</div>
+            <div style="padding: 20px;">
+                <div class="wrapper">
+                    <div class="header">
+                        <h1>Weekly Performance Report</h1>
+                        <p>${dateStr}</p>
+                    </div>
+                    
+                    <div class="content">
+                        <div class="greeting">Hello ${user.name || user.company_name || 'Partner'},</div>
+                        <div class="intro-text">
+                            Your automated systems have been working diligently. Here is a snapshot of your platform's performance over the last 7 days.
+                        </div>
+                        
+                        <div class="grid-container">
+                            <div class="stat-card">
+                                <div class="stat-label">New Leads</div>
+                                <div class="stat-value" style="color: #3b82f6;">${stats.newLeads}</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Messages Sent</div>
+                                <div class="stat-value" style="color: #ec4899;">${stats.messagesSent > stats.newLeads ? stats.messagesSent : stats.newLeads}</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Responses Received</div>
+                                <div class="stat-value" style="color: #f59e0b;">${stats.responsesReceived}</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Google Reviews Collected</div>
+                                <div class="stat-value" style="color: #10b981;">${stats.reviewsCollected}</div>
+                            </div>
+                        </div>
+
+                        <div class="highlight-section">
+                            <div class="highlight-grid">
+                                <div class="highlight-item" style="border-right: 1px solid #bbf7d0;">
+                                    <div class="label">Top Performing Day</div>
+                                    <div class="value">${stats.topDay}</div>
+                                </div>
+                                <div class="highlight-item" style="border-right: 1px solid #bbf7d0;">
+                                    <div class="label">Most Active Engine</div>
+                                    <div class="value">${stats.activeEngine}</div>
+                                </div>
+                                <div class="highlight-item">
+                                    <div class="label">Average Rating</div>
+                                    <div class="rating-badge">⭐ ${stats.avgRating > 0 ? stats.avgRating : 'N/A'}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="footer">
+                        <div class="footer-logo">Equipo Experto</div>
+                        <p>© ${new Date().getFullYear()} Equipo Experto. All rights reserved.</p>
+                        <p style="margin-top: 4px;">This report is automatically generated based on platform activity.</p>
+                    </div>
+                </div>
             </div>
         </body>
         </html>
