@@ -1,6 +1,5 @@
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
-import puppeteer from 'puppeteer';
 
 /**
  * Aggregates weekly stats for a specific user.
@@ -252,50 +251,6 @@ export const generateReportHtml = (user, stats) => {
     `;
 };
 
-/**
- * Generates a PDF buffer from the HTML report.
- */
-export const generateReportPDF = async (user, stats) => {
-    const htmlContent = generateReportHtml(user, stats);
-
-    // Launch headless browser with comprehensive flags for cloud environments
-    const browser = await puppeteer.launch({
-        headless: 'new',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu'
-        ]
-    });
-
-    const page = await browser.newPage();
-
-    // Set viewport for consistent rendering
-    await page.setViewport({ width: 1200, height: 800 });
-
-    // Load content and wait for fonts to load
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-
-    // Small delay to ensure rendering completes
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Print to PDF
-    const pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        preferCSSPageSize: true,
-        margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' }
-    });
-
-    await browser.close();
-    console.log(`[generateReportPDF] Generated PDF: ${pdfBuffer.length} bytes`);
-    return pdfBuffer;
-};
 
 /**
  * Sends the Weekly Report Email
