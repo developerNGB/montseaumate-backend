@@ -31,6 +31,7 @@ router.post('/trigger', authenticateToken, async (req, res) => {
 
         console.log(`[ReportDownload] Generating PDF with Puppeteer...`);
         const pdfBuffer = await generateReportPDF(user, stats);
+        console.log(`[ReportDownload] PDF generated, size: ${pdfBuffer.length} bytes`);
 
         console.log(`[ReportDownload] Triggering test email dispatch alongside download...`);
         sendWeeklyReport(user, stats).catch(err => {
@@ -42,9 +43,14 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.setHeader('Content-Length', pdfBuffer.length);
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
 
-        console.log(`[ReportDownload] Success! Sending PDF to ${user.email}`);
-        return res.send(pdfBuffer);
+        console.log(`[ReportDownload] Success! Sending PDF to ${user.email}, buffer type: ${typeof pdfBuffer}, length: ${pdfBuffer.length}`);
+
+        // Ensure we're sending a proper Buffer
+        const buffer = Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer);
+        return res.end(buffer);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
