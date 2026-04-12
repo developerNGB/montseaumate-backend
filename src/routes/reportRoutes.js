@@ -1,6 +1,6 @@
 import express from 'express';
 import authenticateToken from '../middleware/authenticate.js';
-import { getWeeklyStats, generateReportHtml, sendWeeklyReport } from '../services/reportService.js';
+import { getWeeklyStats, generateReportPDF, sendWeeklyReport } from '../services/reportService.js';
 import pool from '../db/pool.js';
 
 const router = express.Router();
@@ -13,7 +13,7 @@ router.post('/trigger', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         console.log(`[ReportDownload] Starting for user: ${userId}`);
-        
+
         // Fetch user details
         const userRes = await pool.query(
             "SELECT id, name, company_name, email FROM users WHERE id = $1",
@@ -29,28 +29,30 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         console.log(`[ReportDownload] Generating stats for: ${user.email}`);
         const stats = await getWeeklyStats(user.id);
 
-        console.log(`[ReportDownload] Generating HTML payload...`);
-        const htmlContent = await generateReportHtml(user, stats);
+        console.log(`[ReportDownload] Generating PDF with Puppeteer...`);
+        const pdfBuffer = await generateReportPDF(user, stats);
 
         console.log(`[ReportDownload] Triggering test email dispatch alongside download...`);
         sendWeeklyReport(user, stats).catch(err => {
             console.error(`[ReportDownload] Background email failed to send:`, err.message);
         });
 
-        console.log(`[ReportDownload] Success! Sending payload to ${user.email}`);
+        // Set headers for PDF download
+        const filename = `Weekly_Report_${new Date().toISOString().split('T')[0]}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Length', pdfBuffer.length);
 
-        // Send the HTML explicitly to be translated into PDF by the frontend
-        res.setHeader('Content-Type', 'text/html');
-        return res.send(htmlContent);
+        console.log(`[ReportDownload] Success! Sending PDF to ${user.email}`);
+        return res.send(pdfBuffer);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
-
         console.error(err.stack);
-        return res.status(500).json({ 
-            success: false, 
+        return res.status(500).json({
+            success: false,
             message: 'Failed to generate report',
-            error: process.env.NODE_ENV === 'development' ? err.message : undefined 
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined
         });
     }
 });
