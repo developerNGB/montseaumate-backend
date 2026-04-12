@@ -51,24 +51,11 @@ export const getWeeklyStats = async (userId) => {
     };
 };
 
-/**
- * Sends the Weekly Report Email
- */
-export const sendWeeklyReport = async (user, stats) => {
-    const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true, // use SSL
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
-        }
-    });
-
+export const generateReportHtml = (user, stats) => {
     const isPositive = (trend) => !trend.startsWith('-') && trend !== '0%';
     const trendColor = (trend) => isPositive(trend) ? '#10b981' : '#6b7280';
 
-    const htmlContent = `
+    return `
         <!DOCTYPE html>
         <html>
         <head>
@@ -150,6 +137,23 @@ export const sendWeeklyReport = async (user, stats) => {
         </body>
         </html>
     `;
+};
+
+/**
+ * Sends the Weekly Report Email
+ */
+export const sendWeeklyReport = async (user, stats) => {
+    const transporter = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true, // use SSL
+        auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS
+        }
+    });
+
+    const htmlContent = generateReportHtml(user, stats);
 
     const mailOptions = {
         from: `"Equipo Experto" <${process.env.EMAIL_USER}>`,

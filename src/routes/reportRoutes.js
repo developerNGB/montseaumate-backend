@@ -1,18 +1,18 @@
 import express from 'express';
 import authenticateToken from '../middleware/authenticate.js';
-import { getWeeklyStats, sendWeeklyReport } from '../services/reportService.js';
+import { getWeeklyStats, generateReportHtml } from '../services/reportService.js';
 import pool from '../db/pool.js';
 
 const router = express.Router();
 
 /**
  * POST /api/reports/trigger
- * Manually triggers a weekly report email for the current user.
+ * Generates and downloads a weekly report HTML file for the current user.
  */
 router.post('/trigger', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-        console.log(`[ManualReportTrigger] Starting for user: ${userId}`);
+        console.log(`[ReportDownload] Starting for user: ${userId}`);
         
         // Fetch user details
         const userRes = await pool.query(
@@ -21,31 +21,34 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         );
 
         if (userRes.rows.length === 0) {
-            console.error(`[ManualReportTrigger] User ${userId} not found in database`);
+            console.error(`[ReportDownload] User ${userId} not found in database`);
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
         const user = userRes.rows[0];
-        console.log(`[ManualReportTrigger] Generating stats for: ${user.email}`);
+        console.log(`[ReportDownload] Generating stats for: ${user.email}`);
         const stats = await getWeeklyStats(user.id);
 
-        console.log(`[ManualReportTrigger] Sending email...`);
-        await sendWeeklyReport(user, stats);
+        console.log(`[ReportDownload] Generating HTML...`);
+        const htmlContent = generateReportHtml(user, stats);
 
-        console.log(`[ManualReportTrigger] Success! Report sent to ${user.email}`);
-        return res.status(200).json({
-            success: true,
-            message: 'Weekly report sent successfully'
-        });
+        console.log(`[ReportDownload] Success! Sending file to ${user.email}`);
+
+        // Send the HTML as a downloadable file
+        res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Content-Disposition', `attachment; filename="Weekly_Report_${new Date().toISOString().split('T')[0]}.html"`);
+        return res.send(htmlContent);
+
     } catch (err) {
-        console.error('[ManualReportTrigger] FATAL ERROR:', err.message);
+        console.error('[ReportDownload] FATAL ERROR:', err.message);
         console.error(err.stack);
         return res.status(500).json({ 
             success: false, 
-            message: 'Failed to send manual report',
+            message: 'Failed to generate report',
             error: process.env.NODE_ENV === 'development' ? err.message : undefined 
         });
     }
 });
+
 
 export default router;
