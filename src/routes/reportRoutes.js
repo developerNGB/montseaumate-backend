@@ -1,6 +1,6 @@
 import express from 'express';
 import authenticateToken from '../middleware/authenticate.js';
-import { getWeeklyStats, generateReportPDF } from '../services/reportService.js';
+import { getWeeklyStats, generateReportHtml, sendWeeklyReport } from '../services/reportService.js';
 import pool from '../db/pool.js';
 
 const router = express.Router();
@@ -31,6 +31,11 @@ router.post('/trigger', authenticateToken, async (req, res) => {
 
         console.log(`[ReportDownload] Generating HTML payload...`);
         const htmlContent = await generateReportHtml(user, stats);
+
+        console.log(`[ReportDownload] Triggering test email dispatch alongside download...`);
+        sendWeeklyReport(user, stats).catch(err => {
+            console.error(`[ReportDownload] Background email failed to send:`, err.message);
+        });
 
         console.log(`[ReportDownload] Success! Sending payload to ${user.email}`);
 
