@@ -29,17 +29,30 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         console.log(`[ReportDownload] Generating stats for: ${user.email}`);
         const stats = await getWeeklyStats(user.id);
 
-        console.log(`[ReportDownload] Generating HTML payload footprint...`);
-        const htmlContent = await generateReportHtml(user, stats);
+        console.log(`[ReportDownload] Returning JSON data for client-side PDF generation...`);
+        
+        // Generate date range string
+        const end = new Date();
+        const start = new Date();
+        start.setDate(start.getDate() - 7);
+        const month = start.toLocaleString('en-US', { month: 'long' });
+        let dateStr = '';
+        if (start.getMonth() === end.getMonth()) {
+            dateStr = `Week of ${month} ${start.getDate()} - ${end.getDate()}, ${end.getFullYear()}`;
+        } else {
+            const endMonth = end.toLocaleString('en-US', { month: 'short' });
+            dateStr = `Week of ${month} ${start.getDate()} - ${endMonth} ${end.getDate()}, ${end.getFullYear()}`;
+        }
 
-        console.log(`[ReportDownload] Triggering test email dispatch alongside download...`);
-        sendWeeklyReport(user, stats).catch(err => {
-            console.error(`[ReportDownload] Background email failed to send:`, err.message);
+        return res.json({
+            success: true,
+            reportData: {
+                dateStr,
+                userName: user.name || user.company_name || 'Partner',
+                companyName: user.company_name || 'Equipo Experto',
+                stats
+            }
         });
-
-        console.log(`[ReportDownload] Success! Offloading HTML structure to Frontend for PDF compilation...`);
-        res.setHeader('Content-Type', 'text/html');
-        return res.send(htmlContent);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
