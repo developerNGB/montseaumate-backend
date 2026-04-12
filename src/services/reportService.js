@@ -55,6 +55,9 @@ export const generateReportHtml = (user, stats) => {
         <!DOCTYPE html>
         <html>
         <head>
+            <meta charset="utf-8">
+        </head>
+        <body>
             <style>
                 body { 
                     font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
@@ -114,7 +117,7 @@ export const generateReportHtml = (user, stats) => {
                 }
                 .stat-card { 
                     background: #f8fafc; 
-                    border: 1px solid #f1f5f9;
+                    border: 1px solid #e2e8f0;
                     padding: 24px; 
                     border-radius: 12px; 
                 }
@@ -187,9 +190,7 @@ export const generateReportHtml = (user, stats) => {
                     line-height: 1.5;
                 }
             </style>
-        </head>
-        <body>
-            <div style="padding: 20px;">
+            <div style="padding: 20px; background-color: #f8fafc;">
                 <div class="wrapper">
                     <div class="header">
                         <h1>Weekly Performance Report</h1>
