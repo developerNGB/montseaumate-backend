@@ -7,113 +7,82 @@ import puppeteer from 'puppeteer';
  * Period: Last 7 days vs Previous 7 days.
  */
 export const getWeeklyStats = async (userId) => {
-    // ... (rest of getWeeklyStats logic)
-    const [leadsRes, reviewsRes, messagesRes, feedbackRes] = await Promise.all([
-        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1", [userId]),
-        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'", [userId]),
-        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1 AND followup_status = 'success'", [userId]),
-        pool.query("SELECT AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId])
+    const [
+        leadsRes, 
+        messagesRes, 
+        responsesRes, 
+        reviewsRes, 
+        ratingRes, 
+        topDayRes, 
+        activeEngineRes
+    ] = await Promise.all([
+        pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND (lead_status = 'Contacted' OR followup_status = 'success') AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type IN ('Review Submitted', 'Customer Review') AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT trim(to_char(created_at, 'Day')) as day_name, COUNT(*) FROM activity_logs WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days' GROUP BY day_name ORDER BY count DESC LIMIT 1", [userId]),
+        pool.query("SELECT automation_name, COUNT(*) FROM activity_logs WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days' GROUP BY automation_name ORDER BY count DESC LIMIT 1", [userId])
     ]);
 
-    const recentLeads = parseInt(leadsRes.rows[0].recent_count || 0, 10);
-    const prevLeads = parseInt(leadsRes.rows[0].previous_count || 0, 10);
-    const recentReviews = parseInt(reviewsRes.rows[0].recent_count || 0, 10);
-    const prevReviews = parseInt(reviewsRes.rows[0].previous_count || 0, 10);
-    const recentMessages = parseInt(messagesRes.rows[0].recent_count || 0, 10);
-    const prevMessages = parseInt(messagesRes.rows[0].previous_count || 0, 10);
-    const avgRating = parseFloat(feedbackRes.rows[0].avg_rating || 0).toFixed(1);
-
-    const calculateTrend = (recent, previous) => {
-        if (previous === 0) return recent > 0 ? '+100%' : '0%';
-        const percentage = Math.round(((recent - previous) / previous) * 100);
-        return percentage >= 0 ? `+${percentage}%` : `${percentage}%`;
-    };
-
     return {
-        leads: { count: recentLeads, trend: calculateTrend(recentLeads, prevLeads) },
-        reviews: { count: recentReviews, trend: calculateTrend(recentReviews, prevReviews) },
-        messages: { count: recentMessages, trend: calculateTrend(recentMessages, prevMessages) },
-        avgRating
+        newLeads: parseInt(leadsRes.rows[0]?.count || 0, 10),
+        messagesSent: parseInt(messagesRes.rows[0]?.count || 0, 10),
+        responsesReceived: parseInt(responsesRes.rows[0]?.count || 0, 10),
+        reviewsCollected: parseInt(reviewsRes.rows[0]?.count || 0, 10),
+        avgRating: parseFloat(ratingRes.rows[0]?.avg_rating || 0).toFixed(1),
+        topDay: topDayRes.rows[0]?.day_name || 'N/A',
+        activeEngine: activeEngineRes.rows[0]?.automation_name || 'N/A'
     };
 };
 
 export const generateReportHtml = (user, stats) => {
-    const isPositive = (trend) => !trend.startsWith('-') && trend !== '0%';
-    const trendColor = (trend) => isPositive(trend) ? '#10b981' : '#6b7280';
+    // Generate dates for "Week of April 7-13" (Last 7 days strictly)
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 7);
+    
+    const month = start.toLocaleString('en-US', { month: 'long' });
+    let dateStr = '';
+    if (start.getMonth() === end.getMonth()) {
+        dateStr = `Week of ${month} ${start.getDate()}-${end.getDate()}`;
+    } else {
+        const endMonth = end.toLocaleString('en-US', { month: 'short' });
+        dateStr = `Week of ${month} ${start.getDate()} - ${endMonth} ${end.getDate()}`;
+    }
 
     return `
         <!DOCTYPE html>
         <html>
         <head>
             <style>
-                body { font-family: 'Inter', Helvetica, Arial, sans-serif; background-color: #f9fafb; color: #111827; margin: 0; padding: 20px; }
-                .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-                .header { background: #15803d; padding: 40px 20px; text-align: center; }
-                .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; }
-                .header p { color: rgba(255, 255, 255, 0.8); margin: 8px 0 0; }
-                .content { padding: 40px 30px; }
-                .greeting { font-size: 18px; font-weight: 600; margin-bottom: 24px; }
-                .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
-                .stat-card { background: #f3f4f6; padding: 20px; border-radius: 12px; }
-                .stat-label { font-size: 12px; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-                .stat-value { font-size: 28px; font-weight: 800; color: #111827; }
-                .stat-trend { font-size: 14px; font-weight: 600; margin-top: 4px; }
-                .footer { background: #f9fafb; padding: 30px; text-align: center; border-top: 1px solid #e5e7eb; }
-                .footer p { font-size: 12px; color: #9ca3af; margin: 0; }
-                .cta-btn { display: inline-block; background: #15803d; color: #ffffff !important; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; margin-top: 20px; }
-                .rating-pill { display: inline-block; background: #fef3c7; color: #92400e; padding: 4px 12px; border-radius: 9999px; font-size: 14px; font-weight: 700; }
+                body { font-family: 'Inter', Helvetica, Arial, sans-serif; background-color: #f9fafb; color: #111827; margin: 0; padding: 40px; }
+                .container { max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 40px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+                .header { font-size: 20px; font-weight: 700; margin-bottom: 8px; color: #111827; }
+                .divider { color: #d1d5db; letter-spacing: 2px; margin: 15px 0; font-family: monospace; }
+                .metric { font-size: 16px; margin: 10px 0; color: #374151; display: flex; align-items: center; }
+                .metric-label { font-weight: 400; color: #4b5563; }
+                .metric-value { font-weight: 600; color: #111827; margin-left: 6px; }
+                .footer { font-size: 14px; color: #6b7280; font-style: italic; margin-top: 20px; }
             </style>
         </head>
         <body>
             <div class="container">
-                <div class="header">
-                    <h1>Weekly Performance Report</h1>
-                    <p>${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                </div>
-                <div class="content">
-                    <div class="greeting">Hi ${user.name || user.company_name || 'Partner'},</div>
-                    <p>Your digital employee has been busy! Here is how your business performed over the last 7 days.</p>
-                    
-                    <div style="margin-top: 30px;">
-                        <table width="100%" cellspacing="0" cellpadding="0" style="table-layout: fixed;">
-                            <tr>
-                                <td style="padding: 10px;">
-                                    <div class="stat-card">
-                                        <div class="stat-label">New Leads</div>
-                                        <div class="stat-value">${stats.leads.count}</div>
-                                        <div class="stat-trend" style="color: ${trendColor(stats.leads.trend)}">${stats.leads.trend} vs last week</div>
-                                    </div>
-                                </td>
-                                <td style="padding: 10px;">
-                                    <div class="stat-card">
-                                        <div class="stat-label">Reviews Sent</div>
-                                        <div class="stat-value">${stats.reviews.count}</div>
-                                        <div class="stat-trend" style="color: ${trendColor(stats.reviews.trend)}">${stats.reviews.trend} vs last week</div>
-                                    </div>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 10px;">
-                                    <div class="stat-card">
-                                        <div class="stat-label">Messages Sent</div>
-                                        <div class="stat-value">${stats.messages.count}</div>
-                                        <div class="stat-trend" style="color: ${trendColor(stats.messages.trend)}">${stats.messages.trend} vs last week</div>
-                                    </div>
-                                </td>
-                                <td style="padding: 10px;">
-                                    <div class="stat-card">
-                                        <div class="stat-label">Avg Rating</div>
-                                        <div class="stat-value">${stats.avgRating}</div>
-                                        <div class="rating-pill">⭐ Satisfaction</div>
-                                    </div>
-                                </td>
-                            </tr>
-                        </table>
-                    </div>
-                </div>
-                <div class="footer">
-                    <p>© ${new Date().getFullYear()} Equipo Experto. All rights reserved.</p>
-                </div>
+                <div class="header">${dateStr}</div>
+                <div class="divider">─────────────────</div>
+                
+                <div class="metric"><span class="metric-label">New Leads:</span> <span class="metric-value">${stats.newLeads}</span></div>
+                <div class="metric"><span class="metric-label">Messages Sent:</span> <span class="metric-value">${stats.messagesSent > stats.newLeads ? stats.messagesSent : stats.newLeads}</span></div>
+                <div class="metric"><span class="metric-label">Responses Received:</span> <span class="metric-value">${stats.responsesReceived}</span></div>
+                <div class="metric"><span class="metric-label">Google Reviews Collected:</span> <span class="metric-value">${stats.reviewsCollected}</span></div>
+                <div class="metric"><span class="metric-label">Average Rating:</span> <span class="metric-value">${stats.avgRating > 0 ? stats.avgRating : 'N/A'}</span></div>
+                
+                <div class="divider">─────────────────</div>
+                
+                <div class="metric"><span class="metric-label">Top performing day:</span> <span class="metric-value">${stats.topDay}</span></div>
+                <div class="metric"><span class="metric-label">Most active engine:</span> <span class="metric-value">${stats.activeEngine}</span></div>
+                
+                <div class="footer">Report generated for ${user.company_name || user.name || 'Partner'}.</div>
             </div>
         </body>
         </html>
@@ -165,7 +134,7 @@ export const sendWeeklyReport = async (user, stats) => {
     const mailOptions = {
         from: `"Equipo Experto" <${process.env.EMAIL_USER}>`,
         to: user.email,
-        subject: `📈 Weekly Report: ${stats.leads.count} New Leads & ${stats.reviews.count} Reviews`,
+        subject: `📈 Weekly Report: ${stats.newLeads} New Leads & ${stats.reviewsCollected} Reviews`,
         html: htmlContent
     };
 
@@ -190,7 +159,7 @@ export const runWeeklyReportsJob = async () => {
             try {
                 const stats = await getWeeklyStats(user.id);
                 // Only send if there was at least some activity (Optional: remove if you want to send zero reports)
-                if (stats.leads.count > 0 || stats.reviews.count > 0 || stats.messages.count > 0) {
+                if (stats.newLeads > 0 || stats.reviewsCollected > 0 || stats.messagesSent > 0) {
                     await sendWeeklyReport(user, stats);
                     console.log(`[WeeklyReportsJob] Sent to ${user.email} ✓`);
                 } else {
