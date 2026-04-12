@@ -38,19 +38,15 @@ router.post('/trigger', authenticateToken, async (req, res) => {
             console.error(`[ReportDownload] Background email failed to send:`, err.message);
         });
 
-        // Set headers for PDF download
-        const filename = `Weekly_Report_${new Date().toISOString().split('T')[0]}.pdf`;
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Length', pdfBuffer.length);
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
+        console.log(`[ReportDownload] Success! Sending PDF to ${user.email}, output size: ${pdfBuffer.length} bytes`);
 
-        console.log(`[ReportDownload] Success! Sending PDF to ${user.email}, buffer type: ${typeof pdfBuffer}, length: ${pdfBuffer.length}`);
-
-        // Ensure we're sending a proper Buffer
-        const buffer = Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer);
-        return res.end(buffer);
+        // Use standard Express .send() to handle Binary chunk encoding and Content-Length seamlessly natively.
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': `attachment; filename="Weekly_Report_${new Date().toISOString().split('T')[0]}.pdf"`
+        });
+        
+        return res.status(200).send(pdfBuffer);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
