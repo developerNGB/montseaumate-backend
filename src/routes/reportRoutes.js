@@ -29,15 +29,14 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         console.log(`[ReportDownload] Generating stats for: ${user.email}`);
         const stats = await getWeeklyStats(user.id);
 
-        console.log(`[ReportDownload] Generating PDF...`);
-        const pdfBuffer = await generateReportPDF(user, stats);
+        console.log(`[ReportDownload] Generating HTML payload...`);
+        const htmlContent = await generateReportHtml(user, stats);
 
-        console.log(`[ReportDownload] Success! Sending PDF file to ${user.email}`);
+        console.log(`[ReportDownload] Success! Sending payload to ${user.email}`);
 
-        // Send the PDF as a downloadable file
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="Weekly_Report_${new Date().toISOString().split('T')[0]}.pdf"`);
-        return res.send(pdfBuffer);
+        // Send the HTML explicitly to be translated into PDF by the frontend
+        res.setHeader('Content-Type', 'text/html');
+        return res.send(htmlContent);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
