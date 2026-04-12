@@ -1,32 +1,18 @@
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
+import puppeteer from 'puppeteer';
 
 /**
  * Aggregates weekly stats for a specific user.
  * Period: Last 7 days vs Previous 7 days.
  */
 export const getWeeklyStats = async (userId) => {
+    // ... (rest of getWeeklyStats logic)
     const [leadsRes, reviewsRes, messagesRes, feedbackRes] = await Promise.all([
-        // 1. Leads
-        pool.query(
-            "SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1",
-            [userId]
-        ),
-        // 2. Reviews
-        pool.query(
-            "SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'",
-            [userId]
-        ),
-        // 3. Messages
-        pool.query(
-            "SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1 AND followup_status = 'success'",
-            [userId]
-        ),
-        // 4. Feedback
-        pool.query(
-            "SELECT AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'",
-            [userId]
-        )
+        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1", [userId]),
+        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review'", [userId]),
+        pool.query("SELECT SUM(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as recent_count, SUM(CASE WHEN created_at >= NOW() - INTERVAL '14 days' AND created_at < NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as previous_count FROM leads WHERE user_id = $1 AND followup_status = 'success'", [userId]),
+        pool.query("SELECT AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId])
     ]);
 
     const recentLeads = parseInt(leadsRes.rows[0].recent_count || 0, 10);
@@ -124,19 +110,40 @@ export const generateReportHtml = (user, stats) => {
                             </tr>
                         </table>
                     </div>
-
-                    <div style="text-align: center; margin-top: 10px;">
-                        <a href="https://www.equipoexperto.com/dashboard" class="cta-btn">View Detailed Analytics</a>
-                    </div>
                 </div>
                 <div class="footer">
                     <p>© ${new Date().getFullYear()} Equipo Experto. All rights reserved.</p>
-                    <p style="margin-top: 8px;">You are receiving this because weekly reports are enabled for your account.</p>
                 </div>
             </div>
         </body>
         </html>
     `;
+};
+
+/**
+ * Generates a PDF buffer from the HTML report.
+ */
+export const generateReportPDF = async (user, stats) => {
+    const htmlContent = generateReportHtml(user, stats);
+    
+    // Launch headless browser with flags to support basic cloud environments
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    const page = await browser.newPage();
+    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    
+    // Print to PDF
+    const pdfBuffer = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20px', bottom: '20px' }
+    });
+    
+    await browser.close();
+    return pdfBuffer;
 };
 
 /**

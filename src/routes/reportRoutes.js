@@ -1,13 +1,13 @@
 import express from 'express';
 import authenticateToken from '../middleware/authenticate.js';
-import { getWeeklyStats, generateReportHtml } from '../services/reportService.js';
+import { getWeeklyStats, generateReportPDF } from '../services/reportService.js';
 import pool from '../db/pool.js';
 
 const router = express.Router();
 
 /**
  * POST /api/reports/trigger
- * Generates and downloads a weekly report HTML file for the current user.
+ * Generates and downloads a weekly report PDF file for the current user.
  */
 router.post('/trigger', authenticateToken, async (req, res) => {
     try {
@@ -29,18 +29,19 @@ router.post('/trigger', authenticateToken, async (req, res) => {
         console.log(`[ReportDownload] Generating stats for: ${user.email}`);
         const stats = await getWeeklyStats(user.id);
 
-        console.log(`[ReportDownload] Generating HTML...`);
-        const htmlContent = generateReportHtml(user, stats);
+        console.log(`[ReportDownload] Generating PDF...`);
+        const pdfBuffer = await generateReportPDF(user, stats);
 
-        console.log(`[ReportDownload] Success! Sending file to ${user.email}`);
+        console.log(`[ReportDownload] Success! Sending PDF file to ${user.email}`);
 
-        // Send the HTML as a downloadable file
-        res.setHeader('Content-Type', 'text/html');
-        res.setHeader('Content-Disposition', `attachment; filename="Weekly_Report_${new Date().toISOString().split('T')[0]}.html"`);
-        return res.send(htmlContent);
+        // Send the PDF as a downloadable file
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="Weekly_Report_${new Date().toISOString().split('T')[0]}.pdf"`);
+        return res.send(pdfBuffer);
 
     } catch (err) {
         console.error('[ReportDownload] FATAL ERROR:', err.message);
+
         console.error(err.stack);
         return res.status(500).json({ 
             success: false, 
