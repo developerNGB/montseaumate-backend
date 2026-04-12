@@ -109,16 +109,18 @@ export const generateReportHtml = (user, stats) => {
                     margin-bottom: 32px;
                 }
                 .grid-container {
-                    display: grid;
-                    grid-template-columns: repeat(2, 1fr);
-                    gap: 20px;
+                    width: 100%;
+                    overflow: hidden;
                     margin-bottom: 32px;
                 }
                 .stat-card { 
+                    float: left;
+                    width: calc(50% - 22px);
                     background: #f8fafc; 
                     border: 1px solid #e2e8f0;
                     padding: 24px; 
                     border-radius: 12px; 
+                    margin: 0 10px 10px 0;
                 }
                 .stat-label { 
                     font-size: 13px; 
@@ -140,13 +142,14 @@ export const generateReportHtml = (user, stats) => {
                     border-radius: 12px;
                     padding: 24px;
                     margin-bottom: 32px;
+                    overflow: hidden;
                 }
                 .highlight-grid {
-                    display: grid;
-                    grid-template-columns: repeat(3, 1fr);
-                    gap: 20px;
+                    width: 100%;
                 }
                 .highlight-item {
+                    float: left;
+                    width: 33%;
                     text-align: center;
                 }
                 .highlight-item .label {
