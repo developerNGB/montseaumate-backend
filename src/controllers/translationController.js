@@ -7,7 +7,12 @@ export const getTranslations = async (req, res) => {
         // Convert to a simple key-value object for easy use in frontend
         const mapping = {};
         result.rows.forEach(row => {
-            mapping[row.key_name] = row.spanish_text;
+            const val = row.spanish_text;
+            // Only include translations that have real content:
+            // skip nulls, empty strings, and cases where the value is the same as the key (untranslated)
+            if (val && typeof val === 'string' && val.trim() !== '' && val.trim() !== row.key_name) {
+                mapping[row.key_name] = val;
+            }
         });
         res.json({ success: true, translations: mapping, raw: result.rows });
     } catch (err) {
