@@ -155,7 +155,26 @@ const initDB = async () => {
         await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_active BOOLEAN DEFAULT false`);
         console.log('  ✅ lead_followup_settings table ready');
 
-        // 8. HELPERS (Resets, Logs, History)
+        // 8. SMTP SETTINGS (Custom Domain Email)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS smtp_settings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+                host VARCHAR(255) NOT NULL,
+                port INTEGER NOT NULL DEFAULT 587,
+                secure BOOLEAN DEFAULT false,
+                auth_user VARCHAR(255) NOT NULL,
+                auth_pass TEXT NOT NULL,
+                from_email VARCHAR(255) NOT NULL,
+                from_name VARCHAR(255),
+                is_active BOOLEAN DEFAULT false,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        console.log('  ✅ smtp_settings table ready');
+
+        // 9. HELPERS (Resets, Logs, History)
         await client.query(`
             CREATE TABLE IF NOT EXISTS password_resets (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -158,6 +158,13 @@ export const triggerLeadFollowup = async (req, res) => {
         const whatsappAuth = integrations['whatsapp'] || {};
         const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
+        // Fetch SMTP credentials for n8n
+        const smtpRes = await pool.query(
+            'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
+            [req.user.id]
+        );
+        const smtp = smtpRes.rows[0] || {};
+
         const payload = {
             event: 'manual_followup',
             full_name: lead.full_name,
@@ -185,7 +192,15 @@ export const triggerLeadFollowup = async (req, res) => {
             access_token: currentGoogleAccessToken || null,
             refresh_token: googleAuth.refresh_token || null,
             whatsapp_access_token: whatsappAuth.access_token || null,
-            whatsapp_refresh_token: whatsappAuth.refresh_token || null
+            whatsapp_refresh_token: whatsappAuth.refresh_token || null,
+            // SMTP credentials
+            smtp_host: smtp.host || null,
+            smtp_port: smtp.port || null,
+            smtp_secure: smtp.secure || false,
+            smtp_user: smtp.auth_user || null,
+            smtp_pass: smtp.auth_pass || null,
+            smtp_from_email: smtp.from_email || null,
+            smtp_from_name: smtp.from_name || null
         };
 
         // DIRECT NATIVE DISPATCH: Handled locally if it's a native session

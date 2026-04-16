@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
+import { sendDynamicEmail } from './emailService.js';
 
 /**
  * Aggregates weekly stats for a specific user.
@@ -260,26 +261,15 @@ export const generateReportHtml = (user, stats) => {
  * Sends the Weekly Report Email
  */
 export const sendWeeklyReport = async (user, stats) => {
-    const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true, // use SSL
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
-        }
-    });
-
     const htmlContent = generateReportHtml(user, stats);
 
-    const mailOptions = {
-        from: `"Equipo Experto" <${process.env.EMAIL_USER}>`,
+    return sendDynamicEmail({
+        userId: user.id,
         to: user.email,
         subject: `📈 Weekly Report: ${stats.newLeads} New Leads & ${stats.reviewsCollected} Reviews`,
-        html: htmlContent
-    };
-
-    return transporter.sendMail(mailOptions);
+        html: htmlContent,
+        fromName: "Equipo Experto"
+    });
 };
 
 /**

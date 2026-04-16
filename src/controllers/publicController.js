@@ -375,6 +375,13 @@ export const submitFeedback = async (req, res) => {
             console.error('[submitFeedback] Token fetch failed:', tokenErr.message);
         }
 
+        // Fetch SMTP credentials for n8n
+        const smtpRes = await pool.query(
+            'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
+            [user_id]
+        );
+        const smtp = smtpRes.rows[0] || {};
+
         const payload = {
             event: 'customer_feedback',
             business_name: config.business_name,
@@ -411,7 +418,15 @@ export const submitFeedback = async (req, res) => {
             access_token: currentGoogleAccessToken || null,
             refresh_token: googleRefreshToken || null,
             whatsapp_access_token: whatsappAccessToken || null,
-            whatsapp_refresh_token: whatsappRefreshToken || null
+            whatsapp_refresh_token: whatsappRefreshToken || null,
+            // SMTP credentials
+            smtp_host: smtp.host || null,
+            smtp_port: smtp.port || null,
+            smtp_secure: smtp.secure || false,
+            smtp_user: smtp.auth_user || null,
+            smtp_pass: smtp.auth_pass || null,
+            smtp_from_email: smtp.from_email || null,
+            smtp_from_name: smtp.from_name || null
         };
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
@@ -656,6 +671,13 @@ export const submitLead = async (req, res) => {
                     const googleAuth = integrations['google'] || {};
                     const whatsappAuth = integrations['whatsapp'] || {};
 
+                    // Fetch SMTP credentials for n8n
+                    const smtpRes = await pool.query(
+                        'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
+                        [user_id]
+                    );
+                    const smtp = smtpRes.rows[0] || {};
+
                     const payload = {
                         automation_id, user_id, owner_email,
                         lead_email: email,
@@ -670,7 +692,15 @@ export const submitLead = async (req, res) => {
                         access_token: freshGoogleToken || googleAuth.access_token || null,
                         refresh_token: googleAuth.refresh_token || null,
                         whatsapp_access_token: whatsappAuth.access_token || null,
-                        whatsapp_refresh_token: whatsappAuth.refresh_token || null
+                        whatsapp_refresh_token: whatsappAuth.refresh_token || null,
+                        // SMTP credentials
+                        smtp_host: smtp.host || null,
+                        smtp_port: smtp.port || null,
+                        smtp_secure: smtp.secure || false,
+                        smtp_user: smtp.auth_user || null,
+                        smtp_pass: smtp.auth_pass || null,
+                        smtp_from_email: smtp.from_email || null,
+                        smtp_from_name: smtp.from_name || null
                     };
 
                     if (captureWebhook) fetch(captureWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
