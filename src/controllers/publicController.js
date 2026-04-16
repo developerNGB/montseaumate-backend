@@ -405,6 +405,7 @@ export const submitFeedback = async (req, res) => {
             }),
             whatsapp_number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
             // Integration tokens for n8n (Server-side injected for security)
+            // Credentials for n8n to act on behalf of user
             client_id: process.env.GOOGLE_CLIENT_ID,
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
             access_token: currentGoogleAccessToken || null,
@@ -596,7 +597,11 @@ export const submitLead = async (req, res) => {
                     [user_id]
                 );
                 const integrations = intRes.rows.reduce((acc, curr) => {
-                    acc[curr.provider] = { access_token: curr.access_token, account_id: curr.account_id };
+                    acc[curr.provider] = { 
+                        access_token: curr.access_token, 
+                        refresh_token: curr.refresh_token,
+                        account_id: curr.account_id 
+                    };
                     return acc;
                 }, {});
 
@@ -648,6 +653,9 @@ export const submitLead = async (req, res) => {
             try {
                 if (captureWebhook || autoResponseWebhook) {
                     const freshGoogleToken = await getValidGoogleToken(user_id).catch(() => null);
+                    const googleAuth = integrations['google'] || {};
+                    const whatsappAuth = integrations['whatsapp'] || {};
+
                     const payload = {
                         automation_id, user_id, owner_email,
                         lead_email: email,
@@ -656,10 +664,17 @@ export const submitLead = async (req, res) => {
                         filtering_responses, source: 'Public Link',
                         consent: !!consent_given, marketing_consent: !!marketing_consent,
                         date: current_date,
-                        access_token: freshGoogleToken || null,
+                        // Credentials for n8n
+                        client_id: process.env.GOOGLE_CLIENT_ID,
+                        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+                        access_token: freshGoogleToken || googleAuth.access_token || null,
+                        refresh_token: googleAuth.refresh_token || null,
+                        whatsapp_access_token: whatsappAuth.access_token || null,
+                        whatsapp_refresh_token: whatsappAuth.refresh_token || null
                     };
-                    if (captureWebhook) fetch(ensureProductionUrl(captureWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
-                    if (autoResponseWebhook) fetch(ensureProductionUrl(autoResponseWebhook), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+
+                    if (captureWebhook) fetch(captureWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+                    if (autoResponseWebhook) fetch(autoResponseWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
                 }
             } catch (e) {
                 console.error('[BG-Webhook] ❌', e.message);
