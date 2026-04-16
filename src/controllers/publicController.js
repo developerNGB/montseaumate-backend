@@ -55,15 +55,7 @@ export const submitContactForm = async (req, res) => {
     }
 };
 
-/**
- * Ensures n8n URLs use the /webhook/ path for production.
- */
-const ensureProductionUrl = (url) => {
-    if (process.env.NODE_ENV === 'production' && url && url.includes('/webhook-test/')) {
-        return url.replace('/webhook-test/', '/webhook/');
-    }
-    return url;
-};
+// REMOVED ensureProductionUrl helper to allow direct .env control accurately as requested by user.
 
 /**
  * GET /api/r/:automation_id
@@ -146,7 +138,7 @@ export const submitReview = async (req, res) => {
         console.log(`[submitReview] Activity logged. Triggering n8n...`);
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = ensureProductionUrl(n8nWebhook || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK);
+        const finalWebhook = n8nWebhook || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -226,7 +218,7 @@ export const submitReview = async (req, res) => {
                         return res.status(200).json({
                             success: true,
                             action: 'message',
-                            message: n8nRes.message || "Thank you so much for your honest feedback. Our owner has been directly notified so we can make this right!"
+                            message: data?.message || "Thank you so much for your honest feedback. Our owner has been directly notified so we can make this right!"
                         });
                     }
                 }
@@ -423,7 +415,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK);
+        const reviewFeedbackWebhook = config.n8n_webhook_url || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
         let n8nResponseData = null;
         let debugStatus = "pending";
 
@@ -452,7 +444,7 @@ export const submitFeedback = async (req, res) => {
         }
 
         // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = ensureProductionUrl(config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK);
+        const extraWebhook = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
         if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
             fetch(extraWebhook, {
                 method: 'POST',

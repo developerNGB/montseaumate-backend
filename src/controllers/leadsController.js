@@ -4,14 +4,7 @@ import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 
-const ensureProductionUrl = (url) => {
-    // Only force /webhook/ (production) if we are explicitly in production environment
-    // and the URL contains /webhook-test/
-    if (process.env.NODE_ENV === 'production' && url && url.includes('/webhook-test/')) {
-        return url.replace('/webhook-test/', '/webhook/');
-    }
-    return url;
-};
+// Helper to ensure n8n URLs use the /webhook/ path for production removed to allow direct .env control.
 
 export const getLeads = async (req, res) => {
     try {
@@ -206,7 +199,7 @@ export const triggerLeadFollowup = async (req, res) => {
            }
         }
 
-        const webhookUrl = ensureProductionUrl(process.env.N8N_LEAD_FOLLOWUP_WEBHOOK);
+        const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
         
         const n8nRes = await fetch(webhookUrl, {
             method: 'POST',
