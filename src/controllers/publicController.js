@@ -59,7 +59,7 @@ export const submitContactForm = async (req, res) => {
  * Ensures n8n URLs use the /webhook/ path for production.
  */
 const ensureProductionUrl = (url) => {
-    if (url && url.includes('/webhook-test/')) {
+    if (process.env.NODE_ENV === 'production' && url && url.includes('/webhook-test/')) {
         return url.replace('/webhook-test/', '/webhook/');
     }
     return url;
@@ -146,7 +146,7 @@ export const submitReview = async (req, res) => {
         console.log(`[submitReview] Activity logged. Triggering n8n...`);
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = ensureProductionUrl(n8nWebhook || "https://n8n.srv882475.hstgr.cloud/webhook/review-feedback");
+        const finalWebhook = ensureProductionUrl(n8nWebhook || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK);
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -423,7 +423,7 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || "https://n8n.srv882475.hstgr.cloud/webhook/review-feedback");
+        const reviewFeedbackWebhook = ensureProductionUrl(config.n8n_webhook_url || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK);
         let n8nResponseData = null;
         let debugStatus = "pending";
 
