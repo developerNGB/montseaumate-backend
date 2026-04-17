@@ -171,20 +171,28 @@ export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
     }
 
     // Smart E.164 normalization:
-    // react-phone-input-2 already gives us digits + country code (e.g. "923021044751")
-    // But handle edge cases: "+92...", "0321...", already correct "921234..."
     let cleaned = String(targetPhone).replace(/\D/g, ''); // strip all non-digits
 
-    // If number starts with 0 (local format like 03021044751), prepend country code
-    // Derive country code from the session owner's registered number
-    if (cleaned.startsWith('0') && cleaned.length <= 11) {
-        const ownerNumber = (sock.user.id || '').split(':')[0].split('@')[0]; // e.g. "923197129228"
-        // Country code is typically 2-3 digits at the start of the owner's number
-        // For PK: 92, for US: 1, etc. — we take digits until the local MSN starts
+    // 1. If it starts with 0 (local format), replace with owner's country code
+    if (cleaned.startsWith('0') && cleaned.length >= 10 && cleaned.length <= 11) {
+        const ownerNumber = (sock.user.id || '').split(':')[0].split('@')[0];
         const ccMatch = ownerNumber.match(/^(\d{1,3})/);
-        const countryCode = ccMatch ? ccMatch[1] : '92'; // default to Pakistan if unknown
-        cleaned = countryCode + cleaned.slice(1); // replace leading 0 with country code
-        console.log(`[WA-Send] Normalized local number: ${targetPhone} → ${cleaned}`);
+        const countryCode = ccMatch ? ccMatch[1] : '92'; 
+        cleaned = countryCode + cleaned.slice(1);
+        console.log(`[WA-Send] Normalized local 0-prefix: ${targetPhone} → ${cleaned}`);
+    } 
+    // 2. If it's a raw local number (e.g. 9 digits for Spain like 612345678, or 10 for PK/US)
+    // and doesn't already have a country code that matches the owner's start
+    else if (cleaned.length >= 9 && cleaned.length <= 10) {
+        const ownerNumber = (sock.user.id || '').split(':')[0].split('@')[0];
+        const ccMatch = ownerNumber.match(/^(\d{1,3})/);
+        const countryCode = ccMatch ? ccMatch[1] : '92';
+        
+        // If it doesn't already start with the country code, prepend it
+        if (!cleaned.startsWith(countryCode)) {
+            cleaned = countryCode + cleaned;
+            console.log(`[WA-Send] Prepended country code ${countryCode}: ${targetPhone} → ${cleaned}`);
+        }
     }
 
     if (!cleaned || cleaned.length < 7) {

@@ -378,7 +378,7 @@ export const submitFeedback = async (req, res) => {
         // Fetch SMTP credentials for n8n
         const smtpRes = await pool.query(
             'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
-            [user_id]
+            [config.user_id]
         );
         const smtp = smtpRes.rows[0] || {};
 
@@ -407,7 +407,7 @@ export const submitFeedback = async (req, res) => {
             },
             injected_message: injectPlaceholders(config.auto_response_message, {
                 name: customer_name,
-                link: `${process.env.FRONTEND_URL}/r/${automation_id}`,
+                link: `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/r/${automation_id}`,
                 number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || ''
             }),
             whatsapp_number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
