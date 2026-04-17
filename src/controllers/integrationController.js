@@ -69,6 +69,17 @@ export const connectProvider = async (req, res) => {
                 return res.redirect(`/api/integrations/mock-oauth?provider=google&state=${state}&redirect_uri=${callbackUrl}`);
             }
         }
+        else if (provider === 'microsoft') {
+            const clientId = process.env.MICROSOFT_CLIENT_ID;
+            if (clientId) {
+                // Real Microsoft OAuth Redirect
+                const scopes = 'offline_access user.read mail.send mail.readwrite';
+                const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=${clientId}&response_type=code&redirect_uri=${callbackUrl}&response_mode=query&scope=${encodeURIComponent(scopes)}&state=${state}`;
+                return res.redirect(authUrl);
+            } else {
+                return res.redirect(`/api/integrations/mock-oauth?provider=microsoft&state=${state}&redirect_uri=${callbackUrl}`);
+            }
+        }
         else if (provider === 'whatsapp') {
             const clientId = process.env.META_CLIENT_ID;
             if (clientId) {
@@ -194,6 +205,30 @@ export const providerCallback = async (req, res) => {
             if (!accountId || !accountId.startsWith('http')) {
                 accountId = 'Connected';
             }
+
+            if (tokenData.expires_in) {
+                expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+            }
+
+        } else if (provider === 'microsoft' && process.env.MICROSOFT_CLIENT_ID) {
+            // Real Microsoft Token Exchange
+            const tokenResponse = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-form-urlencoded' },
+                body: new URLSearchParams({
+                    client_id: process.env.MICROSOFT_CLIENT_ID,
+                    client_secret: process.env.MICROSOFT_CLIENT_SECRET,
+                    code,
+                    grant_type: 'authorization_code',
+                    redirect_uri: callbackUrl
+                })
+            });
+            const tokenData = await tokenResponse.json();
+            if (tokenData.error) throw new Error(tokenData.error_description || tokenData.error);
+
+            accessToken = tokenData.access_token;
+            refreshToken = tokenData.refresh_token || null;
+            accountId = 'Microsoft Account Connected';
 
             if (tokenData.expires_in) {
                 expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);

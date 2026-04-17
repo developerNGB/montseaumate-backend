@@ -155,6 +155,7 @@ export const triggerLeadFollowup = async (req, res) => {
         }, {});
 
         const googleAuth = integrations['google'] || {};
+        const microsoftAuth = integrations['microsoft'] || {};
         const whatsappAuth = integrations['whatsapp'] || {};
         const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
 
@@ -191,6 +192,8 @@ export const triggerLeadFollowup = async (req, res) => {
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
             access_token: currentGoogleAccessToken || null,
             refresh_token: googleAuth.refresh_token || null,
+            microsoft_access_token: microsoftAuth.access_token || null,
+            microsoft_refresh_token: microsoftAuth.refresh_token || null,
             whatsapp_access_token: whatsappAuth.access_token || null,
             whatsapp_refresh_token: whatsappAuth.refresh_token || null,
             // SMTP credentials
