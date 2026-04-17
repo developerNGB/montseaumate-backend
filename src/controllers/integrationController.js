@@ -120,9 +120,9 @@ export const providerCallback = async (req, res) => {
         }
 
         // Redirect to frontend fallback
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee`;
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/integrations`;
         if (jobId) {
-            frontendRedirect += `/${jobId}`;
+            frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee/${jobId}`;
         }
 
         if (error) {
@@ -287,8 +287,8 @@ export const providerCallback = async (req, res) => {
         if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
             jobId = req.query.state.split('___')[1];
         }
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee`;
-        if (jobId) frontendRedirect += `/${jobId}`;
+        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/integrations`;
+        if (jobId) frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee/${jobId}`;
         
         // Pass the error message to the frontend for easier debugging
         return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(err.message)}`);
