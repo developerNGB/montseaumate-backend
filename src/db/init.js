@@ -148,6 +148,7 @@ const initDB = async () => {
                 reminder_delay_value INTEGER DEFAULT 48,
                 reminder_delay_unit VARCHAR(20) DEFAULT 'hours',
                 reminder_message TEXT,
+                followup_sequence JSONB DEFAULT '[]',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );

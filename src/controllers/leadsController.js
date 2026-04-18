@@ -91,8 +91,8 @@ export const importLeads = async (req, res) => {
             await client.query('BEGIN');
             for (const lead of leads) {
                 await client.query(
-                    `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+                    `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW())`,
                     [
                         req.user.id,
                         lead.full_name || 'Imported Lead',
