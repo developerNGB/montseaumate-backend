@@ -54,12 +54,14 @@ const initDB = async () => {
                 refresh_token TEXT,
                 expires_at TIMESTAMPTZ,
                 account_id VARCHAR(255),
+                metadata JSONB DEFAULT '{}',
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW(),
                 UNIQUE (user_id, provider)
             );
         `);
         await client.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`);
+        await client.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`);
         console.log('  ✅ integrations table ready');
 
         // 4. REVIEW FUNNEL SETTINGS

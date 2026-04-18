@@ -151,6 +151,8 @@ export const providerCallback = async (req, res) => {
         const backendBaseUrl = process.env.BACKEND_URL || 'https://api.equipoexperto.com';
         const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
 
+        let metadata = {};
+
         // 1. Exchange 'code' for tokens based on the provider
         if (provider === 'google' && process.env.GOOGLE_CLIENT_ID) {
             // Real Google Token Exchange
@@ -171,6 +173,17 @@ export const providerCallback = async (req, res) => {
             accessToken = tokenData.access_token;
             refreshToken = tokenData.refresh_token || null;
             
+            // FETCH GOOGLE EMAIL
+            try {
+                const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                const userData = await userRes.json();
+                metadata.email = userData.email;
+            } catch (e) {
+                console.error('[Google UserInfo Error]:', e);
+            }
+
             // ATTEMPT TO FETCH GMB REVIEW URL
             try {
                 // 1. Get Accounts
@@ -228,7 +241,19 @@ export const providerCallback = async (req, res) => {
 
             accessToken = tokenData.access_token;
             refreshToken = tokenData.refresh_token || null;
-            accountId = 'Microsoft Account Connected';
+            
+            // FETCH MICROSOFT EMAIL
+            try {
+                const meRes = await fetch('https://graph.microsoft.com/v1.0/me', {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                const meData = await meRes.json();
+                metadata.email = meData.mail || meData.userPrincipalName;
+                accountId = 'Microsoft Account Connected';
+            } catch (e) {
+                console.error('[Microsoft Graph Error]:', e);
+                accountId = 'Microsoft Account Connected';
+            }
 
             if (tokenData.expires_in) {
                 expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
@@ -253,6 +278,7 @@ export const providerCallback = async (req, res) => {
             if (code === 'mock_auth_code_approved') {
                 accessToken = `mock_${provider}_access_token_${Date.now()}`;
                 refreshToken = `mock_${provider}_refresh_token_never_expires`;
+                metadata.email = `mock_${provider}_user@example.com`;
                 // Provide a mock review link for Google
                 accountId = provider === 'google' 
                     ? 'https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4' 
@@ -265,16 +291,17 @@ export const providerCallback = async (req, res) => {
 
         // 2. Save Integration in Database (Upsert: Update if exists, Insert if new)
         await pool.query(
-            `INSERT INTO integrations (user_id, provider, access_token, refresh_token, expires_at, account_id, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            `INSERT INTO integrations (user_id, provider, access_token, refresh_token, expires_at, account_id, metadata, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
              ON CONFLICT (user_id, provider) 
              DO UPDATE SET 
                 access_token = EXCLUDED.access_token,
                 refresh_token = COALESCE(EXCLUDED.refresh_token, integrations.refresh_token),
                 expires_at = EXCLUDED.expires_at,
                 account_id = EXCLUDED.account_id,
+                metadata = EXCLUDED.metadata,
                 updated_at = NOW()`,
-            [userId, provider, accessToken, refreshToken, expiresAt, accountId]
+            [userId, provider, accessToken, refreshToken, expiresAt, accountId, JSON.stringify(metadata)]
         );
 
         // 3. Redirect user back to the dashboard integrations tab successfully
