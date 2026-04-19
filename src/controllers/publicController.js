@@ -19,7 +19,7 @@ export const submitContactForm = async (req, res) => {
 
         console.log(`[submitContactForm] New message from ${name} (${email})`);
 
-        // Send Email Alert to Support/Owner
+        // Use Gmail SMTP to send contact form notification
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
@@ -28,21 +28,49 @@ export const submitContactForm = async (req, res) => {
             }
         });
 
+        const toEmail = process.env.EMAIL_USER; // jadeatwork123@gmail.com
+        const fromEmail = process.env.EMAIL_USER;
+        const fromName = 'Montseaumate Contact Form';
+
         const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: process.env.SUPPORT_EMAIL || process.env.EMAIL_USER,
-            subject: `🚀 [LANDING] New Contact Message from ${name}`,
-            text: `
-                Name: ${name}
-                Email: ${email}
-                
-                Message:
-                ${message}
-            `
+            from: `"${fromName}" <${fromEmail}>`,
+            to: toEmail,
+            replyTo: `"${name}" <${email}>`,
+            subject: `📩 New Message from ${name} — Landing Page`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f9f9f9; border-radius: 8px; overflow: hidden;">
+                    <div style="background: #1a1a2e; padding: 24px 32px;">
+                        <h2 style="color: #ffffff; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 1px;">NEW CONTACT MESSAGE</h2>
+                        <p style="color: rgba(255,255,255,0.5); margin: 4px 0 0; font-size: 12px;">Montseaumate Landing Page</p>
+                    </div>
+                    <div style="padding: 32px; background: #ffffff;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr>
+                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; width: 120px;">Name</td>
+                                <td style="padding: 10px 0; font-size: 14px; color: #111;">${name}</td>
+                            </tr>
+                            <tr style="border-top: 1px solid #f0f0f0;">
+                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888;">Email</td>
+                                <td style="padding: 10px 0; font-size: 14px; color: #111;"><a href="mailto:${email}" style="color: #4f46e5;">${email}</a></td>
+                            </tr>
+                            <tr style="border-top: 1px solid #f0f0f0;">
+                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; vertical-align: top;">Message</td>
+                                <td style="padding: 10px 0; font-size: 14px; color: #111; line-height: 1.7;">${message.replace(/\n/g, '<br>')}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div style="padding: 16px 32px; background: #f4f4f8; text-align: center;">
+                        <p style="margin: 0; font-size: 11px; color: #aaa;">Reply directly to this email to respond to ${name}</p>
+                    </div>
+                </div>
+            `,
+            text: `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
         };
 
-        // Fire and forget (don't block the UI)
-        transporter.sendMail(mailOptions).catch(err => console.error('[submitContactForm] Email failed:', err));
+        // Fire and forget — never block the UI response
+        transporter.sendMail(mailOptions)
+            .then(() => console.log(`[submitContactForm] ✅ Email sent to ${toEmail}`))
+            .catch(err => console.error('[submitContactForm] ❌ Email failed:', err.message));
 
         return res.status(200).json({ 
             success: true, 
