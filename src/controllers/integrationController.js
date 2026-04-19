@@ -54,19 +54,21 @@ export const connectProvider = async (req, res) => {
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
             if (clientId) {
-                // Real Google OAuth Redirect with Business Profile + Gmail scopes
+                // Real Google OAuth2 — Gmail + profile scopes only
+                // Note: business.manage requires Google Workspace API verification; omit for standard apps
                 const scopes = [
                     'email',
                     'profile',
                     'https://mail.google.com/',
-                    'https://www.googleapis.com/auth/business.manage'
+                    'https://www.googleapis.com/auth/gmail.send',
+                    'https://www.googleapis.com/auth/gmail.readonly'
                 ].join(' ');
-                
-                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${callbackUrl}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${state}`;
+
+                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
                 return res.redirect(authUrl);
             } else {
                 // Mock OAuth Redirect
-                return res.redirect(`/api/integrations/mock-oauth?provider=google&state=${state}&redirect_uri=${callbackUrl}`);
+                return res.redirect(`/api/integrations/mock-oauth?provider=google&state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(callbackUrl)}`);
             }
         }
         else if (provider === 'microsoft') {
@@ -155,68 +157,44 @@ export const providerCallback = async (req, res) => {
 
         // 1. Exchange 'code' for tokens based on the provider
         if (provider === 'google' && process.env.GOOGLE_CLIENT_ID) {
-            // Real Google Token Exchange
+            // Real Google Token Exchange — correct Content-Type header required
             const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-form-urlencoded' },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({
                     client_id: process.env.GOOGLE_CLIENT_ID,
                     client_secret: process.env.GOOGLE_CLIENT_SECRET,
                     code,
                     grant_type: 'authorization_code',
                     redirect_uri: callbackUrl
-                })
+                }).toString()
             });
+
             const tokenData = await tokenResponse.json();
-            if (tokenData.error) throw new Error(tokenData.error_description);
+            console.log('[Google Token Response]:', JSON.stringify(tokenData, null, 2));
+
+            if (tokenData.error) {
+                throw new Error(`Google token error: ${tokenData.error} — ${tokenData.error_description || 'No description'}`);
+            }
 
             accessToken = tokenData.access_token;
             refreshToken = tokenData.refresh_token || null;
-            
-            // FETCH GOOGLE EMAIL
+
+            // Fetch connected Google account email
             try {
                 const userRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 const userData = await userRes.json();
-                metadata.email = userData.email;
+                if (userData.email) {
+                    metadata.email = userData.email;
+                    accountId = `gmail:${userData.email}`;
+                } else {
+                    accountId = 'Gmail Connected';
+                }
             } catch (e) {
                 console.error('[Google UserInfo Error]:', e);
-            }
-
-            // ATTEMPT TO FETCH GMB REVIEW URL
-            try {
-                // 1. Get Accounts
-                const accountsRes = await fetch('https://mybusinessbusinessinformation.googleapis.com/v1/accounts', {
-                    headers: { 'Authorization': `Bearer ${accessToken}` }
-                });
-                const accountsData = await accountsRes.json();
-                
-                if (accountsData.accounts && accountsData.accounts.length > 0) {
-                    const accountName = accountsData.accounts[0].name;
-                    const locationsRes = await fetch(`https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?readMask=name,title,metadata`, {
-                        headers: { 'Authorization': `Bearer ${accessToken}` }
-                    });
-                    const locationsData = await locationsRes.json();
-                    
-                    if (locationsData.locations && locationsData.locations.length > 0) {
-                        const loc = locationsData.locations[0];
-                        // Prioritize the review URL, fallback to mapsUri
-                        accountId = loc.metadata?.newReviewUrl || loc.metadata?.mapsUri || 'Google Business Connected';
-                    } else {
-                        accountId = 'Google Account Connected';
-                    }
-                } else {
-                    accountId = 'Google Account Connected';
-                }
-            } catch (gmbErr) {
-                console.error('[GMB Fetch Error]:', gmbErr);
-                accountId = 'Connected';
-            }
-            
-            // If still no link, use 'Connected' so it shows as connected in UI
-            if (!accountId || !accountId.startsWith('http')) {
-                accountId = 'Connected';
+                accountId = 'Gmail Connected';
             }
 
             if (tokenData.expires_in) {
@@ -308,17 +286,19 @@ export const providerCallback = async (req, res) => {
         return res.redirect(`${frontendRedirect}?success=connected`);
 
     } catch (err) {
-        console.error('[providerCallback] CRITICAL ERROR:', err);
+        const errMsg = err?.message || err?.toString() || 'Unknown server error';
+        console.error('[providerCallback] CRITICAL ERROR:', errMsg, err);
+
         // Extract jobId for fallback redirect
         let jobId = '';
         if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
             jobId = req.query.state.split('___')[1];
         }
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/integrations`;
-        if (jobId) frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee/${jobId}`;
-        
-        // Pass the error message to the frontend for easier debugging
-        return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(err.message)}`);
+        const baseUrl = process.env.FRONTEND_URL || 'https://equipoexperto.com';
+        let frontendRedirect = `${baseUrl}/dashboard/integrations`;
+        if (jobId) frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
+
+        return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(errMsg)}`);
     }
 };
 
