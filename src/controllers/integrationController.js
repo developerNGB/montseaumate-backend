@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import jwt from 'jsonwebtoken';
+import fetch from 'node-fetch';
 
 // Mock OAuth Credentials
 const MOCK_CLIENT_ID = 'mock_client_id';
@@ -157,7 +158,8 @@ export const providerCallback = async (req, res) => {
 
         // 1. Exchange 'code' for tokens based on the provider
         if (provider === 'google' && process.env.GOOGLE_CLIENT_ID) {
-            // Real Google Token Exchange — correct Content-Type header required
+            console.log(`[Google OAuth] Exchanging code. callbackUrl=${callbackUrl}`);
+
             const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -170,11 +172,21 @@ export const providerCallback = async (req, res) => {
                 }).toString()
             });
 
+            if (!tokenResponse.ok) {
+                const rawText = await tokenResponse.text();
+                console.error(`[Google Token HTTP ${tokenResponse.status}]:`, rawText);
+                throw new Error(`Google token HTTP ${tokenResponse.status}: ${rawText.slice(0, 200)}`);
+            }
+
             const tokenData = await tokenResponse.json();
             console.log('[Google Token Response]:', JSON.stringify(tokenData, null, 2));
 
             if (tokenData.error) {
                 throw new Error(`Google token error: ${tokenData.error} — ${tokenData.error_description || 'No description'}`);
+            }
+
+            if (!tokenData.access_token) {
+                throw new Error(`Google token exchange returned no access_token. Response: ${JSON.stringify(tokenData)}`);
             }
 
             accessToken = tokenData.access_token;
@@ -186,6 +198,7 @@ export const providerCallback = async (req, res) => {
                     headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 const userData = await userRes.json();
+                console.log('[Google UserInfo]:', JSON.stringify(userData));
                 if (userData.email) {
                     metadata.email = userData.email;
                     accountId = `gmail:${userData.email}`;
@@ -193,7 +206,7 @@ export const providerCallback = async (req, res) => {
                     accountId = 'Gmail Connected';
                 }
             } catch (e) {
-                console.error('[Google UserInfo Error]:', e);
+                console.error('[Google UserInfo Error]:', e.message);
                 accountId = 'Gmail Connected';
             }
 
@@ -205,7 +218,7 @@ export const providerCallback = async (req, res) => {
             // Real Microsoft Token Exchange
             const tokenResponse = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-form-urlencoded' },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, // fixed typo: was x-form-urlencoded
                 body: new URLSearchParams({
                     client_id: process.env.MICROSOFT_CLIENT_ID,
                     client_secret: process.env.MICROSOFT_CLIENT_SECRET,
@@ -287,7 +300,8 @@ export const providerCallback = async (req, res) => {
 
     } catch (err) {
         const errMsg = err?.message || err?.toString() || 'Unknown server error';
-        console.error('[providerCallback] CRITICAL ERROR:', errMsg, err);
+        console.error('[providerCallback] CRITICAL ERROR:', errMsg);
+        if (err?.stack) console.error('[providerCallback] Stack:', err.stack);
 
         // Extract jobId for fallback redirect
         let jobId = '';
