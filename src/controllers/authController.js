@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
+import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -150,11 +151,14 @@ export const register = async (req, res) => {
         );
 
         const token = signToken(newUser);
+        
+        // Set HttpOnly cookie (new secure way)
+        setJwtCookie(res, token);
 
         return res.status(201).json({
             success: true,
             message: 'Account verified and created successfully.',
-            token,
+            token, // Keep for backward compatibility during transition
             user: newUser,
         });
     } catch (err) {
@@ -218,11 +222,14 @@ export const login = async (req, res) => {
 
         // Strip sensitive fields before responding
         const { password_hash: _, ...safeUser } = user;
+        
+        // Set HttpOnly cookie (new secure way)
+        setJwtCookie(res, token);
 
         return res.status(200).json({
             success: true,
             message: 'Login successful.',
-            token,
+            token, // Keep for backward compatibility during transition
             user: safeUser,
         });
     } catch (err) {
@@ -552,6 +559,11 @@ export const verifyResetToken = async (req, res) => {
  * Finds or creates a user via their verified Google account.
  */
 export const googleLogin = async (req, res) => {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+        console.error('[googleLogin] GOOGLE_CLIENT_ID env var is not set.');
+        return res.status(500).json({ success: false, message: 'Google sign-in is not configured on the server.' });
+    }
+
     try {
         const { credential } = req.body;
 
@@ -559,12 +571,17 @@ export const googleLogin = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Google credential is required.' });
         }
 
-        // Verify the ID token server-side using google-auth-library
-        const ticket = await googleClient.verifyIdToken({
-            idToken: credential,
-            audience: process.env.GOOGLE_CLIENT_ID,
-        });
-        const payload = ticket.getPayload();
+        let payload;
+        try {
+            const ticket = await googleClient.verifyIdToken({
+                idToken: credential,
+                audience: process.env.GOOGLE_CLIENT_ID,
+            });
+            payload = ticket.getPayload();
+        } catch (verifyErr) {
+            console.error('[googleLogin] Token verification failed:', verifyErr.message);
+            return res.status(401).json({ success: false, message: 'Google token is invalid or expired. Please try signing in again.' });
+        }
 
         if (!payload || !payload.email_verified) {
             return res.status(401).json({ success: false, message: 'Google account email is not verified.' });
@@ -573,20 +590,19 @@ export const googleLogin = async (req, res) => {
         const emailLower = payload.email.toLowerCase().trim();
         const name = payload.name || emailLower.split('@')[0];
 
-        // Find existing user
         let result = await pool.query(
             `SELECT id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled FROM users WHERE email = $1`,
             [emailLower]
         );
 
         let user;
+        let isNewUser = false;
         if (result.rows.length > 0) {
             user = result.rows[0];
             if (user.status !== 'active') {
                 return res.status(403).json({ success: false, message: 'Your account is deactivated. Please contact support.' });
             }
         } else {
-            // Auto-create account for new Google users (no password needed)
             const insertResult = await pool.query(
                 `INSERT INTO users (name, email, password_hash, company_name)
                  VALUES ($1, $2, $3, $4)
@@ -594,22 +610,24 @@ export const googleLogin = async (req, res) => {
                 [name, emailLower, '', '']
             );
             user = insertResult.rows[0];
+            isNewUser = true;
         }
 
         const token = signToken(user);
+        setJwtCookie(res, token);
 
         return res.status(200).json({
             success: true,
             message: 'Google sign-in successful.',
             token,
             user,
+            isNewUser,
         });
     } catch (err) {
-        console.error('[googleLogin] Full Error:', err);
-        return res.status(500).json({ 
-            success: false, 
-            message: 'Google sign-in failed.',
-            error: err.message 
+        console.error('[googleLogin] Unexpected error:', err.message);
+        return res.status(500).json({
+            success: false,
+            message: 'An unexpected error occurred during Google sign-in. Please try again.',
         });
     }
 };

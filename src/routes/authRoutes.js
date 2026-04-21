@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { register, login, getProfile, updateProfile, updatePassword, forgotPassword, resetPassword, verifyResetToken, requestOTP, googleLogin } from '../controllers/authController.js';
 import authenticate from '../middleware/authenticate.js';
+import { clearJwtCookie } from '../utils/cookieHelpers.js';
 
 const router = Router();
 
@@ -33,5 +34,11 @@ router.get('/verify-reset-token/:token', verifyResetToken);
 
 // POST /auth/google — Sign in / sign up with Google
 router.post('/google', googleLogin);
+
+// POST /auth/logout — Clear JWT cookie
+router.post('/logout', authenticate, (req, res) => {
+    clearJwtCookie(res);
+    res.json({ success: true, message: 'Logged out successfully.' });
+});
 
 export default router;

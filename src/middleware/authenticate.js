@@ -1,21 +1,21 @@
 import jwt from 'jsonwebtoken';
+import { getTokenFromRequest } from '../utils/cookieHelpers.js';
 
 /**
  * Authentication middleware.
- * Verifies the JWT token from the Authorization header.
+ * Verifies the JWT token from HttpOnly cookie (preferred) or Authorization header.
  * Attaches the decoded user payload to req.user.
  */
 const authenticate = (req, res, next) => {
-    const authHeader = req.headers.authorization;
+    // Get token from cookie or Authorization header
+    const token = getTokenFromRequest(req);
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!token) {
         return res.status(401).json({
             success: false,
             message: 'Access denied. No token provided.',
         });
     }
-
-    const token = authHeader.split(' ')[1];
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);

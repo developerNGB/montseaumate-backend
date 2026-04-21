@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
+import csrf from 'csurf';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -85,36 +87,60 @@ app.use(cors({
 // Parse JSON bodies (limit to 10kb to prevent abuse)
 app.use(express.json({ limit: '10kb' }));
 
-// Remove fingerprinting header and set COOP for Google Auth
+// Remove fingerprinting header
 app.disable('x-powered-by');
-app.use((req, res, next) => {
-    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-    next();
-});
 
 // ────────────────────────────────────────────────────────────
 // RATE LIMITING
 // ────────────────────────────────────────────────────────────
 
-// General API rate limit (Practically removed limit as requested)
+// General API rate limit - 100 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 999999, // Allow almost unlimited requests
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many requests. Please try again later.' },
+    skip: (req) => req.method === 'OPTIONS', // Skip preflight requests
 });
 
-// Stricter limit on auth endpoints: 10 attempts per 15 minutes
+// Stricter limit on auth endpoints: 5 attempts per 15 minutes
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 5,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many login attempts. Please wait 15 minutes.' },
 });
 
 app.use(generalLimiter);
+
+// Cookie parser for CSRF and JWT cookies
+app.use(cookieParser(process.env.COOKIE_SECRET || 'default-secret-change-in-production'));
+
+// CSRF protection - skip for public webhooks
+const csrfProtection = csrf({
+    cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
+});
+
+// Skip CSRF for webhook/public routes
+app.use((req, res, next) => {
+    const skipPaths = ['/api/public', '/api/webhooks', '/auth/google', '/auth/microsoft'];
+    if (skipPaths.some(path => req.path.startsWith(path))) {
+        return next();
+    }
+    csrfProtection(req, res, next);
+});
+
+// CSRF token endpoint
+app.get('/csrf-token', (req, res) => {
+    res.json({ csrfToken: req.csrfToken() });
+});
 
 // ────────────────────────────────────────────────────────────
 // ROUTES
