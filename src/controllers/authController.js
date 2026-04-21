@@ -559,24 +559,11 @@ export const googleLogin = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Google credential is required.' });
         }
 
-        // Validate GOOGLE_CLIENT_ID is set
-        if (!process.env.GOOGLE_CLIENT_ID) {
-            console.error('[googleLogin] GOOGLE_CLIENT_ID is not set in environment variables');
-            return res.status(500).json({ 
-                success: false, 
-                message: 'Server configuration error: Google Client ID not configured.' 
-            });
-        }
-
-        console.log('[googleLogin] Verifying token with Client ID:', process.env.GOOGLE_CLIENT_ID.substring(0, 20) + '...');
-
         // Verify the ID token server-side using google-auth-library
         const ticket = await googleClient.verifyIdToken({
             idToken: credential,
             audience: process.env.GOOGLE_CLIENT_ID,
         });
-        
-        console.log('[googleLogin] Token verified successfully');
         const payload = ticket.getPayload();
 
         if (!payload || !payload.email_verified) {
@@ -618,18 +605,11 @@ export const googleLogin = async (req, res) => {
             user,
         });
     } catch (err) {
-        console.error('[googleLogin] ==========================================');
         console.error('[googleLogin] Full Error:', err);
-        console.error('[googleLogin] Error Message:', err.message);
-        console.error('[googleLogin] Error Stack:', err.stack);
-        console.error('[googleLogin] GOOGLE_CLIENT_ID present:', !!process.env.GOOGLE_CLIENT_ID);
-        console.error('[googleLogin] GOOGLE_CLIENT_ID value:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 30) + '...' : 'NOT SET');
-        console.error('[googleLogin] ==========================================');
         return res.status(500).json({ 
             success: false, 
             message: 'Google sign-in failed.',
-            error: err.message,
-            details: err.stack 
+            error: err.message 
         });
     }
 };
