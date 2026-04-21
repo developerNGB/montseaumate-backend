@@ -618,11 +618,18 @@ export const googleLogin = async (req, res) => {
             user,
         });
     } catch (err) {
+        console.error('[googleLogin] ==========================================');
         console.error('[googleLogin] Full Error:', err);
+        console.error('[googleLogin] Error Message:', err.message);
+        console.error('[googleLogin] Error Stack:', err.stack);
+        console.error('[googleLogin] GOOGLE_CLIENT_ID present:', !!process.env.GOOGLE_CLIENT_ID);
+        console.error('[googleLogin] GOOGLE_CLIENT_ID value:', process.env.GOOGLE_CLIENT_ID ? process.env.GOOGLE_CLIENT_ID.substring(0, 30) + '...' : 'NOT SET');
+        console.error('[googleLogin] ==========================================');
         return res.status(500).json({ 
             success: false, 
             message: 'Google sign-in failed.',
-            error: err.message 
+            error: err.message,
+            details: err.stack 
         });
     }
 };
