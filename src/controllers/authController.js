@@ -6,7 +6,14 @@ import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+// Create OAuth client lazily to ensure env vars are loaded
+const getGoogleClient = () => {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+        throw new Error('GOOGLE_CLIENT_ID not configured');
+    }
+    return new OAuth2Client(clientId);
+};
 
 const SALT_ROUNDS = 10; // Optimized for performance while maintaining high security
 
@@ -573,14 +580,26 @@ export const googleLogin = async (req, res) => {
 
         let payload;
         try {
-            const ticket = await googleClient.verifyIdToken({
+            const client = getGoogleClient();
+            const ticket = await client.verifyIdToken({
                 idToken: credential,
                 audience: process.env.GOOGLE_CLIENT_ID,
             });
             payload = ticket.getPayload();
         } catch (verifyErr) {
             console.error('[googleLogin] Token verification failed:', verifyErr.message);
-            return res.status(401).json({ success: false, message: 'Google token is invalid or expired. Please try signing in again.' });
+            console.error('[googleLogin] Client ID used:', process.env.GOOGLE_CLIENT_ID);
+            // Check if it's an audience mismatch
+            if (verifyErr.message && verifyErr.message.includes('audience')) {
+                return res.status(401).json({ 
+                    success: false, 
+                    message: 'Google client ID mismatch. Please contact support.' 
+                });
+            }
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Google sign-in token is invalid or expired. Please try again.' 
+            });
         }
 
         if (!payload || !payload.email_verified) {

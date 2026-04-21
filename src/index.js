@@ -60,9 +60,12 @@ app.options('*', (req, res) => {
     res.status(204).end();
 });
 
-// Enable COOP for Google login
+// Enable COOP for Google login - must be set before CORS
 app.use((req, res, next) => {
+    // Allow popups for OAuth flows but maintain security
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // Also needed for some OAuth scenarios
+    res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
     next();
 });
 
