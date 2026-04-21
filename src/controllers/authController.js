@@ -559,11 +559,24 @@ export const googleLogin = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Google credential is required.' });
         }
 
+        // Validate GOOGLE_CLIENT_ID is set
+        if (!process.env.GOOGLE_CLIENT_ID) {
+            console.error('[googleLogin] GOOGLE_CLIENT_ID is not set in environment variables');
+            return res.status(500).json({ 
+                success: false, 
+                message: 'Server configuration error: Google Client ID not configured.' 
+            });
+        }
+
+        console.log('[googleLogin] Verifying token with Client ID:', process.env.GOOGLE_CLIENT_ID.substring(0, 20) + '...');
+
         // Verify the ID token server-side using google-auth-library
         const ticket = await googleClient.verifyIdToken({
             idToken: credential,
             audience: process.env.GOOGLE_CLIENT_ID,
         });
+        
+        console.log('[googleLogin] Token verified successfully');
         const payload = ticket.getPayload();
 
         if (!payload || !payload.email_verified) {
