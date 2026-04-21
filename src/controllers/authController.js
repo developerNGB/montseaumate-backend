@@ -562,52 +562,38 @@ export const verifyResetToken = async (req, res) => {
 
 /**
  * POST /auth/google
- * Body: { credential } — Google ID token from @react-oauth/google
- * Finds or creates a user via their verified Google account.
+ * Body: { access_token } — OAuth2 access token from useGoogleLogin hook
+ * Verifies via Google's userinfo API (no client ID dependency on the server).
  */
 export const googleLogin = async (req, res) => {
-    if (!process.env.GOOGLE_CLIENT_ID) {
-        console.error('[googleLogin] GOOGLE_CLIENT_ID env var is not set.');
-        return res.status(500).json({ success: false, message: 'Google sign-in is not configured on the server.' });
-    }
-
     try {
-        const { credential } = req.body;
+        const { access_token } = req.body;
 
-        if (!credential) {
-            return res.status(400).json({ success: false, message: 'Google credential is required.' });
+        if (!access_token) {
+            return res.status(400).json({ success: false, message: 'Google access token is required.' });
         }
 
-        let payload;
+        // Verify token and get user info from Google's API
+        let googleUser;
         try {
-            const client = getGoogleClient();
-            const ticket = await client.verifyIdToken({
-                idToken: credential,
-                audience: process.env.GOOGLE_CLIENT_ID,
+            const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                headers: { Authorization: `Bearer ${access_token}` },
             });
-            payload = ticket.getPayload();
-        } catch (verifyErr) {
-            console.error('[googleLogin] Token verification failed:', verifyErr.message);
-            console.error('[googleLogin] Client ID used:', process.env.GOOGLE_CLIENT_ID);
-            // Check if it's an audience mismatch
-            if (verifyErr.message && verifyErr.message.includes('audience')) {
-                return res.status(401).json({ 
-                    success: false, 
-                    message: 'Google client ID mismatch. Please contact support.' 
-                });
+            if (!userInfoRes.ok) {
+                throw new Error(`Google API returned ${userInfoRes.status}`);
             }
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Google sign-in token is invalid or expired. Please try again.' 
-            });
+            googleUser = await userInfoRes.json();
+        } catch (fetchErr) {
+            console.error('[googleLogin] Google userinfo fetch failed:', fetchErr.message);
+            return res.status(401).json({ success: false, message: 'Google token is invalid or expired. Please try signing in again.' });
         }
 
-        if (!payload || !payload.email_verified) {
+        if (!googleUser.email || !googleUser.verified_email) {
             return res.status(401).json({ success: false, message: 'Google account email is not verified.' });
         }
 
-        const emailLower = payload.email.toLowerCase().trim();
-        const name = payload.name || emailLower.split('@')[0];
+        const emailLower = googleUser.email.toLowerCase().trim();
+        const name = googleUser.name || emailLower.split('@')[0];
 
         let result = await pool.query(
             `SELECT id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled FROM users WHERE email = $1`,
