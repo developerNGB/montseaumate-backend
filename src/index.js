@@ -133,7 +133,7 @@ const csrfProtection = csrf({
 
 // Skip CSRF for webhook/public routes
 app.use((req, res, next) => {
-    const skipPaths = ['/api/public', '/api/webhooks', '/auth/google', '/auth/microsoft'];
+    const skipPaths = ['/api/public', '/api/webhooks', '/auth/google', '/auth/microsoft', '/auth/account'];
     if (skipPaths.some(path => req.path.startsWith(path))) {
         return next();
     }

@@ -637,4 +637,39 @@ export const googleLogin = async (req, res) => {
     }
 };
 
+/**
+ * DELETE /auth/account
+ * Permanently deletes the authenticated user and all their data.
+ */
+export const deleteAccount = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Delete in dependency order to satisfy foreign key constraints
+        await pool.query('DELETE FROM activity_logs WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM leads WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM feedback WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM integrations WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM lead_followup_settings WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM smtp_settings WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM password_history WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM password_resets WHERE user_id = $1', [userId]);
+        await pool.query('DELETE FROM otp_verifications WHERE email = (SELECT email FROM users WHERE id = $1)', [userId]);
+
+        // Finally delete the user
+        const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [userId]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ success: false, message: 'Account not found.' });
+        }
+
+        clearJwtCookie(res);
+
+        return res.status(200).json({ success: true, message: 'Account permanently deleted.' });
+    } catch (err) {
+        console.error('[deleteAccount] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Failed to delete account. Please try again.' });
+    }
+};
 
