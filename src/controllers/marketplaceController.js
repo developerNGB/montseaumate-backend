@@ -6,15 +6,15 @@
 import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 
-// Individual webhook URLs for each marketplace
+// Individual webhook URLs for each marketplace - all from environment variables
 const WEBHOOK_URLS = {
-    idealista: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-idealista',
-    coches_net: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Coches.net',
-    fotocasa: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Fotocasa',
-    autoscout: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-AutoScout',
-    infojobs: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-InfoJobs',
-    wallapop: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Wallapop',
-    vinted: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Vinted',
+    idealista: process.env.N8N_MARKETPLACE_IDEALISTA_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-idealista',
+    coches_net: process.env.N8N_MARKETPLACE_COCHES_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Coches.net',
+    fotocasa: process.env.N8N_MARKETPLACE_FOTOCASA_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Fotocasa',
+    autoscout: process.env.N8N_MARKETPLACE_AUTOSCOUT_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-AutoScout',
+    infojobs: process.env.N8N_MARKETPLACE_INFOJOBS_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-InfoJobs',
+    wallapop: process.env.N8N_MARKETPLACE_WALLAPOP_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Wallapop',
+    vinted: process.env.N8N_MARKETPLACE_VINTED_WEBHOOK || 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Vinted',
 };
 
 const formatMarketplaceName = (id) => {

@@ -546,7 +546,16 @@ export const submitFeedback = async (req, res) => {
         }
         console.log(`===============================================================\n`);
 
-        // 5. Build Response Object
+        // 5. Build Response Object - fail if N8N webhook failed
+        if (debugStatus.startsWith('error')) {
+            console.error(`[submitFeedback] N8N failed: ${debugStatus}`);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to process feedback. Please try again later.',
+                error: debugStatus
+            });
+        }
+
         const finalResponse = {
             success: true,
             _debug: { n8n_status: debugStatus }
