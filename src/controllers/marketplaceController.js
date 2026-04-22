@@ -72,38 +72,62 @@ export const fetchMarketplaceLeads = async (req, res) => {
                 }
 
                 const data = await response.json();
-                console.log(`[fetchMarketplaceLeads] ${marketplaceId} raw response:`, JSON.stringify(data).substring(0, 500));
+                
+                // Enhanced debug logging
+                const isArray = Array.isArray(data);
+                const hasItems = data && Array.isArray(data.items);
+                const hasData = data && Array.isArray(data.data);
+                const hasLeads = data && Array.isArray(data.leads);
+                const hasBody = data && Array.isArray(data.body);
+                console.log(`[fetchMarketplaceLeads] ${marketplaceId} response type:`, {
+                    isArray,
+                    hasItems,
+                    hasData,
+                    hasLeads,
+                    hasBody,
+                    dataType: typeof data,
+                    keys: data && typeof data === 'object' ? Object.keys(data).slice(0, 10) : null,
+                    rawPreview: JSON.stringify(data).substring(0, 800)
+                });
 
                 // Extract leads from various N8N response formats
                 let leads = [];
+                let extractionMethod = 'none';
+                
                 if (Array.isArray(data)) {
-                    // Direct array of leads
                     leads = data;
+                    extractionMethod = 'direct_array';
                 } else if (data.items && Array.isArray(data.items)) {
-                    // N8N splitInBatches output format
                     leads = data.items.map(item => item.json || item);
+                    extractionMethod = 'items_property';
                 } else if (data.data && Array.isArray(data.data)) {
                     leads = data.data;
+                    extractionMethod = 'data_property';
                 } else if (data.leads && Array.isArray(data.leads)) {
                     leads = data.leads;
+                    extractionMethod = 'leads_property';
                 } else if (data.body && Array.isArray(data.body)) {
-                    // Some N8N nodes wrap in body
                     leads = data.body;
+                    extractionMethod = 'body_property';
                 } else if (typeof data === 'object' && data !== null && !data.success) {
-                    // Single lead object (but not an error response)
                     leads = [data];
+                    extractionMethod = 'single_object';
                 }
                 
+                console.log(`[fetchMarketplaceLeads] ${marketplaceId} extracted ${leads.length} leads via ${extractionMethod}`);
+                
                 // Clean up any N8N metadata and ensure proper structure
+                const originalCount = leads.length;
                 leads = leads.filter(lead => lead && typeof lead === 'object').map(lead => {
-                    // If lead has a 'json' property (N8N item format), unwrap it
                     if (lead.json && typeof lead.json === 'object') {
                         return lead.json;
                     }
                     return lead;
                 });
-
-                console.log(`[fetchMarketplaceLeads] ${marketplaceId} extracted ${leads.length} leads`);
+                
+                if (leads.length !== originalCount) {
+                    console.log(`[fetchMarketplaceLeads] ${marketplaceId} filtered from ${originalCount} to ${leads.length} valid objects`);
+                }
                 return { marketplace: marketplaceId, leads, count: leads.length };
             } catch (err) {
                 console.error(`[fetchMarketplaceLeads] Error fetching ${marketplaceId}:`, err.message);
@@ -172,10 +196,12 @@ export const fetchMarketplaceLeads = async (req, res) => {
             rawData: lead
         }));
 
-        // Build per-marketplace summary
+        // Build per-marketplace summary (case-insensitive matching)
         const summary = {};
         marketplaces.forEach(id => {
-            const mpLeads = normalizedLeads.filter(l => l.source === id);
+            const mpLeads = normalizedLeads.filter(l => 
+                (l.source || '').toLowerCase() === id.toLowerCase()
+            );
             summary[formatMarketplaceName(id)] = mpLeads.length;
         });
 
