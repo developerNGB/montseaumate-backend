@@ -1,9 +1,16 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 import fetch from 'node-fetch';
 import * as whatsappService from '../services/whatsappService.js';
+
+// Load env vars for this controller
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '../../../.env') });
 
 /**
  * POST /api/support/contact
@@ -166,10 +173,8 @@ export const submitReview = async (req, res) => {
         console.log(`[submitReview] Activity logged. Triggering n8n...`);
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = (n8nWebhook && n8nWebhook.trim()) || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        const finalWebhook = process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
         console.log(`[submitReview] Webhook URL: ${finalWebhook}`);
-        console.log(`[submitReview] Body webhook: ${n8nWebhook}`);
-        console.log(`[submitReview] Env webhook: ${process.env.N8N_REVIEW_FEEDBACK_WEBHOOK}`);
         
         if (finalWebhook) {
             try {
@@ -463,10 +468,9 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = (config.n8n_webhook_url && config.n8n_webhook_url.trim()) || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        // Only use env variable - no database fallback
+        const reviewFeedbackWebhook = process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
         console.log(`[submitFeedback] Webhook URL: ${reviewFeedbackWebhook}`);
-        console.log(`[submitFeedback] Config webhook: ${config.n8n_webhook_url}`);
-        console.log(`[submitFeedback] Env webhook: ${process.env.N8N_REVIEW_FEEDBACK_WEBHOOK}`);
         
         let n8nResponseData = null;
         let debugStatus = "pending";
@@ -501,7 +505,7 @@ export const submitFeedback = async (req, res) => {
         }
 
         // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = (config.n8n_webhook_url && config.n8n_webhook_url.trim()) || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+        const extraWebhook = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
         if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
             fetch(extraWebhook, {
                 method: 'POST',
