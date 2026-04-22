@@ -73,22 +73,22 @@ export const fetchMarketplaceLeads = async (req, res) => {
 
                 const data = await response.json();
                 
-                // Enhanced debug logging
+                // Enhanced debug logging - FULL data for debugging
+                const dataStr = JSON.stringify(data);
                 const isArray = Array.isArray(data);
                 const hasItems = data && Array.isArray(data.items);
                 const hasData = data && Array.isArray(data.data);
                 const hasLeads = data && Array.isArray(data.leads);
                 const hasBody = data && Array.isArray(data.body);
-                console.log(`[fetchMarketplaceLeads] ${marketplaceId} response type:`, {
-                    isArray,
-                    hasItems,
-                    hasData,
-                    hasLeads,
-                    hasBody,
-                    dataType: typeof data,
-                    keys: data && typeof data === 'object' ? Object.keys(data).slice(0, 10) : null,
-                    rawPreview: JSON.stringify(data).substring(0, 800)
-                });
+                
+                console.log(`[fetchMarketplaceLeads] ${marketplaceId} FULL RESPONSE:`);
+                console.log(`  - Total size: ${dataStr.length} chars`);
+                console.log(`  - isArray: ${isArray}, arrayLength: ${isArray ? data.length : 'N/A'}`);
+                console.log(`  - hasItems: ${hasItems}, itemsLength: ${hasItems ? data.items.length : 'N/A'}`);
+                console.log(`  - hasData: ${hasData}, dataLength: ${hasData ? data.data.length : 'N/A'}`);
+                console.log(`  - hasLeads: ${hasLeads}, leadsLength: ${hasLeads ? data.leads.length : 'N/A'}`);
+                console.log(`  - hasBody: ${hasBody}, bodyLength: ${hasBody ? data.body.length : 'N/A'}`);
+                console.log(`  - First 2000 chars:`, dataStr.substring(0, 2000));
 
                 // Extract leads from various N8N response formats
                 let leads = [];
@@ -462,6 +462,36 @@ export const deleteLead = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: 'Failed to delete lead'
+        });
+    }
+};
+
+/**
+ * DELETE /api/marketplace/leads
+ * Delete all stored leads for user
+ */
+export const deleteAllLeads = async (req, res) => {
+    const userId = req.user.id;
+
+    try {
+        const result = await pool.query(
+            'DELETE FROM marketplace_leads WHERE user_id = $1 RETURNING id',
+            [userId]
+        );
+
+        console.log(`[deleteAllLeads] Deleted ${result.rowCount} leads for user ${userId}`);
+
+        return res.json({
+            success: true,
+            message: `${result.rowCount} leads deleted`,
+            deletedCount: result.rowCount
+        });
+
+    } catch (err) {
+        console.error('[deleteAllLeads] Error:', err.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to delete all leads'
         });
     }
 };

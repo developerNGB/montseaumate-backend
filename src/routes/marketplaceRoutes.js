@@ -4,7 +4,8 @@ import {
     fetchMarketplaceLeads,
     storeMarketplaceLeads,
     getStoredLeads,
-    deleteLead
+    deleteLead,
+    deleteAllLeads
 } from '../controllers/marketplaceController.js';
 
 const router = Router();
@@ -20,5 +21,8 @@ router.get('/leads', authenticate, getStoredLeads);
 
 // DELETE /api/marketplace/leads/:id - Delete a lead
 router.delete('/leads/:id', authenticate, deleteLead);
+
+// DELETE /api/marketplace/leads - Delete all leads
+router.delete('/leads', authenticate, deleteAllLeads);
 
 export default router;
