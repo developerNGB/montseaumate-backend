@@ -137,6 +137,7 @@ app.use((req, res, next) => {
     const skipPaths = [
         '/api/public', '/api/webhooks', '/api/marketplace', 
         '/api/integrations', '/api/whatsapp', '/api/config',
+        '/api/f', '/api/r', '/api/l',  // Public feedback/review/lead endpoints
         '/auth/google', '/auth/microsoft', '/auth/account'
     ];
     if (skipPaths.some(path => req.path.startsWith(path))) {

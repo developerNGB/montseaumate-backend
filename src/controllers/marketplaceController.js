@@ -8,13 +8,13 @@ import fetch from 'node-fetch';
 
 // Individual webhook URLs for each marketplace
 const WEBHOOK_URLS = {
-    idealista: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-idealista',
-    coches_net: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Coches.net',
-    fotocasa: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Fotocasa',
-    autoscout: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-AutoScout',
-    infojobs: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-InfoJobs',
-    wallapop: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Wallapop',
-    vinted: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Vinted',
+    idealista: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-idealista',
+    coches_net: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Coches.net',
+    fotocasa: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Fotocasa',
+    autoscout: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-AutoScout',
+    infojobs: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-InfoJobs',
+    wallapop: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Wallapop',
+    vinted: 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-Vinted',
 };
 
 const formatMarketplaceName = (id) => {
