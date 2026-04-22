@@ -231,7 +231,13 @@ export const storeMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
     const { leads } = req.body;
 
+    console.log(`[storeMarketplaceLeads] Received ${leads?.length || 0} leads for user ${userId}`);
+    if (leads && leads.length > 0) {
+        console.log(`[storeMarketplaceLeads] First lead sample:`, JSON.stringify(leads[0]).substring(0, 200));
+    }
+
     if (!leads || !Array.isArray(leads) || leads.length === 0) {
+        console.log('[storeMarketplaceLeads] No leads to store - returning 400');
         return res.status(400).json({
             success: false,
             message: 'No leads to store'
@@ -254,6 +260,7 @@ export const storeMarketplaceLeads = async (req, res) => {
 
             if (existing.rows.length > 0) {
                 duplicates++;
+                console.log(`[storeMarketplaceLeads] Duplicate found: ${lead.id} / ${lead.url}`);
                 continue;
             }
 
@@ -299,6 +306,8 @@ export const storeMarketplaceLeads = async (req, res) => {
 
         await client.query('COMMIT');
 
+        console.log(`[storeMarketplaceLeads] Complete: ${stored} stored, ${duplicates} duplicates out of ${leads.length}`);
+
         return res.json({
             success: true,
             stored,
@@ -308,7 +317,7 @@ export const storeMarketplaceLeads = async (req, res) => {
 
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('[storeMarketplaceLeads] Error:', err.message);
+        console.error('[storeMarketplaceLeads] Error:', err.message, err.stack);
         return res.status(500).json({
             success: false,
             message: 'Failed to store leads'
@@ -325,6 +334,8 @@ export const storeMarketplaceLeads = async (req, res) => {
 export const getStoredLeads = async (req, res) => {
     const userId = req.user.id;
     const { category, source, limit = 50, offset = 0 } = req.query;
+
+    console.log(`[getStoredLeads] Fetching leads for user ${userId}, limit=${limit}, offset=${offset}`);
 
     try {
         let query = `
@@ -414,10 +425,13 @@ export const getStoredLeads = async (req, res) => {
             X: row.is_remote,
         }));
 
+        const total = parseInt(countResult.rows[0].count);
+        console.log(`[getStoredLeads] Returning ${leads.length} leads (total: ${total})`);
+
         return res.json({
             success: true,
             leads,
-            total: parseInt(countResult.rows[0].count),
+            total,
             limit: parseInt(limit),
             offset: parseInt(offset)
         });
