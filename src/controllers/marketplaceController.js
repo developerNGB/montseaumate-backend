@@ -6,7 +6,7 @@
 import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 
-const WEBHOOK_URL = 'https://n8n.srv882475.hstgr.cloud/webhook-test/marketplace-leads';
+const WEBHOOK_URL = 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-leads';
 
 /**
  * POST /api/marketplace/fetch
