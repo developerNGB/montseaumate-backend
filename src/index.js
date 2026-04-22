@@ -13,6 +13,7 @@ import configRoutes from './routes/configRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
 import activityLogsRoutes from './routes/activityLogsRoutes.js';
 import leadsRoutes from './routes/leadsRoutes.js';
+import marketplaceRoutes from './routes/marketplaceRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
@@ -169,6 +170,7 @@ app.use('/api/integrations', integrationRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/activity-logs', activityLogsRoutes);
 app.use('/api/leads', leadsRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
@@ -221,6 +223,45 @@ const runMigrations = async () => {
         await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
         await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
         await pool.query('CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())');
+        
+        // Create marketplace_leads table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS marketplace_leads (
+                id SERIAL PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                external_id VARCHAR(255) NOT NULL,
+                source VARCHAR(100) NOT NULL,
+                category VARCHAR(50),
+                title TEXT,
+                price DECIMAL(15,2),
+                currency VARCHAR(10) DEFAULT 'EUR',
+                location VARCHAR(500),
+                url TEXT,
+                image_url TEXT,
+                description TEXT,
+                fetched_at TIMESTAMP DEFAULT NOW(),
+                created_at TIMESTAMP DEFAULT NOW(),
+                size DECIMAL(10,2),
+                rooms INTEGER,
+                floor VARCHAR(50),
+                agency VARCHAR(255),
+                brand VARCHAR(100),
+                model VARCHAR(100),
+                year INTEGER,
+                mileage DECIMAL(10,2),
+                fuel VARCHAR(50),
+                company VARCHAR(255),
+                salary VARCHAR(100),
+                contract_type VARCHAR(50),
+                is_remote BOOLEAN DEFAULT FALSE,
+                raw_data JSONB,
+                UNIQUE(user_id, external_id)
+            )
+        `);
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_user_id ON marketplace_leads(user_id)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_source ON marketplace_leads(source)');
+        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_category ON marketplace_leads(category)');
+        
         console.log('✅ Startup migrations & performance indices verified.');
         
         // Finalize Startup
