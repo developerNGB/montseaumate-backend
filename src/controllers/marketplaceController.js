@@ -6,11 +6,33 @@
 import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 
-const WEBHOOK_URL = 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-leads';
+// Individual webhook URLs for each marketplace
+const WEBHOOK_URLS = {
+    idealista: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-idealista',
+    coches_net: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Coches.net',
+    fotocasa: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Fotocasa',
+    autoscout: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-AutoScout',
+    infojobs: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-InfoJobs',
+    wallapop: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Wallapop',
+    vinted: 'https://n8n.srv882475.hstgr.cloud/webhook/marketplace-Vinted',
+};
+
+const formatMarketplaceName = (id) => {
+    const names = {
+        idealista: 'Idealista',
+        coches_net: 'Coches.net',
+        fotocasa: 'Fotocasa',
+        autoscout: 'AutoScout',
+        infojobs: 'InfoJobs',
+        wallapop: 'Wallapop',
+        vinted: 'Vinted',
+    };
+    return names[id] || id;
+};
 
 /**
  * POST /api/marketplace/fetch
- * Fetches leads from N8N webhook for selected marketplaces
+ * Fetches leads from individual N8N webhooks for selected marketplaces
  */
 export const fetchMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
@@ -24,40 +46,77 @@ export const fetchMarketplaceLeads = async (req, res) => {
     }
 
     try {
-        // Call N8N webhook with marketplace selection
-        const webhookRes = await fetch(WEBHOOK_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                marketplaces,
-                userId,
-                requestId: `${userId}_${Date.now()}`
-            })
+        // Call each marketplace webhook in parallel
+        const webhookPromises = marketplaces.map(async (marketplaceId) => {
+            const webhookUrl = WEBHOOK_URLS[marketplaceId];
+            if (!webhookUrl) {
+                console.warn(`[fetchMarketplaceLeads] Unknown marketplace: ${marketplaceId}`);
+                return { marketplace: marketplaceId, leads: [], error: 'Unknown marketplace' };
+            }
+
+            try {
+                const response = await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        marketplace: marketplaceId,
+                        userId,
+                        requestId: `${userId}_${Date.now()}_${marketplaceId}`
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Extract leads from various response formats
+                let leads = [];
+                if (Array.isArray(data)) {
+                    leads = data;
+                } else if (data.data && Array.isArray(data.data)) {
+                    leads = data.data;
+                } else if (data.leads && Array.isArray(data.leads)) {
+                    leads = data.leads;
+                } else if (typeof data === 'object' && data !== null && !data.success === false) {
+                    leads = [data];
+                }
+
+                return { marketplace: marketplaceId, leads, count: leads.length };
+            } catch (err) {
+                console.error(`[fetchMarketplaceLeads] Error fetching ${marketplaceId}:`, err.message);
+                return { marketplace: marketplaceId, leads: [], error: err.message };
+            }
         });
 
-        if (!webhookRes.ok) {
-            throw new Error(`Webhook returned ${webhookRes.status}`);
-        }
+        const results = await Promise.allSettled(webhookPromises);
 
-        const data = await webhookRes.json();
+        // Collect all leads from successful calls
+        let allLeads = [];
+        const errors = [];
 
-        // N8N returns data in various formats - handle both array and object responses
-        let leads = [];
-        if (Array.isArray(data)) {
-            leads = data;
-        } else if (data.data && Array.isArray(data.data)) {
-            leads = data.data;
-        } else if (data.leads && Array.isArray(data.leads)) {
-            leads = data.leads;
-        } else if (typeof data === 'object' && data !== null) {
-            // Single lead object
-            leads = [data];
-        }
+        results.forEach((result, index) => {
+            const marketplaceId = marketplaces[index];
+            if (result.status === 'fulfilled') {
+                const { leads, error } = result.value;
+                if (error && leads.length === 0) {
+                    errors.push({ marketplace: formatMarketplaceName(marketplaceId), error });
+                } else if (leads.length > 0) {
+                    allLeads = allLeads.concat(leads.map(lead => ({
+                        ...lead,
+                        source: lead.source || marketplaceId
+                    })));
+                }
+            } else {
+                errors.push({ marketplace: formatMarketplaceName(marketplaceId), error: result.reason?.message || 'Failed' });
+            }
+        });
 
         // Normalize lead data structure
-        const normalizedLeads = leads.map(lead => ({
+        const normalizedLeads = allLeads.map(lead => ({
             id: lead.id || lead.A || `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
             source: lead.source || lead.B || 'unknown',
             category: lead.category || lead.C || 'general',
@@ -89,11 +148,20 @@ export const fetchMarketplaceLeads = async (req, res) => {
             rawData: lead
         }));
 
+        // Build per-marketplace summary
+        const summary = {};
+        marketplaces.forEach(id => {
+            const mpLeads = normalizedLeads.filter(l => l.source === id);
+            summary[formatMarketplaceName(id)] = mpLeads.length;
+        });
+
         return res.json({
             success: true,
             leads: normalizedLeads,
             count: normalizedLeads.length,
-            marketplaces
+            marketplaces,
+            summary,
+            errors: errors.length > 0 ? errors : undefined
         });
 
     } catch (err) {
