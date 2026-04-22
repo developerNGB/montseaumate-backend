@@ -166,7 +166,11 @@ export const submitReview = async (req, res) => {
         console.log(`[submitReview] Activity logged. Triggering n8n...`);
 
         // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = n8nWebhook || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        const finalWebhook = (n8nWebhook && n8nWebhook.trim()) || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        console.log(`[submitReview] Webhook URL: ${finalWebhook}`);
+        console.log(`[submitReview] Body webhook: ${n8nWebhook}`);
+        console.log(`[submitReview] Env webhook: ${process.env.N8N_REVIEW_FEEDBACK_WEBHOOK}`);
+        
         if (finalWebhook) {
             try {
                 // Get fresh Google Token if possible
@@ -459,11 +463,19 @@ export const submitFeedback = async (req, res) => {
 
         console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
 
-        const reviewFeedbackWebhook = config.n8n_webhook_url || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        const reviewFeedbackWebhook = (config.n8n_webhook_url && config.n8n_webhook_url.trim()) || process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
+        console.log(`[submitFeedback] Webhook URL: ${reviewFeedbackWebhook}`);
+        console.log(`[submitFeedback] Config webhook: ${config.n8n_webhook_url}`);
+        console.log(`[submitFeedback] Env webhook: ${process.env.N8N_REVIEW_FEEDBACK_WEBHOOK}`);
+        
         let n8nResponseData = null;
         let debugStatus = "pending";
 
         // 5. Trigger review-feedback webhook and WAIT for response to drive the UI
+        if (!reviewFeedbackWebhook) {
+            console.error('[submitFeedback] No webhook URL configured!');
+            debugStatus = "error: no webhook url";
+        } else {
         try {
             const n8nRes = await fetch(reviewFeedbackWebhook, {
                 method: 'POST',
@@ -486,9 +498,10 @@ export const submitFeedback = async (req, res) => {
             console.error('[submitFeedback] n8n fetch failed:', e.message);
             debugStatus = "error: " + e.message;
         }
+        }
 
         // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = config.n8n_webhook_url || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
+        const extraWebhook = (config.n8n_webhook_url && config.n8n_webhook_url.trim()) || process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
         if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
             fetch(extraWebhook, {
                 method: 'POST',
