@@ -72,19 +72,38 @@ export const fetchMarketplaceLeads = async (req, res) => {
                 }
 
                 const data = await response.json();
+                console.log(`[fetchMarketplaceLeads] ${marketplaceId} raw response:`, JSON.stringify(data).substring(0, 500));
 
-                // Extract leads from various response formats
+                // Extract leads from various N8N response formats
                 let leads = [];
                 if (Array.isArray(data)) {
+                    // Direct array of leads
                     leads = data;
+                } else if (data.items && Array.isArray(data.items)) {
+                    // N8N splitInBatches output format
+                    leads = data.items.map(item => item.json || item);
                 } else if (data.data && Array.isArray(data.data)) {
                     leads = data.data;
                 } else if (data.leads && Array.isArray(data.leads)) {
                     leads = data.leads;
-                } else if (typeof data === 'object' && data !== null && !data.success === false) {
+                } else if (data.body && Array.isArray(data.body)) {
+                    // Some N8N nodes wrap in body
+                    leads = data.body;
+                } else if (typeof data === 'object' && data !== null && !data.success) {
+                    // Single lead object (but not an error response)
                     leads = [data];
                 }
+                
+                // Clean up any N8N metadata and ensure proper structure
+                leads = leads.filter(lead => lead && typeof lead === 'object').map(lead => {
+                    // If lead has a 'json' property (N8N item format), unwrap it
+                    if (lead.json && typeof lead.json === 'object') {
+                        return lead.json;
+                    }
+                    return lead;
+                });
 
+                console.log(`[fetchMarketplaceLeads] ${marketplaceId} extracted ${leads.length} leads`);
                 return { marketplace: marketplaceId, leads, count: leads.length };
             } catch (err) {
                 console.error(`[fetchMarketplaceLeads] Error fetching ${marketplaceId}:`, err.message);
@@ -114,6 +133,11 @@ export const fetchMarketplaceLeads = async (req, res) => {
                 errors.push({ marketplace: formatMarketplaceName(marketplaceId), error: result.reason?.message || 'Failed' });
             }
         });
+
+        console.log(`[fetchMarketplaceLeads] Total leads collected: ${allLeads.length}`);
+        if (allLeads.length > 0) {
+            console.log(`[fetchMarketplaceLeads] First lead sample:`, JSON.stringify(allLeads[0]).substring(0, 300));
+        }
 
         // Normalize lead data structure
         const normalizedLeads = allLeads.map(lead => ({
