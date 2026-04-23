@@ -266,6 +266,11 @@ const runMigrations = async () => {
         await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_user_id ON marketplace_leads(user_id)');
         await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_source ON marketplace_leads(source)');
         await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_category ON marketplace_leads(category)');
+        // Contact info columns (Apify enrichment)
+        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_name VARCHAR(255)`);
+        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_phone VARCHAR(100)`);
+        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_email VARCHAR(255)`);
+        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS contact_url TEXT`);
         
         console.log('✅ Startup migrations & performance indices verified.');
         
