@@ -219,18 +219,27 @@ app.use((err, req, res, next) => {
 
 // ────────────────────────────────────────────────────────────
 // Startup Migrations: Ensure schema and indices are optimized
+// Run each migration independently — a single failure must never block the rest
+const safeQuery = async (label, sql) => {
+    try {
+        await pool.query(sql);
+    } catch (err) {
+        console.error(`⚠️  Migration skipped [${label}]: ${err.message}`);
+    }
+};
+
 const runMigrations = async () => {
     try {
-        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)');
-        await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)');
-        await pool.query('CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())');
+        await safeQuery('users.phone',                  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
+        await safeQuery('users.weekly_reports_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('idx_leads_user_id',            `CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)`);
+        await safeQuery('idx_activity_logs_user_id',    `CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)`);
+        await safeQuery('idx_feedback_user_id',         `CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)`);
+        await safeQuery('idx_integrations_user_id',     `CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)`);
+        await safeQuery('translations_table',           `CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())`);
         
-        // Create marketplace_leads table
-        await pool.query(`
+        // Create marketplace_leads table + contact info columns (Apify enrichment)
+        await safeQuery('marketplace_leads_table', `
             CREATE TABLE IF NOT EXISTS marketplace_leads (
                 id SERIAL PRIMARY KEY,
                 user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -263,15 +272,18 @@ const runMigrations = async () => {
                 UNIQUE(user_id, external_id)
             )
         `);
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_user_id ON marketplace_leads(user_id)');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_source ON marketplace_leads(source)');
-        await pool.query('CREATE INDEX IF NOT EXISTS idx_marketplace_leads_category ON marketplace_leads(category)');
-        // Contact info columns (Apify enrichment)
-        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_name VARCHAR(255)`);
-        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_phone VARCHAR(100)`);
-        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_email VARCHAR(255)`);
-        await pool.query(`ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS contact_url TEXT`);
-        
+        await safeQuery('idx_marketplace_leads_user_id',  `CREATE INDEX IF NOT EXISTS idx_marketplace_leads_user_id ON marketplace_leads(user_id)`);
+        await safeQuery('idx_marketplace_leads_source',   `CREATE INDEX IF NOT EXISTS idx_marketplace_leads_source ON marketplace_leads(source)`);
+        await safeQuery('idx_marketplace_leads_category', `CREATE INDEX IF NOT EXISTS idx_marketplace_leads_category ON marketplace_leads(category)`);
+        await safeQuery('marketplace_leads.seller_name',  `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_name VARCHAR(255)`);
+        await safeQuery('marketplace_leads.seller_phone', `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_phone VARCHAR(100)`);
+        await safeQuery('marketplace_leads.seller_email', `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_email VARCHAR(255)`);
+        await safeQuery('marketplace_leads.contact_url',  `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS contact_url TEXT`);
+
+        // leads table expansion
+        await safeQuery('leads.followup_step_index', `ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
+        await safeQuery('leads.last_followup_at',    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
+
         console.log('✅ Startup migrations & performance indices verified.');
         
         // Finalize Startup
