@@ -184,15 +184,18 @@ const normaliseIdealista = (item) => ({
     price:        item.price ?? null,
     currency:     'EUR',
     location:     [item.district, item.municipality, item.province].filter(Boolean).join(', ') || item.address || null,
-    url:          item.url ? `https://www.idealista.com${item.url}` : null,
+    // item.url is already a full URL — avoid double-prepending the domain
+    url:          item.url
+                    ? (item.url.startsWith('http') ? item.url : `https://www.idealista.com${item.url}`)
+                    : null,
     image:        item.thumbnail || item.multimedia?.images?.[0]?.url || null,
     description:  item.description || null,
     fetchedAt:    new Date().toISOString(),
     size:         item.size ?? null,
     rooms:        item.rooms ?? null,
     floor:        item.floor?.toString() ?? null,
-    seller_name:  pick(item.agencyName, item.contactInfo?.agencyName, item.suggestedTexts?.title),
-    seller_phone: pickPhone(item.contactInfo?.phone1 || item.phone || item.contactInfo?.phones),
+    seller_name:  pick(item.contactInfo?.commercialName, item.contactInfo?.agencyName, item.agencyName, item.suggestedTexts?.title),
+    seller_phone: pickPhone(item.contactInfo?.phone1 || item.contactInfo?.phone || item.phone || item.contactInfo?.phones),
     seller_email: pick(item.contactInfo?.email, item.email),
     contact_url:  item.contactInfo?.url || null,
     rawData:      item,
