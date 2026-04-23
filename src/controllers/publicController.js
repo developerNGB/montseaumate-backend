@@ -611,11 +611,12 @@ export const submitLead = async (req, res) => {
         const current_date = new Date().toISOString();
 
         // 1. Save Lead to DB
-        await pool.query(
+        const leadInsert = await pool.query(
             `INSERT INTO leads (user_id, full_name, email, phone, message, filtering_responses, source, consent_given, marketing_consent, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'Public Link', $7, $8, $9)`,
+             VALUES ($1, $2, $3, $4, $5, $6, 'Public Link', $7, $8, $9) RETURNING id`,
             [user_id, full_name, email, phone, message || '', JSON.stringify(filtering_responses || {}), !!consent_given, !!marketing_consent, current_date]
         );
+        const lead_id = leadInsert.rows[0].id;
 
         // 2. Log Activity
         await pool.query(
@@ -695,6 +696,66 @@ export const submitLead = async (req, res) => {
                         whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg)
                             .then(() => console.log(`[WA-Customer] ✅ Sent`))
                             .catch(e => console.error(`[WA-Customer] ❌ ${e.message}`));
+                    }
+
+                    // C. INSTANT: Fire follow-up sequence step 0 immediately (bypass cron delay)
+                    if (phone) {
+                        try {
+                            const settingsRes = await pool.query(
+                                `SELECT followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
+                                [user_id]
+                            );
+                            const settings = settingsRes.rows[0];
+                            const sequence = Array.isArray(settings?.followup_sequence)
+                                ? settings.followup_sequence
+                                : (typeof settings?.followup_sequence === 'string' ? JSON.parse(settings.followup_sequence) : []);
+
+                            if (settings?.is_active && sequence.length > 0) {
+                                // Atomically claim step 0 to prevent race with cron
+                                const claim = await pool.query(
+                                    `UPDATE leads SET followup_status = 'processing', updated_at = NOW()
+                                     WHERE id = $1 AND (followup_status IS NULL OR followup_status != 'processing')
+                                     RETURNING id`,
+                                    [lead_id]
+                                );
+
+                                if (claim.rowCount > 0) {
+                                    const sessionStatus = whatsappService.getSessionStatus(user_id);
+                                    if (sessionStatus.status === 'connected') {
+                                        const step0 = sequence[0];
+                                        const step0Msg = injectPlaceholders(step0.message || '', {
+                                            name: full_name,
+                                            link: `${baseUrl}/r/${automation_id}`,
+                                            number: whatsappAuth.account_id || ''
+                                        });
+                                        await whatsappService.sendWhatsAppMessage(user_id, phone, step0Msg);
+                                        await pool.query(
+                                            `UPDATE leads SET followup_step_index = 1, last_followup_at = NOW(),
+                                             lead_status = 'Contacted', followup_status = 'pending', updated_at = NOW()
+                                             WHERE id = $1`,
+                                            [lead_id]
+                                        );
+                                        console.log(`[WA-Step0] ✅ First follow-up step sent instantly to ${phone}`);
+                                    } else {
+                                        // Session not ready — release claim so cron handles it
+                                        await pool.query(
+                                            `UPDATE leads SET followup_status = NULL, updated_at = NOW() WHERE id = $1`,
+                                            [lead_id]
+                                        );
+                                        console.log(`[WA-Step0] ⚠️ Session ${sessionStatus.status} — cron will handle step 0`);
+                                    }
+                                }
+                            }
+                        } catch (step0Err) {
+                            console.error(`[WA-Step0] ❌ Instant step 0 failed:`, step0Err.message);
+                            // Release claim so cron can retry
+                            try {
+                                await pool.query(
+                                    `UPDATE leads SET followup_status = NULL, updated_at = NOW() WHERE id = $1`,
+                                    [lead_id]
+                                );
+                            } catch (_) {}
+                        }
                     }
                 } else {
                     console.log(`[WA-Native] ⚠️ Not active. Token: "${whatsappAuth.access_token}"`);

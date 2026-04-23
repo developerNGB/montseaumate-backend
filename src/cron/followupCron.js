@@ -180,7 +180,7 @@ const startFollowupCron = () => {
         } catch (err) {
             console.error('[FollowupCron] ❌ Poll loop error:', err.message);
         }
-    }, 60 * 1000); // Check every minute
+    }, 10 * 1000); // Check every 10s — fast fallback if instant send missed
 };
 
 export default startFollowupCron;
