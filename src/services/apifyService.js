@@ -1,7 +1,6 @@
 import fetch from 'node-fetch';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
-const TOKEN = process.env.APIFY_API_TOKEN;
 
 // Actor IDs for each marketplace
 const ACTORS = {
@@ -30,6 +29,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
  * Returns normalized lead array with contact info.
  */
 export const runApifyScraper = async (marketplaceId, customInput = {}) => {
+    const TOKEN = process.env.APIFY_API_TOKEN;
     if (!TOKEN) throw new Error('APIFY_API_TOKEN not set');
 
     const actorId = ACTORS[marketplaceId];
