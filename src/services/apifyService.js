@@ -1,131 +1,290 @@
+/**
+ * apifyService.js
+ * ────────────────────────────────────────────────────────────
+ * All marketplace scraping runs through Apify actors.
+ * Actor IDs are overridable via environment variables so a
+ * replacement actor can be swapped without a code deploy.
+ *
+ * Contact-info availability by platform:
+ *   Real estate (Idealista, Fotocasa, Habitaclia, Pisos.com) → phone ✓
+ *   Cars        (Coches.net, AutoScout24)                    → phone ✓
+ *   Jobs        (InfoJobs)                                   → company name ✓, email rare
+ *   P2P         (Wallapop, Vinted)                           → contact_url only (no direct phone/email)
+ */
+
 import fetch from 'node-fetch';
 
 const APIFY_BASE = 'https://api.apify.com/v2';
+const POLL_MS    = 8_000;          // poll interval
+const MAX_MS     = 8 * 60_000;     // 8-minute hard cap per actor run
+const ITEMS_CAP  = 50;             // max items fetched from dataset
 
-// Actor IDs for each marketplace
-const ACTORS = {
-    idealista:  'misceres/idealista-scraper',
-    autoscout:  'epctex/autoscout24-scraper',
+// ── Actor registry ────────────────────────────────────────────────────────
+// Each ID can be overridden via process.env so ops can swap without redeploy.
+const ACTOR_IDS = {
+    idealista:  process.env.APIFY_ACTOR_IDEALISTA   || 'misceres/idealista-scraper',
+    fotocasa:   process.env.APIFY_ACTOR_FOTOCASA    || 'epctex/fotocasa-scraper',
+    habitaclia: process.env.APIFY_ACTOR_HABITACLIA  || 'epctex/habitaclia-scraper',
+    pisos:      process.env.APIFY_ACTOR_PISOS       || 'epctex/pisos-scraper',
+    coches_net: process.env.APIFY_ACTOR_COCHES      || 'epctex/coches-net-scraper',
+    autoscout:  process.env.APIFY_ACTOR_AUTOSCOUT   || 'epctex/autoscout24-scraper',
+    infojobs:   process.env.APIFY_ACTOR_INFOJOBS    || 'epctex/infojobs-scraper',
+    wallapop:   process.env.APIFY_ACTOR_WALLAPOP    || 'tri_angle/wallapop-scraper',
+    vinted:     process.env.APIFY_ACTOR_VINTED      || 'epctex/vinted-scraper',
 };
 
-// Default search inputs per marketplace
+// ── Default actor inputs ──────────────────────────────────────────────────
 const DEFAULT_INPUTS = {
     idealista: {
-        startUrls: [{ url: 'https://www.idealista.com/venta-viviendas/madrid-madrid/' }],
-        maxItems: 25,
-        proxy: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
+        startUrls:  [{ url: 'https://www.idealista.com/venta-viviendas/madrid-madrid/' }],
+        maxItems:   25,
+        proxy:      { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
+    },
+    fotocasa: {
+        startUrls:  [{ url: 'https://www.fotocasa.es/es/comprar/viviendas/madrid-capital/todas-las-zonas/l' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
+    },
+    habitaclia: {
+        startUrls:  [{ url: 'https://www.habitaclia.com/comprar-en-barcelona.htm' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
+    },
+    pisos: {
+        startUrls:  [{ url: 'https://www.pisos.com/pisos/madrid-capital/' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
+    },
+    coches_net: {
+        startUrls:  [{ url: 'https://www.coches.net/segunda-mano/' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
     },
     autoscout: {
-        startUrls: [{ url: 'https://www.autoscout24.es/lst' }],
+        startUrls:  [{ url: 'https://www.autoscout24.es/lst' }],
         maxResults: 25,
-        proxy: { useApifyProxy: true },
+        proxy:      { useApifyProxy: true },
+    },
+    infojobs: {
+        startUrls:  [{ url: 'https://www.infojobs.net/ofertas-trabajo.xhtml' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
+    },
+    wallapop: {
+        startUrls:  [{ url: 'https://es.wallapop.com/app/search?keywords=&latitude=40.41&longitude=-3.70&dist=50' }],
+        maxResults: 25,
+        proxy:      { useApifyProxy: true },
+    },
+    vinted: {
+        startUrls:  [{ url: 'https://www.vinted.es/catalog' }],
+        maxItems:   25,
+        proxy:      { useApifyProxy: true },
     },
 };
+
+// ── Shared run + poll + fetch ─────────────────────────────────────────────
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-/**
- * Start an Apify actor run and wait for it to finish (poll-based).
- * Returns normalized lead array with contact info.
- */
 export const runApifyScraper = async (marketplaceId, customInput = {}) => {
     const TOKEN = process.env.APIFY_API_TOKEN;
-    if (!TOKEN) throw new Error('APIFY_API_TOKEN not set');
+    if (!TOKEN) throw new Error('APIFY_API_TOKEN not configured');
 
-    const actorId = ACTORS[marketplaceId];
+    const actorId = ACTOR_IDS[marketplaceId];
     if (!actorId) throw new Error(`No Apify actor configured for: ${marketplaceId}`);
 
     const input = { ...DEFAULT_INPUTS[marketplaceId], ...customInput };
 
-    // 1. Start run
+    // 1 ▸ Start run
     const startRes = await fetch(
         `${APIFY_BASE}/acts/${encodeURIComponent(actorId)}/runs?token=${TOKEN}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(input),
-        }
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }
     );
-    if (!startRes.ok) {
-        const err = await startRes.text();
-        throw new Error(`Failed to start Apify actor (${startRes.status}): ${err}`);
-    }
-    const { data: runData } = await startRes.json();
-    const runId = runData.id;
-    const datasetId = runData.defaultDatasetId;
-    console.log(`[Apify] ▶ ${marketplaceId} run started: ${runId}`);
 
-    // 2. Poll until finished (max 5 min)
-    const POLL_INTERVAL = 8000;
-    const MAX_WAIT = 5 * 60 * 1000;
-    const deadline = Date.now() + MAX_WAIT;
+    if (!startRes.ok) {
+        const body = await startRes.text();
+        throw new Error(`Actor start failed (${startRes.status}): ${body.substring(0, 200)}`);
+    }
+
+    const { data: run } = await startRes.json();
+    const { id: runId, defaultDatasetId: datasetId } = run;
+    console.log(`[Apify] ▶ ${marketplaceId} | run=${runId} | actor=${actorId}`);
+
+    // 2 ▸ Poll until SUCCEEDED or terminal failure
+    const deadline = Date.now() + MAX_MS;
+    let lastStatus = run.status;
 
     while (Date.now() < deadline) {
-        await sleep(POLL_INTERVAL);
-        const statusRes = await fetch(
-            `${APIFY_BASE}/actor-runs/${runId}?token=${TOKEN}`
-        );
-        if (!statusRes.ok) continue;
-        const { data: runStatus } = await statusRes.json();
-        const status = runStatus.status;
-        console.log(`[Apify] ${marketplaceId} run ${runId} status: ${status}`);
+        await sleep(POLL_MS);
 
-        if (status === 'SUCCEEDED') break;
-        if (['FAILED', 'ABORTED', 'TIMED-OUT'].includes(status)) {
-            throw new Error(`Apify run ${status} for ${marketplaceId}`);
+        const statusRes = await fetch(`${APIFY_BASE}/actor-runs/${runId}?token=${TOKEN}`).catch(() => null);
+        if (!statusRes?.ok) continue;
+
+        const { data: runStatus } = await statusRes.json();
+        lastStatus = runStatus.status;
+        console.log(`[Apify] ${marketplaceId} status → ${lastStatus}`);
+
+        if (lastStatus === 'SUCCEEDED') break;
+        if (['FAILED', 'ABORTED', 'TIMED-OUT'].includes(lastStatus)) {
+            throw new Error(`Actor run ${lastStatus} for ${marketplaceId}`);
         }
     }
 
-    // 3. Fetch dataset items
-    const dataRes = await fetch(
-        `${APIFY_BASE}/datasets/${datasetId}/items?token=${TOKEN}&clean=true&limit=100`
-    );
-    if (!dataRes.ok) throw new Error(`Failed to fetch dataset (${dataRes.status})`);
-    const items = await dataRes.json();
-
-    console.log(`[Apify] ${marketplaceId} — ${items.length} items fetched from dataset`);
-    return normalizeItems(marketplaceId, items);
-};
-
-// ── Normalizers per marketplace ────────────────────────────────────────────
-
-const normalizeItems = (marketplaceId, items) => {
-    switch (marketplaceId) {
-        case 'idealista':  return items.map(normalizeIdealista);
-        case 'autoscout':  return items.map(normalizeAutoscout);
-        default:           return items;
+    if (lastStatus !== 'SUCCEEDED') {
+        throw new Error(`Actor timed out after ${MAX_MS / 60000}min for ${marketplaceId}`);
     }
+
+    // 3 ▸ Fetch dataset
+    const dataRes = await fetch(
+        `${APIFY_BASE}/datasets/${datasetId}/items?token=${TOKEN}&clean=true&limit=${ITEMS_CAP}`
+    );
+    if (!dataRes.ok) throw new Error(`Dataset fetch failed (${dataRes.status})`);
+
+    const items = await dataRes.json();
+    console.log(`[Apify] ${marketplaceId} → ${items.length} items`);
+    return normalise(marketplaceId, items);
 };
 
-const normalizeIdealista = (item) => ({
-    id:           item.propertyCode || item.id || `id_${Date.now()}_${Math.random().toString(36).substr(2,6)}`,
+// ── Per-platform normalisers ──────────────────────────────────────────────
+
+const normalise = (id, items) => {
+    const fn = NORMALISERS[id] || normaliseGeneric;
+    return items.map(fn);
+};
+
+const uid = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+const pickPhone = (v) => {
+    if (!v) return null;
+    if (typeof v === 'string') return v.trim() || null;
+    if (Array.isArray(v))      return v[0]?.toString().trim() || null;
+    if (typeof v === 'object') return v.number || v.value || v.phone || null;
+    return String(v).trim() || null;
+};
+
+const pick = (...vals) => vals.find(v => v !== undefined && v !== null && v !== '') ?? null;
+
+// ── Real estate ──────────────────────────────────────────────────────────
+
+const normaliseIdealista = (item) => ({
+    id:           pick(item.propertyCode, item.id) || uid('id'),
     source:       'idealista',
     category:     'real_estate',
-    title:        item.suggestedTexts?.subtitle || item.title || item.description?.substring(0, 80) || 'Property',
+    title:        pick(item.suggestedTexts?.subtitle, item.title, item.description?.slice(0, 80)) || 'Property',
     price:        item.price ?? null,
     currency:     'EUR',
     location:     [item.district, item.municipality, item.province].filter(Boolean).join(', ') || item.address || null,
     url:          item.url ? `https://www.idealista.com${item.url}` : null,
-    image:        item.thumbnail || (item.multimedia?.images?.[0]?.url) || null,
+    image:        item.thumbnail || item.multimedia?.images?.[0]?.url || null,
     description:  item.description || null,
     fetchedAt:    new Date().toISOString(),
-    // property fields
     size:         item.size ?? null,
     rooms:        item.rooms ?? null,
     floor:        item.floor?.toString() ?? null,
-    // contact fields — key addition
-    seller_name:  item.agencyName || item.contactInfo?.agencyName || item.suggestedTexts?.title || null,
-    seller_phone: extractPhone(item.contactInfo?.phone1 || item.phone || item.contactInfo?.phones),
-    seller_email: item.contactInfo?.email || item.email || null,
+    seller_name:  pick(item.agencyName, item.contactInfo?.agencyName, item.suggestedTexts?.title),
+    seller_phone: pickPhone(item.contactInfo?.phone1 || item.phone || item.contactInfo?.phones),
+    seller_email: pick(item.contactInfo?.email, item.email),
     contact_url:  item.contactInfo?.url || null,
     rawData:      item,
 });
 
-const normalizeAutoscout = (item) => ({
-    id:           item.id || item.vehicleId || `as_${Date.now()}_${Math.random().toString(36).substr(2,6)}`,
+const normaliseFotocasa = (item) => ({
+    id:           pick(item.id, item.propertyId) || uid('fc'),
+    source:       'fotocasa',
+    category:     'real_estate',
+    title:        pick(item.title, item.name, item.subtitle) || 'Property',
+    price:        item.price?.value ?? item.price ?? null,
+    currency:     'EUR',
+    location:     pick(item.address, item.location, item.municipality) || null,
+    url:          item.url || item.link || null,
+    image:        item.multimedia?.[0]?.url || item.image || item.thumbnail || null,
+    description:  item.description || item.features?.join(', ') || null,
+    fetchedAt:    new Date().toISOString(),
+    size:         item.surface ?? item.size ?? null,
+    rooms:        item.rooms ?? item.bedrooms ?? null,
+    floor:        item.floor?.toString() ?? null,
+    seller_name:  pick(item.agency?.name, item.advertiser?.name, item.contactName),
+    seller_phone: pickPhone(item.agency?.phone || item.advertiser?.phone || item.phone),
+    seller_email: pick(item.agency?.email, item.advertiser?.email, item.email),
+    contact_url:  item.agency?.url || item.advertiser?.url || null,
+    rawData:      item,
+});
+
+const normaliseHabitaclia = (item) => ({
+    id:           pick(item.id, item.code, item.ref) || uid('hb'),
+    source:       'habitaclia',
+    category:     'real_estate',
+    title:        pick(item.title, item.name, item.subtitle) || 'Property',
+    price:        item.price ?? null,
+    currency:     'EUR',
+    location:     pick(item.location, item.city, item.area, item.municipality) || null,
+    url:          item.url || item.link || null,
+    image:        item.image || item.thumbnail || item.images?.[0] || null,
+    description:  item.description || null,
+    fetchedAt:    new Date().toISOString(),
+    size:         item.surface ?? item.size ?? null,
+    rooms:        item.rooms ?? item.bedrooms ?? null,
+    floor:        item.floor?.toString() ?? null,
+    seller_name:  pick(item.agency, item.agencyName, item.contactName, item.advertiser),
+    seller_phone: pickPhone(item.phone || item.contactPhone || item.agencyPhone),
+    seller_email: pick(item.email, item.contactEmail),
+    contact_url:  item.agencyUrl || item.contactUrl || null,
+    rawData:      item,
+});
+
+const normalisePisos = (item) => ({
+    id:           pick(item.id, item.reference, item.ref) || uid('ps'),
+    source:       'pisos',
+    category:     'real_estate',
+    title:        pick(item.title, item.name) || 'Property',
+    price:        item.price ?? null,
+    currency:     'EUR',
+    location:     pick(item.location, item.district, item.city) || null,
+    url:          item.url || item.link || null,
+    image:        item.image || item.thumbnail || item.photos?.[0] || null,
+    description:  item.description || null,
+    fetchedAt:    new Date().toISOString(),
+    size:         item.surface ?? item.size ?? null,
+    rooms:        item.rooms ?? item.bedrooms ?? null,
+    floor:        item.floor?.toString() ?? null,
+    seller_name:  pick(item.agency, item.agencyName, item.advertiserName),
+    seller_phone: pickPhone(item.phone || item.advertiserPhone || item.agencyPhone),
+    seller_email: pick(item.email, item.advertiserEmail),
+    contact_url:  item.advertiserUrl || null,
+    rawData:      item,
+});
+
+// ── Vehicles ──────────────────────────────────────────────────────────────
+
+const normaliseCochesNet = (item) => ({
+    id:           pick(item.id, item.vehicleId, item.adId) || uid('cn'),
+    source:       'coches_net',
+    category:     'vehicles',
+    title:        [item.make || item.brand, item.model, item.version].filter(Boolean).join(' ') || pick(item.title, item.name) || 'Vehicle',
+    price:        item.price?.value ?? item.price ?? null,
+    currency:     'EUR',
+    location:     pick(item.location?.city, item.location?.province, item.province, item.city) || null,
+    url:          item.url || item.link || null,
+    image:        item.images?.[0] || item.image || item.thumbnail || null,
+    description:  item.description || null,
+    fetchedAt:    new Date().toISOString(),
+    brand:        pick(item.make, item.brand),
+    model:        item.model || null,
+    year:         item.year ? parseInt(item.year) : null,
+    mileage:      item.km ?? item.mileage ?? null,
+    fuel:         item.fuel || item.fuelType || null,
+    seller_name:  pick(item.dealer?.name, item.seller?.name, item.advertiserName, item.dealerName),
+    seller_phone: pickPhone(item.dealer?.phone || item.seller?.phone || item.phone),
+    seller_email: pick(item.dealer?.email, item.seller?.email, item.email),
+    contact_url:  item.dealer?.url || item.seller?.url || null,
+    rawData:      item,
+});
+
+const normaliseAutoscout = (item) => ({
+    id:           pick(item.id, item.vehicleId, item.guid) || uid('as'),
     source:       'autoscout',
     category:     'vehicles',
-    title:        [item.make, item.model, item.version].filter(Boolean).join(' ') || item.title || 'Vehicle',
+    title:        [item.make, item.model, item.version].filter(Boolean).join(' ') || pick(item.title) || 'Vehicle',
     price:        item.price?.value ?? item.price ?? null,
     currency:     item.price?.currency || 'EUR',
     location:     [item.location?.city, item.location?.country].filter(Boolean).join(', ') || null,
@@ -133,25 +292,107 @@ const normalizeAutoscout = (item) => ({
     image:        item.images?.[0] || item.image || null,
     description:  item.description || null,
     fetchedAt:    new Date().toISOString(),
-    // vehicle fields
-    brand:        item.make || item.brand || null,
+    brand:        pick(item.make, item.brand),
     model:        item.model || null,
     year:         item.firstRegistration ? parseInt(item.firstRegistration) : (item.year ?? null),
     mileage:      item.mileage?.value ?? item.mileage ?? null,
     fuel:         item.fuel || item.fuelType || null,
-    // contact fields
-    seller_name:  item.seller?.name || item.dealer?.name || item.sellerName || null,
-    seller_phone: extractPhone(item.seller?.phone || item.dealer?.phone || item.phone),
-    seller_email: item.seller?.email || item.dealer?.email || item.email || null,
+    seller_name:  pick(item.seller?.name, item.dealer?.name, item.sellerName),
+    seller_phone: pickPhone(item.seller?.phone || item.dealer?.phone || item.phone),
+    seller_email: pick(item.seller?.email, item.dealer?.email, item.email),
     contact_url:  item.seller?.url || item.dealer?.url || null,
     rawData:      item,
 });
 
-// Handles phone as string, array, or object
-const extractPhone = (phone) => {
-    if (!phone) return null;
-    if (typeof phone === 'string') return phone.trim() || null;
-    if (Array.isArray(phone)) return phone[0]?.toString().trim() || null;
-    if (typeof phone === 'object') return phone.number || phone.value || phone.phone || null;
-    return String(phone).trim() || null;
+// ── Jobs ──────────────────────────────────────────────────────────────────
+
+const normaliseInfojobs = (item) => ({
+    id:           pick(item.id, item.jobId, item.offerId) || uid('ij'),
+    source:       'infojobs',
+    category:     'jobs',
+    title:        pick(item.title, item.position, item.jobTitle) || 'Job Offer',
+    price:        null,     // use salary field instead
+    currency:     'EUR',
+    location:     pick(item.location, item.city, item.province) || null,
+    url:          item.url || item.link || null,
+    image:        item.company?.logo || item.logo || null,
+    description:  item.description || item.requirements || null,
+    fetchedAt:    new Date().toISOString(),
+    company:      pick(item.company?.name, item.companyName, item.employer),
+    salary:       pick(item.salary, item.salaryDescription, item.salaryRange),
+    contract:     pick(item.contractType, item.contract, item.jobType),
+    remote:       item.remote ?? item.telecommuting ?? false,
+    seller_name:  pick(item.company?.name, item.companyName, item.recruiterName),
+    seller_phone: pickPhone(item.company?.phone || item.recruiterPhone || item.phone),
+    seller_email: pick(item.company?.email, item.recruiterEmail, item.email),
+    contact_url:  item.company?.url || item.recruiterUrl || null,
+    rawData:      item,
+});
+
+// ── P2P (no direct phone/email — platform messaging only) ────────────────
+
+const normaliseWallapop = (item) => ({
+    id:           pick(item.id, item.itemId) || uid('wp'),
+    source:       'wallapop',
+    category:     'general',
+    title:        pick(item.title, item.name) || 'Item',
+    price:        item.price ?? item.salePrice ?? null,
+    currency:     item.currency || 'EUR',
+    location:     pick(item.location?.city, item.location?.postalCode, item.city) || null,
+    url:          item.url || item.webLink || null,
+    image:        item.images?.[0]?.medium || item.image || item.thumbnail || null,
+    description:  item.description || null,
+    fetchedAt:    new Date().toISOString(),
+    seller_name:  pick(item.seller?.username, item.user?.name, item.sellerName),
+    seller_phone: null,   // Wallapop hides contact info behind in-app messaging
+    seller_email: null,
+    contact_url:  item.seller?.url || item.user?.profileUrl || null,
+    rawData:      item,
+});
+
+const normaliseVinted = (item) => ({
+    id:           pick(item.id, item.itemId) || uid('vt'),
+    source:       'vinted',
+    category:     'clothes',
+    title:        pick(item.title, item.name) || 'Item',
+    price:        item.price ?? null,
+    currency:     item.currency || 'EUR',
+    location:     pick(item.city, item.country) || null,
+    url:          item.url || null,
+    image:        item.photos?.[0]?.url || item.image || item.thumbnail || null,
+    description:  item.description || item.brand || null,
+    fetchedAt:    new Date().toISOString(),
+    seller_name:  pick(item.seller?.login, item.user?.login, item.sellerName),
+    seller_phone: null,   // Vinted hides contact info behind in-app messaging
+    seller_email: null,
+    contact_url:  item.seller?.profileUrl || item.user?.profileUrl || null,
+    rawData:      item,
+});
+
+const normaliseGeneric = (item) => ({
+    id:           pick(item.id) || uid('gn'),
+    source:       item.source || 'unknown',
+    category:     item.category || 'general',
+    title:        pick(item.title, item.name) || 'Listing',
+    price:        item.price ?? null,
+    currency:     item.currency || 'EUR',
+    location:     item.location || null,
+    url:          item.url || null,
+    image:        item.image || item.thumbnail || null,
+    description:  item.description || null,
+    fetchedAt:    new Date().toISOString(),
+    seller_name:  null, seller_phone: null, seller_email: null, contact_url: null,
+    rawData:      item,
+});
+
+const NORMALISERS = {
+    idealista:  normaliseIdealista,
+    fotocasa:   normaliseFotocasa,
+    habitaclia: normaliseHabitaclia,
+    pisos:      normalisePisos,
+    coches_net: normaliseCochesNet,
+    autoscout:  normaliseAutoscout,
+    infojobs:   normaliseInfojobs,
+    wallapop:   normaliseWallapop,
+    vinted:     normaliseVinted,
 };
