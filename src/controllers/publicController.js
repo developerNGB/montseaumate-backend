@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
-import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { getValidGoogleToken, getValidGoogleTokens } from '../utils/googleAuth.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
 import fetch from 'node-fetch';
 import * as whatsappService from '../services/whatsappService.js';
@@ -178,30 +178,18 @@ export const submitReview = async (req, res) => {
         
         if (finalWebhook) {
             try {
-                // Get fresh Google Token if possible
-                const freshGoogleToken = await getValidGoogleToken(config.user_id);
+                // Get fresh Google tokens (refreshes if expired, captures rotated refresh token)
+                const { access_token: googleAccessToken, refresh_token: googleRefreshToken } =
+                    await getValidGoogleTokens(config.user_id);
 
-                // Fetch current integrations to get WhatsApp token and backup Google tokens
+                // Fetch WhatsApp integration tokens
                 const integrationsResult = await pool.query(
-                    `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1`,
+                    `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
                     [config.user_id]
                 );
+                const whatsappAuth = integrationsResult.rows[0] || {};
 
-                const integrations = integrationsResult.rows.reduce((acc, curr) => {
-                    acc[curr.provider] = {
-                        access_token: curr.access_token,
-                        refresh_token: curr.refresh_token
-                    };
-                    return acc;
-                }, {});
-
-                const googleAuth = integrations['google'] || {};
-                const whatsappAuth = integrations['whatsapp'] || {};
-
-                // Use the fresh token if we got one, otherwise use the stored one
-                const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
-
-                console.log(`[submitReview] n8n fetch initiated for ${finalWebhook}`);
+                console.log(`[submitReview] n8n fetch initiated for ${finalWebhook} (google token fresh: ${!!googleAccessToken})`);
                 const n8nRes = await fetch(finalWebhook, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -212,11 +200,10 @@ export const submitReview = async (req, res) => {
                         automation_id,
                         google_review_url: config.google_review_url,
                         notification_email: config.notification_email,
-                        // Credentials for n8n to act on behalf of user
                         client_id: process.env.GOOGLE_CLIENT_ID,
                         client_secret: process.env.GOOGLE_CLIENT_SECRET,
-                        access_token: currentGoogleAccessToken || null,
-                        refresh_token: googleAuth.refresh_token || null,
+                        access_token: googleAccessToken || null,
+                        refresh_token: googleRefreshToken || null,
                         whatsapp_access_token: whatsappAuth.access_token || null,
                         whatsapp_refresh_token: whatsappAuth.refresh_token || null,
                     })
@@ -388,11 +375,13 @@ export const submitFeedback = async (req, res) => {
         let integrations = {};
 
         try {
-            // Get fresh Google Token
-            currentGoogleAccessToken = await getValidGoogleToken(config.user_id);
+            // Get fresh Google tokens in one call (refreshes if expired, captures token rotation)
+            const googleTokens = await getValidGoogleTokens(config.user_id);
+            currentGoogleAccessToken = googleTokens.access_token;
+            googleRefreshToken = googleTokens.refresh_token;
 
             const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
+                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1 AND provider != 'google'`,
                 [config.user_id]
             );
 
@@ -405,7 +394,6 @@ export const submitFeedback = async (req, res) => {
                 return acc;
             }, {});
 
-            googleRefreshToken = integrations['google']?.refresh_token || null;
             whatsappAccessToken = integrations['whatsapp']?.access_token || null;
             whatsappRefreshToken = integrations['whatsapp']?.refresh_token || null;
         } catch (tokenErr) {
@@ -454,6 +442,9 @@ export const submitFeedback = async (req, res) => {
             client_secret: process.env.GOOGLE_CLIENT_SECRET,
             access_token: currentGoogleAccessToken || null,
             refresh_token: googleRefreshToken || null,
+            // Debug info
+            _debug_token_status: currentGoogleAccessToken ? 'valid' : 'null_or_failed',
+            _debug_client_id_set: !!process.env.GOOGLE_CLIENT_ID,
             whatsapp_access_token: whatsappAccessToken || null,
             whatsapp_refresh_token: whatsappRefreshToken || null,
             // SMTP credentials
