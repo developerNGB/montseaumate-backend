@@ -9,7 +9,7 @@ import { runApifyScraper } from '../services/apifyService.js';
 
 // Whitelist — only these IDs are accepted from the client
 const ALLOWED = new Set([
-    'idealista', 'fotocasa', 'habitaclia', 'pisos',
+    'idealista', 'fotocasa', 'pisos',
     'coches_net', 'autoscout',
     'infojobs',
     'wallapop', 'vinted',
@@ -18,7 +18,6 @@ const ALLOWED = new Set([
 const DISPLAY_NAMES = {
     idealista:  'Idealista',
     fotocasa:   'Fotocasa',
-    habitaclia: 'Habitaclia',
     pisos:      'Pisos.com',
     coches_net: 'Coches.net',
     autoscout:  'AutoScout24',

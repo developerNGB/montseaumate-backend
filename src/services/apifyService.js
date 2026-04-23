@@ -6,10 +6,15 @@
  * replacement actor can be swapped without a code deploy.
  *
  * Contact-info availability by platform:
- *   Real estate (Idealista, Fotocasa, Habitaclia, Pisos.com) → phone ✓
- *   Cars        (Coches.net, AutoScout24)                    → phone ✓
- *   Jobs        (InfoJobs)                                   → company name ✓, email rare
- *   P2P         (Wallapop, Vinted)                           → contact_url only (no direct phone/email)
+ *   Real estate (Idealista, Fotocasa, Pisos.com) → phone ✓
+ *   Cars        (Coches.net, AutoScout24)         → phone ✓
+ *   Jobs        (InfoJobs)                        → company name ✓, email rare
+ *   P2P         (Wallapop, Vinted)                → contact_url only (no direct phone/email)
+ *
+ * Verified actor IDs (April 2026) — all confirmed live on Apify Store:
+ *   crawlerbros/idealista-scraper · gio21/fotocasa-scraper · gio21/pisos-scraper
+ *   ivanvs/coches-net-scraper · ivanvs/autoscout-scraper · crawlerbros/infojobs-scraper
+ *   igolaizola/wallapop-scraper · automation-lab/vinted-scraper
  */
 
 import fetch from 'node-fetch';
@@ -22,63 +27,68 @@ const ITEMS_CAP  = 50;             // max items fetched from dataset
 // ── Actor registry ────────────────────────────────────────────────────────
 // Each ID can be overridden via process.env so ops can swap without redeploy.
 const ACTOR_IDS = {
-    idealista:  process.env.APIFY_ACTOR_IDEALISTA   || 'misceres/idealista-scraper',
-    fotocasa:   process.env.APIFY_ACTOR_FOTOCASA    || 'epctex/fotocasa-scraper',
-    habitaclia: process.env.APIFY_ACTOR_HABITACLIA  || 'epctex/habitaclia-scraper',
-    pisos:      process.env.APIFY_ACTOR_PISOS       || 'epctex/pisos-scraper',
-    coches_net: process.env.APIFY_ACTOR_COCHES      || 'epctex/coches-net-scraper',
-    autoscout:  process.env.APIFY_ACTOR_AUTOSCOUT   || 'epctex/autoscout24-scraper',
-    infojobs:   process.env.APIFY_ACTOR_INFOJOBS    || 'epctex/infojobs-scraper',
-    wallapop:   process.env.APIFY_ACTOR_WALLAPOP    || 'tri_angle/wallapop-scraper',
-    vinted:     process.env.APIFY_ACTOR_VINTED      || 'epctex/vinted-scraper',
+    idealista:  process.env.APIFY_ACTOR_IDEALISTA  || 'crawlerbros/idealista-scraper',
+    fotocasa:   process.env.APIFY_ACTOR_FOTOCASA   || 'gio21/fotocasa-scraper',
+    pisos:      process.env.APIFY_ACTOR_PISOS      || 'gio21/pisos-scraper',
+    coches_net: process.env.APIFY_ACTOR_COCHES     || 'ivanvs/coches-net-scraper',
+    autoscout:  process.env.APIFY_ACTOR_AUTOSCOUT  || 'ivanvs/autoscout-scraper',
+    infojobs:   process.env.APIFY_ACTOR_INFOJOBS   || 'crawlerbros/infojobs-scraper',
+    wallapop:   process.env.APIFY_ACTOR_WALLAPOP   || 'igolaizola/wallapop-scraper',
+    vinted:     process.env.APIFY_ACTOR_VINTED     || 'automation-lab/vinted-scraper',
 };
 
 // ── Default actor inputs ──────────────────────────────────────────────────
+// Field names match each actor's documented input schema.
 const DEFAULT_INPUTS = {
     idealista: {
-        startUrls:  [{ url: 'https://www.idealista.com/venta-viviendas/madrid-madrid/' }],
-        maxItems:   25,
-        proxy:      { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
+        location:         'madrid-madrid',
+        operation:        'sale',
+        propertyType:     'homes',
+        country:          'es',
+        maximumProperties: 25,
+        proxyConfiguration: { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] },
     },
     fotocasa: {
-        startUrls:  [{ url: 'https://www.fotocasa.es/es/comprar/viviendas/madrid-capital/todas-las-zonas/l' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
-    },
-    habitaclia: {
-        startUrls:  [{ url: 'https://www.habitaclia.com/comprar-en-barcelona.htm' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        operation:    'comprar',
+        propertyType: 'viviendas',
+        location:     'madrid-capital',
+        maxItems:     25,
+        maxPages:     3,
     },
     pisos: {
-        startUrls:  [{ url: 'https://www.pisos.com/pisos/madrid-capital/' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        operation:    'venta',
+        propertyType: 'pisos',
+        location:     'madrid',
+        maxItems:     25,
+        maxPages:     3,
     },
     coches_net: {
-        startUrls:  [{ url: 'https://www.coches.net/segunda-mano/' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        urls:       [{ url: 'https://www.coches.net/segunda-mano/' }],
+        maxRecords: 25,
     },
     autoscout: {
-        startUrls:  [{ url: 'https://www.autoscout24.es/lst' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        urls:       [{ url: 'https://www.autoscout24.es/lst' }],
+        maxRecords: 25,
     },
     infojobs: {
-        startUrls:  [{ url: 'https://www.infojobs.net/ofertas-trabajo.xhtml' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        keyword:            'empleo',
+        province:           'Madrid',
+        maxItems:           25,
+        proxyConfiguration: { useApifyProxy: true },
     },
     wallapop: {
-        startUrls:  [{ url: 'https://es.wallapop.com/app/search?keywords=&latitude=40.41&longitude=-3.70&dist=50' }],
-        maxResults: 25,
-        proxy:      { useApifyProxy: true },
+        query:              'buscar',
+        maxItems:           25,
+        latitude:           40.41,
+        longitude:          -3.70,
+        distance:           '50',
+        fetchDetails:       false,
+        proxyConfiguration: { useApifyProxy: true },
     },
     vinted: {
-        startUrls:  [{ url: 'https://www.vinted.es/catalog' }],
-        maxItems:   25,
-        proxy:      { useApifyProxy: true },
+        searchQuery: 'ropa',
+        domain:      'vinted.es',
+        maxItems:    25,
     },
 };
 
@@ -207,28 +217,6 @@ const normaliseFotocasa = (item) => ({
     seller_phone: pickPhone(item.agency?.phone || item.advertiser?.phone || item.phone),
     seller_email: pick(item.agency?.email, item.advertiser?.email, item.email),
     contact_url:  item.agency?.url || item.advertiser?.url || null,
-    rawData:      item,
-});
-
-const normaliseHabitaclia = (item) => ({
-    id:           pick(item.id, item.code, item.ref) || uid('hb'),
-    source:       'habitaclia',
-    category:     'real_estate',
-    title:        pick(item.title, item.name, item.subtitle) || 'Property',
-    price:        item.price ?? null,
-    currency:     'EUR',
-    location:     pick(item.location, item.city, item.area, item.municipality) || null,
-    url:          item.url || item.link || null,
-    image:        item.image || item.thumbnail || item.images?.[0] || null,
-    description:  item.description || null,
-    fetchedAt:    new Date().toISOString(),
-    size:         item.surface ?? item.size ?? null,
-    rooms:        item.rooms ?? item.bedrooms ?? null,
-    floor:        item.floor?.toString() ?? null,
-    seller_name:  pick(item.agency, item.agencyName, item.contactName, item.advertiser),
-    seller_phone: pickPhone(item.phone || item.contactPhone || item.agencyPhone),
-    seller_email: pick(item.email, item.contactEmail),
-    contact_url:  item.agencyUrl || item.contactUrl || null,
     rawData:      item,
 });
 
@@ -388,7 +376,6 @@ const normaliseGeneric = (item) => ({
 const NORMALISERS = {
     idealista:  normaliseIdealista,
     fotocasa:   normaliseFotocasa,
-    habitaclia: normaliseHabitaclia,
     pisos:      normalisePisos,
     coches_net: normaliseCochesNet,
     autoscout:  normaliseAutoscout,
