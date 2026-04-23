@@ -47,6 +47,11 @@ export const getValidGoogleTokens = async (userId) => {
 
         if (data.error) {
             console.error(`[GoogleAuth] Refresh failed:`, data.error_description || data.error);
+            // invalid_grant means the user revoked access or connected without Gmail scopes
+            // They must reconnect their Google account from the Integrations page
+            if (data.error === 'invalid_grant') {
+                console.error(`[GoogleAuth] User ${userId} must reconnect Google account (scope or consent issue)`);
+            }
             return { access_token, refresh_token };
         }
 
