@@ -196,3 +196,166 @@ export const getDashboardStats = async (req, res) => {
     }
 };
 
+/**
+ * Get real-time employee activity status
+ * Returns last activity time, pending jobs count, and today's sent count
+ */
+export const getEmployeeActivityStatus = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { employee } = req.query; // 'followup', 'review', or 'capture'
+
+        if (!employee || !['followup', 'review', 'capture'].includes(employee)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid employee type. Use: followup, review, or capture' 
+            });
+        }
+
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        // Query based on employee type
+        let activityQueries;
+        
+        if (employee === 'followup') {
+            activityQueries = await Promise.all([
+                // Last follow-up message sent
+                pool.query(`
+                    SELECT MAX(created_at) as last_activity
+                    FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND automation_name = 'Follow-up Agent'
+                    AND status = 'success'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                `, [userId]),
+                // Pending leads to follow up
+                pool.query(`
+                    SELECT COUNT(*) as pending_count
+                    FROM leads 
+                    WHERE user_id = $1 
+                    AND lead_status IN ('New', 'Contacted')
+                    AND marketing_consent = true
+                `, [userId]),
+                // Messages sent today
+                pool.query(`
+                    SELECT COUNT(*) as sent_today
+                    FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND automation_name = 'Follow-up Agent'
+                    AND status = 'success'
+                    AND created_at >= $2
+                `, [userId, todayStart]),
+                // Is active
+                pool.query(`
+                    SELECT is_active FROM lead_followup_settings WHERE user_id = $1
+                `, [userId])
+            ]);
+        } else if (employee === 'review') {
+            activityQueries = await Promise.all([
+                // Last review request sent
+                pool.query(`
+                    SELECT MAX(created_at) as last_activity
+                    FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type = 'Customer Review'
+                    AND status = 'success'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                `, [userId]),
+                // Pending review requests (leads without reviews)
+                pool.query(`
+                    SELECT COUNT(*) as pending_count
+                    FROM leads 
+                    WHERE user_id = $1 
+                    AND id NOT IN (
+                        SELECT DISTINCT lead_id FROM activity_logs 
+                        WHERE user_id = $1 AND trigger_type = 'Customer Review'
+                    )
+                `, [userId]),
+                // Reviews requested today
+                pool.query(`
+                    SELECT COUNT(*) as sent_today
+                    FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type = 'Customer Review'
+                    AND status = 'success'
+                    AND created_at >= $2
+                `, [userId, todayStart]),
+                // Is active
+                pool.query(`
+                    SELECT is_active FROM review_funnel_settings WHERE user_id = $1
+                `, [userId])
+            ]);
+        } else { // capture
+            activityQueries = await Promise.all([
+                // Last lead captured
+                pool.query(`
+                    SELECT MAX(created_at) as last_activity
+                    FROM leads 
+                    WHERE user_id = $1 
+                    AND lead_source IN ('qr', 'website', 'excel')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                `, [userId]),
+                // New leads today not yet processed
+                pool.query(`
+                    SELECT COUNT(*) as pending_count
+                    FROM leads 
+                    WHERE user_id = $1 
+                    AND lead_status = 'New'
+                    AND created_at >= NOW() - INTERVAL '24 hours'
+                `, [userId]),
+                // Leads captured today
+                pool.query(`
+                    SELECT COUNT(*) as sent_today
+                    FROM leads 
+                    WHERE user_id = $1 
+                    AND created_at >= $2
+                `, [userId, todayStart]),
+                // Is active
+                pool.query(`
+                    SELECT lead_capture_active as is_active 
+                    FROM review_funnel_settings 
+                    WHERE user_id = $1
+                `, [userId])
+            ]);
+        }
+
+        const [lastActivityRes, pendingRes, sentTodayRes, isActiveRes] = activityQueries;
+
+        const lastActivity = lastActivityRes.rows[0]?.last_activity;
+        const pendingCount = parseInt(pendingRes.rows[0]?.pending_count || 0);
+        const sentToday = parseInt(sentTodayRes.rows[0]?.sent_today || 0);
+        const isActive = isActiveRes.rows[0]?.is_active === true;
+
+        // Determine status
+        let status = 'off_duty';
+        if (isActive) {
+            const lastActivityTime = lastActivity ? new Date(lastActivity) : null;
+            const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+            
+            if (pendingCount > 0 || (lastActivityTime && lastActivityTime > fiveMinutesAgo)) {
+                status = 'working';
+            } else {
+                status = 'idle';
+            }
+        }
+
+        return res.json({
+            success: true,
+            employee,
+            status,
+            is_active: isActive,
+            last_activity: lastActivity,
+            pending_count: pendingCount,
+            sent_today: sentToday
+        });
+
+    } catch (err) {
+        console.error('[getEmployeeActivityStatus] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error fetching activity status.' });
+    }
+};
+

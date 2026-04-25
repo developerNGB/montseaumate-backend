@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDashboardStats } from '../controllers/statsController.js';
+import { getDashboardStats, getEmployeeActivityStatus } from '../controllers/statsController.js';
 import authenticate from '../middleware/authenticate.js';
 
 const router = Router();
@@ -9,5 +9,8 @@ router.use(authenticate);
 
 // GET /api/stats
 router.get('/', getDashboardStats);
+
+// GET /api/stats/activity?employee=followup|review|capture
+router.get('/activity', getEmployeeActivityStatus);
 
 export default router;
