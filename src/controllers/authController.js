@@ -256,7 +256,7 @@ export const getProfile = async (req, res) => {
     try {
         console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
+            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed
              FROM users
              WHERE id = $1`,
             [req.user.id]
@@ -289,7 +289,7 @@ export const getProfile = async (req, res) => {
  */
 export const updateProfile = async (req, res) => {
     try {
-        const { company_name, email, phone, weekly_reports_enabled } = req.body;
+        const { company_name, email, phone, weekly_reports_enabled, onboarding_completed } = req.body;
 
         if (!email) {
             return res.status(400).json({ success: false, message: 'Email is required.' });
@@ -306,15 +306,16 @@ export const updateProfile = async (req, res) => {
         }
 
         const result = await pool.query(
-            `UPDATE users 
-             SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, updated_at = NOW()
-             WHERE id = $5
-             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled`,
+            `UPDATE users
+             SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, onboarding_completed = COALESCE($5, onboarding_completed), updated_at = NOW()
+             WHERE id = $6
+             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed`,
             [
                 company_name ? company_name.trim() : null,
                 email.toLowerCase().trim(),
                 phone ? phone.trim() : null,
                 weekly_reports_enabled !== undefined ? weekly_reports_enabled : true,
+                onboarding_completed !== undefined ? onboarding_completed : null,
                 req.user.id
             ]
         );

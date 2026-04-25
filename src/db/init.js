@@ -29,6 +29,8 @@ const initDB = async () => {
             );
         `);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT false`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT true`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`);
         console.log('  ✅ users table ready');
 
