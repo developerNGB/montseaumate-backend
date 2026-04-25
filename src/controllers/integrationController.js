@@ -123,9 +123,12 @@ export const providerCallback = async (req, res) => {
         }
 
         // Redirect to frontend fallback
-        let frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/integrations`;
-        if (jobId) {
-            frontendRedirect = `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/dashboard/employee/${jobId}`;
+        const BASE = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+        let frontendRedirect = `${BASE}/dashboard/integrations`;
+        if (jobId === 'onboarding') {
+            frontendRedirect = `${BASE}/welcome`;
+        } else if (jobId) {
+            frontendRedirect = `${BASE}/dashboard/employee/${jobId}`;
         }
 
         if (error) {
