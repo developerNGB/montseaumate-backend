@@ -133,11 +133,12 @@ const csrfProtection = csrf({
     }
 });
 
-// Skip CSRF for webhook/public routes
+// Skip CSRF for webhook/public routes and API routes that use JWT auth
 app.use((req, res, next) => {
     const skipPaths = [
-        '/api/public', '/api/webhooks', '/api/marketplace', 
+        '/api/public', '/api/webhooks', '/api/marketplace',
         '/api/integrations', '/api/whatsapp', '/api/config',
+        '/api/apollo',  // Apollo uses JWT auth, not CSRF
         '/api/f', '/api/r', '/api/l',  // Public feedback/review/lead endpoints
         '/auth/google', '/auth/microsoft', '/auth/account'
     ];
