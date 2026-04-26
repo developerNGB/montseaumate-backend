@@ -1,4 +1,5 @@
 import apolloService from '../services/apolloService.js';
+import apifyNicheService from '../services/apifyNicheService.js';
 import pool from '../db/pool.js';
 
 /**
@@ -38,6 +39,7 @@ class ApolloController {
     /**
      * Scout leads by niche (real_estate, car_sales, hr, second_hand)
      * POST /api/apollo/scout
+     * Uses Apify Google Maps scraper to find B2B leads
      */
     async scoutByNiche(req, res) {
         try {
@@ -51,89 +53,75 @@ class ApolloController {
                 });
             }
 
-            // Check if Apollo API key is configured
-            if (!process.env.APOLLO_API_KEY) {
+            // Check if Apify API token is configured
+            if (!process.env.APIFY_API_TOKEN) {
                 return res.status(500).json({
                     success: false,
-                    error: 'Apollo API key not configured. Please set APOLLO_API_KEY environment variable.'
+                    error: 'Apify API token not configured. Please set APIFY_API_TOKEN environment variable.'
                 });
             }
 
-            // Search Apollo for leads
-            const results = await apolloService.scoutByNiche(niche);
+            // Use Apify to scrape Google Maps for leads
+            console.log(`🔍 Starting Apify scrape for niche: ${niche}, location: ${location}`);
+            const results = await apifyNicheService.scoutByNiche(niche, location);
 
             if (!results.people || results.people.length === 0) {
                 return res.json({
                     success: true,
                     data: [],
-                    message: 'No leads found for this niche'
+                    message: results.error || 'No leads found for this niche'
                 });
             }
 
-            // Enrich first 3 leads to get contact details (these consume credits)
-            const enrichedLeads = [];
-            const enrichLimit = Math.min(3, results.people.length);
-
-            for (let i = 0; i < enrichLimit; i++) {
-                try {
-                    const person = results.people[i];
-                    const enriched = await apolloService.enrichPerson(person.id);
-                    
-                    if (enriched.person) {
-                        enrichedLeads.push({
-                            id: person.id,
-                            first_name: enriched.person.first_name,
-                            last_name: enriched.person.last_name,
-                            email: enriched.person.email,
-                            phone: enriched.person.phone,
-                            title: enriched.person.title,
-                            organization: enriched.person.organization?.name,
-                            location: enriched.person.location?.formatted_address,
-                            linkedin_url: enriched.person.linkedin_url,
-                            enrichment_status: 'success'
-                        });
-                    }
-                } catch (enrichError) {
-                    console.log(`Failed to enrich person ${results.people[i].id}:`, enrichError.message);
-                    // Add basic info without enrichment
-                    enrichedLeads.push({
-                        id: results.people[i].id,
-                        first_name: results.people[i].first_name,
-                        last_name: results.people[i].last_name_obfuscated,
-                        title: results.people[i].title,
-                        organization: results.people[i].organization?.name,
-                        enrichment_status: 'pending',
-                        has_email: results.people[i].has_email,
-                        has_direct_phone: results.people[i].has_direct_phone
-                    });
-                }
-            }
+            // Process scraped leads (Apify already provides contact info)
+            const scrapedLeads = results.people.map(lead => ({
+                id: lead.id,
+                first_name: lead.first_name,
+                last_name: lead.last_name,
+                email: lead.email,
+                phone: lead.phone,
+                title: lead.title,
+                organization: lead.organization,
+                location: lead.location,
+                website: lead.website,
+                linkedin_url: lead.linkedin_url,
+                enrichment_status: lead.enrichment_status,
+                source: lead.source
+            }));
 
             // Save discovered leads to database
             const savedLeads = [];
-            for (const lead of enrichedLeads) {
+            for (const lead of scrapedLeads) {
                 try {
+                    // Generate a unique email if none provided to avoid conflicts
+                    const emailKey = lead.email && lead.email.includes('@') 
+                        ? lead.email 
+                        : `apify_${lead.id}@placeholder.com`;
+                    
                     const result = await pool.query(
                         `INSERT INTO leads (
                             user_id, full_name, email, phone, 
                             source, lead_status, notes, created_at
                         ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                        ON CONFLICT (user_id, email) DO NOTHING
+                        ON CONFLICT (user_id, email) DO UPDATE SET
+                            phone = EXCLUDED.phone,
+                            notes = EXCLUDED.notes
                         RETURNING id`,
                         [
                             userId,
-                            `${lead.first_name} ${lead.last_name || ''}`.trim(),
-                            lead.email || 'pending@apollo.io',
+                            lead.full_name || `${lead.first_name} ${lead.last_name || ''}`.trim(),
+                            emailKey,
                             lead.phone || '',
-                            `Apollo - ${niche}`,
+                            lead.source || `Apify - ${niche}`,
                             'New',
                             JSON.stringify({
                                 title: lead.title,
                                 organization: lead.organization,
                                 location: lead.location,
+                                website: lead.website,
                                 linkedin: lead.linkedin_url,
-                                apollo_id: lead.id,
-                                enrichment_status: lead.enrichment_status
+                                enrichment_status: lead.enrichment_status,
+                                apify_id: lead.id
                             })
                         ]
                     );
@@ -152,10 +140,10 @@ class ApolloController {
                  VALUES ($1, $2, $3, $4, $5, NOW())`,
                 [
                     userId,
-                    'Apollo Scout',
+                    'Apify Niche Scout',
                     'scout',
                     'success',
-                    `Discovered ${savedLeads.length} leads for ${niche}`
+                    `Discovered ${savedLeads.length} leads for ${niche} via Google Maps scraping`
                 ]
             );
 
@@ -165,20 +153,20 @@ class ApolloController {
                     niche,
                     total_found: results.total_entries,
                     leads: savedLeads,
-                    enriched_count: enrichedLeads.length,
-                    saved_count: savedLeads.length
+                    enriched_count: savedLeads.filter(l => l.enrichment_status === 'found').length,
+                    saved_count: savedLeads.length,
+                    location: location || 'All locations',
+                    source: 'Google Maps via Apify'
                 }
             });
         } catch (error) {
-            console.error('Apollo Scout Error:', {
+            console.error('Apify Scout Error:', {
                 message: error.message,
-                status: error.response?.status,
-                data: error.response?.data
+                stack: error.stack
             });
             res.status(500).json({
                 success: false,
-                error: error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to scout leads',
-                apolloError: error.response?.data
+                error: error.message || 'Failed to scout leads via Apify'
             });
         }
     }
