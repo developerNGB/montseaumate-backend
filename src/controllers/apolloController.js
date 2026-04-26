@@ -61,15 +61,23 @@ class ApolloController {
                 });
             }
 
-            // Use Apify to scrape Google Maps for leads
+            // Use Apify to scrape for leads
             console.log(`🔍 Starting Apify scrape for niche: ${niche}, location: ${location}`);
             const results = await apifyNicheService.scoutByNiche(niche, location);
+            
+            console.log(`📊 Apify results:`, {
+                peopleCount: results.people?.length,
+                totalEntries: results.total_entries,
+                error: results.error,
+                niche: results.niche
+            });
 
             if (!results.people || results.people.length === 0) {
                 return res.json({
                     success: true,
                     data: [],
-                    message: results.error || 'No leads found for this niche'
+                    message: results.error || 'No leads found for this niche. Make sure to add the Apify actors to your account from the Apify Store.',
+                    debug: results.error
                 });
             }
 
