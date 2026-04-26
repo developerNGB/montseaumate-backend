@@ -98,7 +98,13 @@ class ApifyNicheService {
                     }
                     break;
                 case 'car_sales':
-                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], niche, location);
+                    // Use the working Auto Dealer Lead Scraper
+                    try {
+                        results = await this.scrapeCarSales(location);
+                    } catch (err) {
+                        console.log('⚠️ Car dealer scraper failed, trying Google Maps fallback...');
+                        results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], niche, location);
+                    }
                     break;
                 case 'hr':
                     results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting'], niche, location);
@@ -129,8 +135,65 @@ class ApifyNicheService {
     }
 
     /**
+     * Scrape Car Dealerships using the working actor
+     * Actor: samstorm/auto-dealer-lead-scraper
+     */
+    async scrapeCarSales(location = '') {
+        try {
+            const actorId = 'samstorm/auto-dealer-lead-scraper';
+            
+            const input = {
+                searchQuery: location ? `car dealerships in ${location}` : 'car dealerships',
+                location: location || 'Houston, TX',
+                maxResults: 20,
+                enrichEmails: true,
+                enrichSocials: true,
+                verifyEmails: true,
+                businessType: 'Car Dealership',
+                outputFormat: 'full'
+            };
+
+            console.log(`🚀 Starting actor ${actorId} with input:`, JSON.stringify(input));
+            const results = await this.runActor(actorId, input, 180);
+            console.log(`✅ Actor returned ${results.length} results`);
+            
+            if (!results || results.length === 0) {
+                console.log('⚠️ Actor returned empty results, trying fallback...');
+                return this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], 'car_sales', location);
+            }
+
+            // Transform results to match our lead format
+            return results.map(dealer => ({
+                id: `car_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                first_name: this.extractFirstName(dealer.name),
+                last_name: '',
+                full_name: dealer.name,
+                email: dealer.email || '',
+                phone: dealer.phone || '',
+                title: 'Sales Manager',
+                organization: dealer.name,
+                location: dealer.address || '',
+                website: dealer.website || '',
+                linkedin_url: '',
+                enrichment_status: (dealer.email && dealer.emailVerified) ? 'found' : (dealer.email ? 'pending' : 'none'),
+                source: 'Apify - Car Dealerships',
+                raw_data: dealer
+            }));
+        } catch (error) {
+            console.error('❌ Car Sales scraper failed:', {
+                message: error.message,
+                response: error.response?.data,
+                status: error.response?.status
+            });
+            // Fallback to Google Maps
+            console.log('Falling back to Google Maps scraper...');
+            return this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], 'car_sales', location);
+        }
+    }
+
+    /**
      * Scrape Realtor Leads using the tested working actor
-     * Actor: apify/realtor-leads-scraper (or similar - the one you tested)
+     * Actor: scraped/realtor-agents-by-zip-code-preprocessed-data
      */
     async scrapeRealtorLeads(location = '') {
         try {
