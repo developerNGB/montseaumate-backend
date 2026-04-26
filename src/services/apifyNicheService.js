@@ -89,8 +89,13 @@ class ApifyNicheService {
             // Use niche-specific actors that have been tested and work
             switch (niche) {
                 case 'real_estate':
-                    // Use the working Realtor Leads Scraper
-                    results = await this.scrapeRealtorLeads(location);
+                    // Try Realtor scraper first, fallback to Google Maps
+                    try {
+                        results = await this.scrapeRealtorLeads(location);
+                    } catch (err) {
+                        console.log('⚠️ Realtor scraper failed, trying Google Maps fallback...');
+                        results = await this.scrapeGoogleMaps(['real estate agents', 'realtors', 'real estate brokers'], niche, location);
+                    }
                     break;
                 case 'car_sales':
                     results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], niche, location);
@@ -129,17 +134,26 @@ class ApifyNicheService {
      */
     async scrapeRealtorLeads(location = '') {
         try {
-            // The actor ID for "Realtor Leads Real Estate Agent Scraper"
-            // Using the tested working actor: olympus/realtor-leads-real-estate-agent-scraper
-            const actorId = 'olympus/realtor-leads-real-estate-agent-scraper';
+            // The working actor: scraped/realtor-agents-by-zip-code-preprocessed-data
+            // This actor takes zip codes and returns real estate agents with contact info
+            const actorId = 'scraped/realtor-agents-by-zip-code-preprocessed-data';
             
+            // Convert location to zip codes (or use default US zip codes)
+            let zipCodes = [];
+            if (location) {
+                // If location provided, we'll try to use it as a zip or use major cities
+                // For now, use some common US zip codes as fallback
+                zipCodes = [location.length === 5 && /^\d+$/.test(location) ? location : '90210'];
+            } else {
+                // Default zip codes for major cities
+                zipCodes = ['90210', '97229', '10001', '60601', '30309'];
+            }
+
             const input = {
-                location: location || 'United States',
-                maxResults: 50,
-                includeContactInfo: true
+                zip_codes: zipCodes
             };
 
-            console.log(`🚀 Starting actor ${actorId} with input:`, JSON.stringify(input));
+            console.log(`🚀 Starting actor ${actorId} with zip codes:`, zipCodes);
             const results = await this.runActor(actorId, input, 180);
             console.log(`✅ Actor returned ${results.length} results`);
             
@@ -149,21 +163,21 @@ class ApifyNicheService {
             }
 
             // Transform results to match our lead format
-            return results.map(person => ({
-                id: person.id || `realtor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                first_name: person.firstName || person.first_name || this.extractFirstName(person.fullName || person.name),
-                last_name: person.lastName || person.last_name || '',
-                full_name: person.fullName || person.name || `${person.firstName} ${person.lastName}`,
-                email: person.email || person.emails?.[0] || '',
-                phone: person.phone || person.phones?.[0] || '',
-                title: person.title || 'Real Estate Agent',
-                organization: person.company || person.brokerage || person.organization || '',
-                location: person.location || person.address || person.city || '',
-                website: person.website || person.websiteUrl || '',
-                linkedin_url: person.linkedin || person.linkedinUrl || '',
-                enrichment_status: (person.email || person.phone) ? 'found' : 'pending',
+            return results.map(agent => ({
+                id: `realtor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                first_name: this.extractFirstName(agent['Full Name']),
+                last_name: '',
+                full_name: agent['Full Name'],
+                email: agent['Email'] || '',
+                phone: agent['Mobile Phones'] || agent['Office Phone'] || '',
+                title: agent['Title'] || 'Real Estate Agent',
+                organization: agent['Office Name'] || '',
+                location: agent['Areas serviced'] || agent['Office Address'] || '',
+                website: agent['Office Website'] || agent['Web URL'] || '',
+                linkedin_url: '',
+                enrichment_status: (agent['Email'] || agent['Mobile Phones']) ? 'found' : 'pending',
                 source: 'Apify - Realtor Leads',
-                raw_data: person
+                raw_data: agent
             }));
         } catch (error) {
             console.error('❌ Realtor Leads scraper failed:', {
@@ -188,7 +202,8 @@ class ApifyNicheService {
         console.log(`🔍 Google Maps search: ${searchQueries.join(', ')}`);
 
         try {
-            const results = await this.runActor('apify/google-maps-scraper', {
+            // Use compass/crawler-google-maps (popular working actor)
+            const results = await this.runActor('compass/crawler-google-maps', {
                 searchStringsArray: searchQueries,
                 maxCrawledPlaces: 20,
                 maxImages: 0,
