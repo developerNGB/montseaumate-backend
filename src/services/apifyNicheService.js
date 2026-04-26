@@ -111,8 +111,8 @@ class ApifyNicheService {
 
         try {
             // Use Google Maps Scraper actor
-            // Actor ID: compass/crawler-google-maps (popular community actor)
-            const results = await this.runActor('compass/crawler-google-maps', {
+            // Actor ID: apify/google-maps-scraper (official Apify actor)
+            const results = await this.runActor('apify/google-maps-scraper', {
                 searchStringsArray: searchQueries,
                 maxCrawledPlaces: 20,
                 maxImages: 0,
