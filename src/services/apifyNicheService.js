@@ -33,6 +33,7 @@ class ApifyNicheService {
 
             const runId = startResponse.data.data.id;
             console.log(`🚀 Started Apify actor ${actorId}, run ID: ${runId}`);
+            console.log(`📊 Start response:`, JSON.stringify(startResponse.data).substring(0, 500));
 
             // Poll for completion
             let isFinished = false;
@@ -62,7 +63,10 @@ class ApifyNicheService {
             // Get the results from dataset
             const datasetId = startResponse.data.data.defaultDatasetId;
             const resultsUrl = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${this.token}`;
+            console.log(`📥 Fetching results from dataset: ${datasetId}`);
             const resultsResponse = await axios.get(resultsUrl);
+            console.log(`📊 Results count: ${resultsResponse.data?.length || 0}`);
+            console.log(`📄 First result sample:`, JSON.stringify(resultsResponse.data?.[0]).substring(0, 300));
 
             return resultsResponse.data;
         } catch (error) {
@@ -135,7 +139,14 @@ class ApifyNicheService {
                 includeContactInfo: true
             };
 
+            console.log(`🚀 Starting actor ${actorId} with input:`, JSON.stringify(input));
             const results = await this.runActor(actorId, input, 180);
+            console.log(`✅ Actor returned ${results.length} results`);
+            
+            if (!results || results.length === 0) {
+                console.log('⚠️ Actor returned empty results, trying fallback...');
+                return this.scrapeGoogleMaps(['real estate agents', 'realtors', 'real estate brokers'], 'real_estate', location);
+            }
 
             // Transform results to match our lead format
             return results.map(person => ({
@@ -155,7 +166,11 @@ class ApifyNicheService {
                 raw_data: person
             }));
         } catch (error) {
-            console.error('❌ Realtor Leads scraper failed:', error.message);
+            console.error('❌ Realtor Leads scraper failed:', {
+                message: error.message,
+                response: error.response?.data,
+                status: error.response?.status
+            });
             // Fallback to Google Maps if Realtor actor fails
             console.log('Falling back to Google Maps scraper...');
             return this.scrapeGoogleMaps(['real estate agents', 'realtors', 'real estate brokers'], 'real_estate', location);
