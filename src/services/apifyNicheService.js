@@ -2,6 +2,12 @@ import axios from 'axios';
 
 const APIFY_BASE_URL = 'https://api.apify.com/v2';
 
+// Actor IDs use ~ format (username~actor-name)
+const ACTORS = {
+    realtor: 'olympus~realtor-leads-real-estate-agent-scraper',
+    carDealer: 'samstorm~auto-dealer-lead-scraper'
+};
+
 /**
  * Apify Niche Service
  * Scrapes B2B leads for specific niches using Apify actors
@@ -20,25 +26,58 @@ class ApifyNicheService {
      * @param {Object} input - The actor input parameters
      * @param {number} timeoutSecs - Maximum wait time in seconds
      */
+    /**
+     * Run actor synchronously and get dataset items (waits for completion)
+     * Uses run-sync-get-dataset-items endpoint for immediate results
+     */
+    async runActorSync(actorId, input, timeoutSecs = 180) {
+        try {
+            // Use sync endpoint that waits for completion and returns dataset items
+            const url = `${APIFY_BASE_URL}/acts/${actorId}/run-sync-get-dataset-items?token=${this.token}`;
+            
+            console.log(`🚀 Running actor ${actorId} (sync mode)`);
+            console.log(`📤 Input:`, JSON.stringify(input).substring(0, 200));
+            
+            const response = await axios.post(url, input, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: timeoutSecs * 1000 // Convert to milliseconds
+            });
+            
+            console.log(`✅ Actor completed. Results count: ${response.data?.length || 0}`);
+            
+            if (response.data && response.data.length > 0) {
+                console.log(`📄 Sample result:`, JSON.stringify(response.data[0]).substring(0, 300));
+            }
+            
+            return response.data || [];
+        } catch (error) {
+            console.error('❌ Apify Actor Error:', {
+                message: error.message,
+                status: error.response?.status,
+                data: error.response?.data
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Legacy async run method (kept for fallback)
+     */
     async runActor(actorId, input, timeoutSecs = 120) {
         try {
             // Start the actor run
             const startUrl = `${APIFY_BASE_URL}/acts/${actorId}/runs?token=${this.token}`;
-            const startResponse = await axios.post(startUrl, {
-                ...input,
-                timeout: timeoutSecs
-            }, {
+            const startResponse = await axios.post(startUrl, input, {
                 headers: { 'Content-Type': 'application/json' }
             });
 
             const runId = startResponse.data.data.id;
             console.log(`🚀 Started Apify actor ${actorId}, run ID: ${runId}`);
-            console.log(`📊 Start response:`, JSON.stringify(startResponse.data).substring(0, 500));
 
             // Poll for completion
             let isFinished = false;
             let attempts = 0;
-            const maxAttempts = timeoutSecs / 5; // Check every 5 seconds
+            const maxAttempts = timeoutSecs / 5;
 
             while (!isFinished && attempts < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 5000));
@@ -63,10 +102,7 @@ class ApifyNicheService {
             // Get the results from dataset
             const datasetId = startResponse.data.data.defaultDatasetId;
             const resultsUrl = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${this.token}`;
-            console.log(`📥 Fetching results from dataset: ${datasetId}`);
             const resultsResponse = await axios.get(resultsUrl);
-            console.log(`📊 Results count: ${resultsResponse.data?.length || 0}`);
-            console.log(`📄 First result sample:`, JSON.stringify(resultsResponse.data?.[0]).substring(0, 300));
 
             return resultsResponse.data;
         } catch (error) {
@@ -140,7 +176,8 @@ class ApifyNicheService {
      */
     async scrapeCarSales(location = '') {
         try {
-            const actorId = 'samstorm/auto-dealer-lead-scraper';
+            // Use the ~ format for Actor ID
+            const actorId = ACTORS.carDealer; // 'samstorm~auto-dealer-lead-scraper'
             
             const input = {
                 searchQuery: location ? `car dealerships in ${location}` : 'car dealerships',
@@ -154,7 +191,7 @@ class ApifyNicheService {
             };
 
             console.log(`🚀 Starting actor ${actorId} with input:`, JSON.stringify(input));
-            const results = await this.runActor(actorId, input, 180);
+            const results = await this.runActorSync(actorId, input, 180);
             console.log(`✅ Actor returned ${results.length} results`);
             
             if (!results || results.length === 0) {
@@ -197,27 +234,18 @@ class ApifyNicheService {
      */
     async scrapeRealtorLeads(location = '') {
         try {
-            // The working actor: scraped/realtor-agents-by-zip-code-preprocessed-data
-            // This actor takes zip codes and returns real estate agents with contact info
-            const actorId = 'scraped/realtor-agents-by-zip-code-preprocessed-data';
+            // The working actor: olympus~realtor-leads-real-estate-agent-scraper
+            // Uses ~ format for Actor ID
+            const actorId = ACTORS.realtor; // 'olympus~realtor-leads-real-estate-agent-scraper'
             
-            // Convert location to zip codes (or use default US zip codes)
-            let zipCodes = [];
-            if (location) {
-                // If location provided, we'll try to use it as a zip or use major cities
-                // For now, use some common US zip codes as fallback
-                zipCodes = [location.length === 5 && /^\d+$/.test(location) ? location : '90210'];
-            } else {
-                // Default zip codes for major cities
-                zipCodes = ['90210', '97229', '10001', '60601', '30309'];
-            }
-
+            // This actor takes city/state location
             const input = {
-                zip_codes: zipCodes
+                location: location || 'Houston, TX',
+                maxResults: 20
             };
 
-            console.log(`🚀 Starting actor ${actorId} with zip codes:`, zipCodes);
-            const results = await this.runActor(actorId, input, 180);
+            console.log(`🚀 Starting actor ${actorId} with location:`, input.location);
+            const results = await this.runActorSync(actorId, input, 180);
             console.log(`✅ Actor returned ${results.length} results`);
             
             if (!results || results.length === 0) {
@@ -226,19 +254,20 @@ class ApifyNicheService {
             }
 
             // Transform results to match our lead format
+            // The actor returns realtor data with various fields
             return results.map(agent => ({
                 id: `realtor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                first_name: this.extractFirstName(agent['Full Name']),
+                first_name: this.extractFirstName(agent['Full Name'] || agent.name || agent.fullName),
                 last_name: '',
-                full_name: agent['Full Name'],
-                email: agent['Email'] || '',
-                phone: agent['Mobile Phones'] || agent['Office Phone'] || '',
-                title: agent['Title'] || 'Real Estate Agent',
-                organization: agent['Office Name'] || '',
-                location: agent['Areas serviced'] || agent['Office Address'] || '',
-                website: agent['Office Website'] || agent['Web URL'] || '',
+                full_name: agent['Full Name'] || agent.name || agent.fullName || '',
+                email: agent['Email'] || agent.email || '',
+                phone: agent['Mobile Phones'] || agent['Office Phone'] || agent.phone || '',
+                title: agent['Title'] || agent.title || 'Real Estate Agent',
+                organization: agent['Office Name'] || agent.officeName || agent.company || '',
+                location: agent['Areas serviced'] || agent['Office Address'] || agent.location || agent.address || '',
+                website: agent['Office Website'] || agent['Web URL'] || agent.website || '',
                 linkedin_url: '',
-                enrichment_status: (agent['Email'] || agent['Mobile Phones']) ? 'found' : 'pending',
+                enrichment_status: (agent['Email'] || agent['Mobile Phones'] || agent.email || agent.phone) ? 'found' : 'pending',
                 source: 'Apify - Realtor Leads',
                 raw_data: agent
             }));
