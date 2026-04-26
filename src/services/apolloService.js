@@ -22,7 +22,6 @@ class ApolloService {
     async searchPeople(criteria = {}) {
         try {
             const response = await axios.post(`${APOLLO_BASE_URL}/mixed_people/api_search`, {
-                api_key: this.apiKey,
                 person_titles: criteria.titles || [],
                 person_locations: criteria.locations || [],
                 q_keywords: criteria.keywords || '',
@@ -31,7 +30,8 @@ class ApolloService {
             }, {
                 headers: {
                     'Content-Type': 'application/json',
-                    'Cache-Control': 'no-cache'
+                    'Accept': 'application/json',
+                    'X-Api-Key': this.apiKey
                 }
             });
 
@@ -50,8 +50,12 @@ class ApolloService {
     async enrichPerson(personId) {
         try {
             const response = await axios.post(`${APOLLO_BASE_URL}/people/enrich`, {
-                api_key: this.apiKey,
                 id: personId
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Api-Key': this.apiKey
+                }
             });
 
             return response.data;
