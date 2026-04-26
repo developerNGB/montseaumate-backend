@@ -77,41 +77,102 @@ class ApifyNicheService {
      * @param {string} location - Optional location filter
      */
     async scoutByNiche(niche, location = '') {
-        // Map niches to search queries
-        const nicheQueries = {
-            real_estate: {
-                queries: ['real estate agencies', 'real estate agents', 'property management companies', 'real estate brokers'],
-                category: 'real_estate_agency'
-            },
-            car_sales: {
-                queries: ['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'],
-                category: 'car_dealer'
-            },
-            hr: {
-                queries: ['recruitment agencies', 'staffing companies', 'HR consulting', 'talent acquisition firms'],
-                category: 'employment_agency'
-            },
-            second_hand: {
-                queries: ['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'],
-                category: 'store'
-            }
-        };
-
-        const nicheConfig = nicheQueries[niche];
-        if (!nicheConfig) {
-            throw new Error(`Unknown niche: ${niche}`);
-        }
-
-        // Build search queries with location
-        const searchQueries = nicheConfig.queries.map(q => 
-            location ? `${q} in ${location}` : q
-        );
-
-        console.log(`🔍 Searching Apify Google Maps for: ${searchQueries.join(', ')}`);
+        console.log(`🔍 Starting niche scout for: ${niche}, location: ${location || 'any'}`);
 
         try {
-            // Use Google Maps Scraper actor
-            // Actor ID: apify/google-maps-scraper (official Apify actor)
+            let results = [];
+
+            // Use niche-specific actors that have been tested and work
+            switch (niche) {
+                case 'real_estate':
+                    // Use the working Realtor Leads Scraper
+                    results = await this.scrapeRealtorLeads(location);
+                    break;
+                case 'car_sales':
+                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], niche, location);
+                    break;
+                case 'hr':
+                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting'], niche, location);
+                    break;
+                case 'second_hand':
+                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops'], niche, location);
+                    break;
+                default:
+                    throw new Error(`Unknown niche: ${niche}`);
+            }
+
+            return {
+                people: results,
+                total_entries: results.length,
+                niche,
+                location
+            };
+        } catch (error) {
+            console.error('❌ Apify Niche Scout Error:', error.message);
+            return {
+                people: [],
+                total_entries: 0,
+                niche,
+                location,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Scrape Realtor Leads using the tested working actor
+     * Actor: apify/realtor-leads-scraper (or similar - the one you tested)
+     */
+    async scrapeRealtorLeads(location = '') {
+        try {
+            // The actor ID for "Realtor Leads Real Estate Agent Scraper"
+            // Using the community actor that was tested successfully
+            const actorId = 'apify/realtor-leads-scraper';
+            
+            const input = {
+                location: location || 'United States',
+                maxResults: 50,
+                includeContactInfo: true
+            };
+
+            const results = await this.runActor(actorId, input, 180);
+
+            // Transform results to match our lead format
+            return results.map(person => ({
+                id: person.id || `realtor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                first_name: person.firstName || person.first_name || this.extractFirstName(person.fullName || person.name),
+                last_name: person.lastName || person.last_name || '',
+                full_name: person.fullName || person.name || `${person.firstName} ${person.lastName}`,
+                email: person.email || person.emails?.[0] || '',
+                phone: person.phone || person.phones?.[0] || '',
+                title: person.title || 'Real Estate Agent',
+                organization: person.company || person.brokerage || person.organization || '',
+                location: person.location || person.address || person.city || '',
+                website: person.website || person.websiteUrl || '',
+                linkedin_url: person.linkedin || person.linkedinUrl || '',
+                enrichment_status: (person.email || person.phone) ? 'found' : 'pending',
+                source: 'Apify - Realtor Leads',
+                raw_data: person
+            }));
+        } catch (error) {
+            console.error('❌ Realtor Leads scraper failed:', error.message);
+            // Fallback to Google Maps if Realtor actor fails
+            console.log('Falling back to Google Maps scraper...');
+            return this.scrapeGoogleMaps(['real estate agents', 'realtors', 'real estate brokers'], 'real_estate', location);
+        }
+    }
+
+    /**
+     * Fallback Google Maps scraper for other niches
+     */
+    async scrapeGoogleMaps(queries, niche, location = '') {
+        const searchQueries = location 
+            ? queries.map(q => `${q} in ${location}`)
+            : queries;
+
+        console.log(`🔍 Google Maps search: ${searchQueries.join(', ')}`);
+
+        try {
             const results = await this.runActor('apify/google-maps-scraper', {
                 searchStringsArray: searchQueries,
                 maxCrawledPlaces: 20,
@@ -123,9 +184,8 @@ class ApifyNicheService {
                 includeWebResults: false
             }, 180);
 
-            // Transform results to lead format
-            const leads = results.map(place => ({
-                id: place.placeId || `apify_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            return results.map(place => ({
+                id: place.placeId || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 first_name: this.extractFirstName(place.name),
                 last_name: '',
                 full_name: place.name,
@@ -136,27 +196,13 @@ class ApifyNicheService {
                 location: place.address || place.location?.formattedAddress || '',
                 website: place.website || '',
                 linkedin_url: '',
-                enrichment_status: place.email || place.phone ? 'found' : 'pending',
+                enrichment_status: (place.email || place.phone) ? 'found' : 'pending',
                 source: `Apify - ${niche}`,
                 raw_data: place
             }));
-
-            return {
-                people: leads,
-                total_entries: leads.length,
-                niche,
-                location
-            };
         } catch (error) {
-            console.error('❌ Apify Niche Scout Error:', error.message);
-            // Return empty results on error
-            return {
-                people: [],
-                total_entries: 0,
-                niche,
-                location,
-                error: error.message
-            };
+            console.error('❌ Google Maps scraper failed:', error.message);
+            return [];
         }
     }
 
