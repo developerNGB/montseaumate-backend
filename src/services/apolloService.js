@@ -37,7 +37,12 @@ class ApolloService {
 
             return response.data;
         } catch (error) {
-            console.error('❌ Apollo Search Error:', error.response?.data || error.message);
+            console.error('❌ Apollo Search Error:', {
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                headers: error.config?.headers
+            });
             throw error;
         }
     }

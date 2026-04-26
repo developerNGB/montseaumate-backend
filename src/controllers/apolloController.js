@@ -170,10 +170,15 @@ class ApolloController {
                 }
             });
         } catch (error) {
-            console.error('Apollo Scout Error:', error);
+            console.error('Apollo Scout Error:', {
+                message: error.message,
+                status: error.response?.status,
+                data: error.response?.data
+            });
             res.status(500).json({
                 success: false,
-                error: error.message || 'Failed to scout leads'
+                error: error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to scout leads',
+                apolloError: error.response?.data
             });
         }
     }
