@@ -51,6 +51,14 @@ class ApolloController {
                 });
             }
 
+            // Check if Apollo API key is configured
+            if (!process.env.APOLLO_API_KEY) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'Apollo API key not configured. Please set APOLLO_API_KEY environment variable.'
+                });
+            }
+
             // Search Apollo for leads
             const results = await apolloService.scoutByNiche(niche);
 

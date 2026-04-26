@@ -10,6 +10,9 @@ const APOLLO_BASE_URL = 'https://api.apollo.io/api/v1';
 class ApolloService {
     constructor() {
         this.apiKey = process.env.APOLLO_API_KEY;
+        if (!this.apiKey) {
+            console.error('⚠️  APOLLO_API_KEY environment variable is not set!');
+        }
     }
 
     /**
