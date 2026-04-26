@@ -1,6 +1,6 @@
 import express from 'express';
 import apolloController from '../controllers/apolloController.js';
-import authMiddleware from '../middleware/auth.js';
+import authMiddleware from '../middleware/authenticate.js';
 
 const router = express.Router();
 
