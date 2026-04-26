@@ -35,4 +35,11 @@ router.post('/enrich', apolloController.enrich);
  */
 router.get('/niches', apolloController.getNiches);
 
+/**
+ * @route   POST /api/apollo/test-apify
+ * @desc    Test if Apify actors are accessible
+ * @access  Private
+ */
+router.post('/test-apify', apolloController.testApify);
+
 export default router;

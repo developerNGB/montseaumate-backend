@@ -246,6 +246,65 @@ class ApolloController {
             data: niches
         });
     }
+
+    /**
+     * Test if Apify actors are accessible
+     * POST /api/apollo/test-apify
+     */
+    async testApify(req, res) {
+        try {
+            const axios = (await import('axios')).default;
+            const token = process.env.APIFY_API_TOKEN;
+            
+            if (!token) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'APIFY_API_TOKEN not configured'
+                });
+            }
+
+            // Test actor accessibility
+            const actorsToTest = [
+                'olympus~realtor-leads-real-estate-agent-scraper',
+                'samstorm~auto-dealer-lead-scraper'
+            ];
+
+            const results = {};
+            
+            for (const actorId of actorsToTest) {
+                try {
+                    // Try to get actor info (doesn't run it, just checks if accessible)
+                    const response = await axios.get(
+                        `https://api.apify.com/v2/acts/${actorId}?token=${token}`
+                    );
+                    results[actorId] = {
+                        accessible: true,
+                        name: response.data?.data?.name || 'Unknown',
+                        isPublic: response.data?.data?.isPublic || false
+                    };
+                } catch (err) {
+                    results[actorId] = {
+                        accessible: false,
+                        error: err.response?.data?.error || err.message,
+                        status: err.response?.status
+                    };
+                }
+            }
+
+            res.json({
+                success: true,
+                message: 'Actor accessibility test complete',
+                tokenConfigured: true,
+                results
+            });
+        } catch (error) {
+            console.error('Test Apify Error:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
 }
 
 export default new ApolloController();
