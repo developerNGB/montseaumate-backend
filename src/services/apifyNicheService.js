@@ -126,8 +126,8 @@ class ApifyNicheService {
     async scrapeRealtorLeads(location = '') {
         try {
             // The actor ID for "Realtor Leads Real Estate Agent Scraper"
-            // Using the community actor that was tested successfully
-            const actorId = 'apify/realtor-leads-scraper';
+            // Using the tested working actor: olympus/realtor-leads-real-estate-agent-scraper
+            const actorId = 'olympus/realtor-leads-real-estate-agent-scraper';
             
             const input = {
                 location: location || 'United States',
