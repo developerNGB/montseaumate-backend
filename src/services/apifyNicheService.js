@@ -125,28 +125,20 @@ class ApifyNicheService {
             // Use niche-specific actors that have been tested and work
             switch (niche) {
                 case 'real_estate':
-                    // Try Realtor scraper first, fallback to Google Maps
-                    try {
-                        results = await this.scrapeRealtorLeads(location);
-                    } catch (err) {
-                        console.log('⚠️ Realtor scraper failed, trying Google Maps fallback...');
-                        results = await this.scrapeGoogleMaps(['real estate agents', 'realtors', 'real estate brokers'], niche, location);
-                    }
+                    // Use Google Maps scraper with real estate search terms
+                    results = await this.scrapeGoogleMaps(['real estate agencies', 'real estate agents', 'property brokers', 'realtors'], niche, location);
                     break;
                 case 'car_sales':
-                    // Use the working Auto Dealer Lead Scraper
-                    try {
-                        results = await this.scrapeCarSales(location);
-                    } catch (err) {
-                        console.log('⚠️ Car dealer scraper failed, trying Google Maps fallback...');
-                        results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms'], niche, location);
-                    }
+                    // Use Google Maps scraper with car dealership search terms
+                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'], niche, location);
                     break;
                 case 'hr':
-                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting'], niche, location);
+                    // Use Google Maps scraper with HR/recruitment search terms
+                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting', 'employment agencies'], niche, location);
                     break;
                 case 'second_hand':
-                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops'], niche, location);
+                    // Use Google Maps scraper with second hand retail search terms
+                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'], niche, location);
                     break;
                 default:
                     throw new Error(`Unknown niche: ${niche}`);
@@ -294,8 +286,11 @@ class ApifyNicheService {
         console.log(`🔍 Google Maps search: ${searchQueries.join(', ')}`);
 
         try {
-            // Use compass/crawler-google-maps (popular working actor)
-            const results = await this.runActor('compass/crawler-google-maps', {
+            // Use compass/crawler-google-places (official Google Maps scraper)
+            // Actor ID format uses ~ for store actors: compass~crawler-google-places
+            const actorId = 'compass~crawler-google-places';
+            
+            const input = {
                 searchStringsArray: searchQueries,
                 maxCrawledPlaces: 20,
                 maxImages: 0,
@@ -304,7 +299,11 @@ class ApifyNicheService {
                 maxReviews: 0,
                 language: 'en',
                 includeWebResults: false
-            }, 180);
+            };
+            
+            console.log(`🚀 Starting Google Places scraper with ${searchQueries.length} queries`);
+            const results = await this.runActorSync(actorId, input, 180);
+            console.log(`✅ Google Places returned ${results.length} results`);
 
             return results.map(place => ({
                 id: place.placeId || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -323,7 +322,11 @@ class ApifyNicheService {
                 raw_data: place
             }));
         } catch (error) {
-            console.error('❌ Google Maps scraper failed:', error.message);
+            console.error('❌ Google Maps scraper failed:', {
+                message: error.message,
+                status: error.response?.status,
+                data: error.response?.data
+            });
             return [];
         }
     }
