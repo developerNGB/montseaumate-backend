@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { 
-    getLeads, 
-    updateLeadStatus, 
-    importLeads, 
-    triggerLeadFollowup 
+import {
+    getLeads,
+    updateLeadStatus,
+    importLeads,
+    triggerLeadFollowup,
+    triggerBulkFollowup
 } from '../controllers/leadsController.js';
 import authenticate from '../middleware/authenticate.js';
 
@@ -21,7 +22,10 @@ router.patch('/:id', updateLeadStatus);
 // POST /api/leads/import
 router.post('/import', importLeads);
 
-// POST /api/leads/:id/trigger
+// POST /api/leads/:id/trigger  — single lead follow-up
 router.post('/:id/trigger', triggerLeadFollowup);
+
+// POST /api/leads/trigger-bulk — dispatch follow-ups for recently imported leads
+router.post('/trigger-bulk', triggerBulkFollowup);
 
 export default router;
