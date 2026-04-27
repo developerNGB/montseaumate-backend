@@ -138,7 +138,7 @@ app.use((req, res, next) => {
     const skipPaths = [
         '/api/public', '/api/webhooks', '/api/marketplace',
         '/api/integrations', '/api/whatsapp', '/api/config',
-        '/api/apollo',  // Apollo uses JWT auth, not CSRF
+        '/api/apollo', '/api/apify',  // Apollo/Apify uses JWT auth, not CSRF
         '/api/f', '/api/r', '/api/l',  // Public feedback/review/lead endpoints
         '/auth/google', '/auth/microsoft', '/auth/account'
     ];
@@ -184,6 +184,7 @@ app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/translations', translationRoutes);
 app.use('/api/smtp', smtpRoutes);
 app.use('/api/apollo', apolloRoutes);
+app.use('/api/apify', apolloRoutes);  // Apify scrape routes (same controller)
 
 // Public Facing Funnels (No Auth)
 app.use('/api', publicRoutes);

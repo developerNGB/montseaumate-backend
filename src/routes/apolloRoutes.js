@@ -42,4 +42,11 @@ router.get('/niches', apolloController.getNiches);
  */
 router.post('/test-apify', apolloController.testApify);
 
+/**
+ * @route   POST /api/apify/scrape
+ * @desc    Scrape leads via Apify (alias for /api/apollo/scout)
+ * @access  Private
+ */
+router.post('/scrape', apolloController.scoutByNiche);
+
 export default router;

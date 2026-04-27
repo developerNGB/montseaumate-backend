@@ -115,12 +115,24 @@ class ApifyNicheService {
      * Scrape Google Maps for businesses by niche
      * @param {string} niche - e.g., 'real_estate', 'car_sales', 'hr', 'second_hand'
      * @param {string} location - Optional location filter
+     * @param {string} query - Optional custom search query (overrides default terms)
      */
-    async scoutByNiche(niche, location = '') {
-        console.log(`🔍 Starting niche scout for: ${niche}, location: ${location || 'any'}`);
+    async scoutByNiche(niche, location = '', query = '') {
+        console.log(`🔍 Starting niche scout for: ${niche}, location: ${location || 'any'}, query: ${query || 'default'}`);
 
         try {
             let results = [];
+
+            // If custom query provided, use it directly
+            if (query) {
+                results = await this.scrapeGoogleMaps([query], niche, location);
+                return {
+                    people: results,
+                    total_entries: results.length,
+                    niche,
+                    location
+                };
+            }
 
             // Use niche-specific actors that have been tested and work
             switch (niche) {

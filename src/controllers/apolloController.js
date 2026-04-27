@@ -43,7 +43,7 @@ class ApolloController {
      */
     async scoutByNiche(req, res) {
         try {
-            const { niche, location, page = 1, perPage = 10 } = req.body;
+            const { niche, location, query, page = 1, perPage = 10 } = req.body;
             const userId = req.user.id;
 
             if (!niche) {
@@ -62,8 +62,8 @@ class ApolloController {
             }
 
             // Use Apify to scrape for leads
-            console.log(`🔍 Starting Apify scrape for niche: ${niche}, location: ${location}`);
-            const results = await apifyNicheService.scoutByNiche(niche, location);
+            console.log(`🔍 Starting Apify scrape for niche: ${niche}, location: ${location}, query: ${query}`);
+            const results = await apifyNicheService.scoutByNiche(niche, location, query);
             
             console.log(`📊 Apify results:`, {
                 peopleCount: results.people?.length,
