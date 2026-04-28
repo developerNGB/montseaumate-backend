@@ -304,6 +304,8 @@ const runMigrations = async () => {
         await safeQuery('lead_followup.reminder_delay_unit', `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_delay_unit VARCHAR(20) DEFAULT 'hours'`);
         await safeQuery('lead_followup.reminder_message',    `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_message TEXT DEFAULT ''`);
         await safeQuery('lead_followup.updated_at',          `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+        await safeQuery('lead_followup.lead_source',          `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'excel'`);
+        await safeQuery('lead_followup.lead_sources',         `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["excel"]'`);
 
         console.log('✅ Startup migrations & performance indices verified.');
         
