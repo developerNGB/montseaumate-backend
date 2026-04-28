@@ -312,6 +312,16 @@ const runMigrations = async () => {
         await safeQuery('review_funnel.lead_sources',         `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
         await safeQuery('review_funnel.capture_source',       `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_source VARCHAR(50) DEFAULT 'qr'`);
         await safeQuery('review_funnel.capture_sources',      `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('review_funnel.whatsapp_enabled',     `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('review_funnel.email_enabled',        `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
+
+        // lead_capture_settings column expansion
+        await safeQuery('lead_capture.lead_source',           `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'qr'`);
+        await safeQuery('lead_capture.lead_sources',          `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('lead_capture.capture_source',        `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS capture_source VARCHAR(50) DEFAULT 'qr'`);
+        await safeQuery('lead_capture.capture_sources',     `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('lead_capture.whatsapp_enabled',      `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('lead_capture.email_enabled',         `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
 
         console.log('✅ Startup migrations & performance indices verified.');
         
