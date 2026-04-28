@@ -246,6 +246,8 @@ const runMigrations = async () => {
         await safeQuery('idx_feedback_user_id',         `CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)`);
         await safeQuery('idx_integrations_user_id',     `CREATE INDEX IF NOT EXISTS idx_integrations_user_id ON integrations(user_id)`);
         await safeQuery('translations_table',           `CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())`);
+        await safeQuery('review_funnel.lead_sources',    `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('review_funnel.capture_sources', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
         
         // Create marketplace_leads table + contact info columns (Apify enrichment)
         await safeQuery('marketplace_leads_table', `

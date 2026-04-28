@@ -6,7 +6,7 @@ import qrcode from 'qrcode';
 export const getReviewFunnelConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1',
+            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, lead_sources, capture_sources, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -44,6 +44,8 @@ export const getReviewFunnelConfig = async (req, res) => {
                 leadQrCode,
                 lead_source: config.lead_source || 'qr',
                 capture_source: config.capture_source || 'qr',
+                lead_sources: config.lead_sources ? (typeof config.lead_sources === 'string' ? JSON.parse(config.lead_sources) : config.lead_sources) : [config.lead_source || 'qr'],
+                capture_sources: config.capture_sources ? (typeof config.capture_sources === 'string' ? JSON.parse(config.capture_sources) : config.capture_sources) : [config.capture_source || 'qr'],
                 whatsapp_enabled: config.whatsapp_enabled ?? true,
                 email_enabled: config.email_enabled ?? true
             }
@@ -132,6 +134,16 @@ export const saveReviewFunnelConfig = async (req, res) => {
             ]
         );
 
+        // Save multi-source arrays (columns added via migration; fails silently if not yet present)
+        const leadSourcesArr = req.body.lead_sources || [finalLeadSource];
+        const captureSourcesArr = req.body.capture_sources || [finalCaptureSource];
+        try {
+            await pool.query(
+                `UPDATE review_funnel_settings SET lead_sources = $1, capture_sources = $2 WHERE user_id = $3`,
+                [JSON.stringify(leadSourcesArr), JSON.stringify(captureSourcesArr), req.user.id]
+            );
+        } catch (_) { /* column not yet migrated — safe to ignore */ }
+
         const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
         const surveyUrl = `${baseUrl}/f/${automationId}`;
         const surveyQrCode = await qrcode.toDataURL(surveyUrl);
@@ -160,7 +172,9 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 leadUrl,
                 leadQrCode,
                 lead_source: finalLeadSource,
-                capture_source: finalCaptureSource
+                capture_source: finalCaptureSource,
+                lead_sources: leadSourcesArr,
+                capture_sources: captureSourcesArr,
             }
         });
 
