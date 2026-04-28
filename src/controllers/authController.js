@@ -191,12 +191,22 @@ export const login = async (req, res) => {
         }
 
         // ── Fetch user ───────────────────────────────
-        const result = await pool.query(
-            `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
-             FROM users
-             WHERE email = $1`,
-            [email.toLowerCase().trim()]
-        );
+        let result;
+        try {
+            result = await pool.query(
+                `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
+                 FROM users WHERE email = $1`,
+                [email.toLowerCase().trim()]
+            );
+        } catch (e) {
+            if (e.code !== '42703') throw e; // undefined_column — column not yet migrated
+            result = await pool.query(
+                `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at
+                 FROM users WHERE email = $1`,
+                [email.toLowerCase().trim()]
+            );
+            result.rows = result.rows.map(r => ({ ...r, weekly_reports_enabled: true }));
+        }
 
         if (result.rows.length === 0) {
             // Generic message — don't reveal whether email exists
@@ -596,11 +606,6 @@ export const googleLogin = async (req, res) => {
         const emailLower = googleUser.email.toLowerCase().trim();
         const name = googleUser.name || emailLower.split('@')[0];
 
-        // Ensure weekly_reports_enabled column exists (safe no-op if already present)
-        try {
-            await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
-        } catch (_) { /* ignore — column already exists or insufficient privileges */ }
-
         // Atomic upsert: insert if new, do nothing if email already exists, then fetch
         // ON CONFLICT prevents race-condition failures when two requests arrive simultaneously
         const upsertResult = await pool.query(
@@ -614,12 +619,23 @@ export const googleLogin = async (req, res) => {
         const isNewUser = upsertResult.rows.length > 0;
 
         // Now fetch the full user row (always present after upsert)
-        const result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status,
-                    COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled
-             FROM users WHERE email = $1`,
-            [emailLower]
-        );
+        let result;
+        try {
+            result = await pool.query(
+                `SELECT id, name, email, company_name, phone, plan, role, status,
+                        COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled
+                 FROM users WHERE email = $1`,
+                [emailLower]
+            );
+        } catch (e) {
+            if (e.code !== '42703') throw e; // undefined_column — column not yet migrated
+            result = await pool.query(
+                `SELECT id, name, email, company_name, phone, plan, role, status
+                 FROM users WHERE email = $1`,
+                [emailLower]
+            );
+            result.rows = result.rows.map(r => ({ ...r, weekly_reports_enabled: true }));
+        }
 
         if (result.rows.length === 0) {
             console.error('[googleLogin] User not found after upsert:', emailLower);

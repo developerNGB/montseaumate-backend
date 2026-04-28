@@ -17,7 +17,7 @@ export const getTranslations = async (req, res) => {
         res.json({ success: true, translations: mapping, raw: result.rows });
     } catch (err) {
         console.error('[getTranslations]', err);
-        res.status(500).json({ success: false, message: 'Failed to fetch translations' });
+        res.json({ success: true, translations: {}, raw: [] });
     }
 };
 
