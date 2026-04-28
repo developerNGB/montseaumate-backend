@@ -295,6 +295,16 @@ const runMigrations = async () => {
         await safeQuery('leads.followup_step_index', `ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
         await safeQuery('leads.last_followup_at',    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
 
+        // lead_followup_settings column expansion
+        await safeQuery('lead_followup.whatsapp_enabled',    `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('lead_followup.email_enabled',       `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('lead_followup.followup_sequence',   `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS followup_sequence JSONB DEFAULT '[]'`);
+        await safeQuery('lead_followup.reminder_active',     `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_active BOOLEAN DEFAULT FALSE`);
+        await safeQuery('lead_followup.reminder_delay_value',`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_delay_value INTEGER DEFAULT 48`);
+        await safeQuery('lead_followup.reminder_delay_unit', `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_delay_unit VARCHAR(20) DEFAULT 'hours'`);
+        await safeQuery('lead_followup.reminder_message',    `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_message TEXT DEFAULT ''`);
+        await safeQuery('lead_followup.updated_at',          `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`);
+
         console.log('✅ Startup migrations & performance indices verified.');
         
         // Finalize Startup
