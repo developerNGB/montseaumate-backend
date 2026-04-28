@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import pool from '../db/pool.js';
-import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { getValidGoogleToken, getValidGoogleTokens } from '../utils/googleAuth.js';
 import { getValidMicrosoftToken } from '../utils/microsoftAuth.js';
 import fetch from 'node-fetch';
 
@@ -87,8 +87,8 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
         }
 
         // 3. Try Google Integration
-        const googleToken = await getValidGoogleToken(userId);
-        if (googleToken) {
+        const { access_token: googleAccessToken, refresh_token: googleRefreshToken } = await getValidGoogleTokens(userId);
+        if (googleAccessToken && googleRefreshToken) {
             console.log(`[EmailService] Using Google OAuth for user ${userId}`);
             
             const intRes = await pool.query('SELECT metadata FROM integrations WHERE user_id = $1 AND provider = $2', [userId, 'google']);
@@ -103,7 +103,8 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
                         user: senderEmail,
                         clientId: process.env.GOOGLE_CLIENT_ID,
                         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-                        accessToken: googleToken
+                        refreshToken: googleRefreshToken,
+                        accessToken: googleAccessToken
                     }
                 });
 
