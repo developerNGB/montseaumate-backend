@@ -290,14 +290,12 @@ export const getEmployeeActivityStatus = async (req, res) => {
             ]);
         } else { // capture
             activityQueries = await Promise.all([
-                // Last lead captured
+                // Last lead captured (any source)
                 pool.query(`
                     SELECT MAX(created_at) as last_activity
                     FROM leads 
                     WHERE user_id = $1 
-                    AND lead_source IN ('qr', 'website', 'excel')
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                    AND source IN ('QR Survey', 'Website', 'bulk_import', 'Excel Upload', 'Public Link')
                 `, [userId]),
                 // New leads today not yet processed
                 pool.query(`
@@ -354,8 +352,8 @@ export const getEmployeeActivityStatus = async (req, res) => {
         });
 
     } catch (err) {
-        console.error('[getEmployeeActivityStatus] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error fetching activity status.' });
+        console.error('[getEmployeeActivityStatus] Error:', err.message, err.stack);
+        return res.status(500).json({ success: false, message: 'Server error fetching activity status.', error: err.message });
     }
 };
 

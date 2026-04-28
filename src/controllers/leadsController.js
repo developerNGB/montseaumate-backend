@@ -7,7 +7,7 @@ import { sendDynamicEmail } from '../services/emailService.js';
 
 /**
  * Dispatch a follow-up message to a single lead.
- * Priority: WhatsApp native → n8n → email (via emailService cascade).
+ * Priority: Email (primary) → WhatsApp native → n8n (fallback).
  * Never throws — logs errors and continues.
  */
 const dispatchFollowup = async (userId, lead, message) => {
@@ -17,7 +17,25 @@ const dispatchFollowup = async (userId, lead, message) => {
 
     console.log(`[Followup] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'})`);
 
-    // 1. Native WhatsApp
+    // 1. EMAIL (Primary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
+    if (lead.email) {
+        try {
+            console.log(`[Followup] 📧 Attempting email to ${lead.email}...`);
+            const result = await sendDynamicEmail(userId, {
+                to: lead.email,
+                subject: 'Following up on your enquiry',
+                text: personalisedMsg,
+                html: `<p style="font-family:sans-serif;line-height:1.6">${personalisedMsg.replace(/\n/g, '<br>')}</p>`,
+            });
+            console.log(`[Followup] ✅ Email sent to ${lead.email} via ${result.provider || 'unknown provider'}`);
+            return 'email';
+        } catch (e) {
+            console.error('[Followup] ❌ Email failed:', e.message);
+            // Continue to next channel - don't return yet
+        }
+    }
+
+    // 2. Native WhatsApp (Secondary)
     if (lead.phone) {
         try {
             const waInt = await pool.query(
@@ -35,36 +53,23 @@ const dispatchFollowup = async (userId, lead, message) => {
         }
     }
 
-    // 2. n8n webhook
+    // 3. n8n webhook (Tertiary/Fallback)
     const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
     if (webhookUrl) {
         try {
+            console.log(`[Followup] Attempting n8n webhook...`);
             const r = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ event: 'followup', lead, message: personalisedMsg }),
                 timeout: 8000,
             });
-            if (r.ok) { console.log(`[Followup] ✅ n8n triggered for ${lead.email || lead.phone}`); return 'n8n'; }
+            if (r.ok) { 
+                console.log(`[Followup] ✅ n8n triggered for ${lead.email || lead.phone}`); 
+                return 'n8n'; 
+            }
         } catch (e) {
             console.warn('[Followup] n8n failed:', e.message);
-        }
-    }
-
-    // 3. Email fallback (emailService cascade: SMTP → Microsoft → Google → system gmail)
-    if (lead.email) {
-        try {
-            console.log(`[Followup] Attempting email to ${lead.email}...`);
-            const result = await sendDynamicEmail(userId, {
-                to: lead.email,
-                subject: 'Following up on your enquiry',
-                text: personalisedMsg,
-                html: `<p style="font-family:sans-serif;line-height:1.6">${personalisedMsg.replace(/\n/g, '<br>')}</p>`,
-            });
-            console.log(`[Followup] ✅ Email sent to ${lead.email} via ${result.provider || 'unknown provider'}`);
-            return 'email';
-        } catch (e) {
-            console.error('[Followup] ❌ Email failed:', e.message, e.stack);
         }
     }
 
