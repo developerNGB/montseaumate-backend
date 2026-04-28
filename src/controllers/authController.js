@@ -574,7 +574,7 @@ export const googleLogin = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Google access token is required.' });
         }
 
-        // Verify token and get user info from Google's API
+        // Fetch user info from Google
         let googleUser;
         try {
             const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -596,27 +596,40 @@ export const googleLogin = async (req, res) => {
         const emailLower = googleUser.email.toLowerCase().trim();
         const name = googleUser.name || emailLower.split('@')[0];
 
-        let result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled FROM users WHERE email = $1`,
+        // Ensure weekly_reports_enabled column exists (safe no-op if already present)
+        try {
+            await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
+        } catch (_) { /* ignore — column already exists or insufficient privileges */ }
+
+        // Atomic upsert: insert if new, do nothing if email already exists, then fetch
+        // ON CONFLICT prevents race-condition failures when two requests arrive simultaneously
+        const upsertResult = await pool.query(
+            `INSERT INTO users (name, email, password_hash, company_name)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (email) DO NOTHING
+             RETURNING id`,
+            [name, emailLower, '', '']
+        );
+
+        const isNewUser = upsertResult.rows.length > 0;
+
+        // Now fetch the full user row (always present after upsert)
+        const result = await pool.query(
+            `SELECT id, name, email, company_name, phone, plan, role, status,
+                    COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled
+             FROM users WHERE email = $1`,
             [emailLower]
         );
 
-        let user;
-        let isNewUser = false;
-        if (result.rows.length > 0) {
-            user = result.rows[0];
-            if (user.status !== 'active') {
-                return res.status(403).json({ success: false, message: 'Your account is deactivated. Please contact support.' });
-            }
-        } else {
-            const insertResult = await pool.query(
-                `INSERT INTO users (name, email, password_hash, company_name)
-                 VALUES ($1, $2, $3, $4)
-                 RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled`,
-                [name, emailLower, '', '']
-            );
-            user = insertResult.rows[0];
-            isNewUser = true;
+        if (result.rows.length === 0) {
+            console.error('[googleLogin] User not found after upsert:', emailLower);
+            return res.status(500).json({ success: false, message: 'Failed to retrieve account. Please try again.' });
+        }
+
+        const user = result.rows[0];
+
+        if (user.status !== 'active') {
+            return res.status(403).json({ success: false, message: 'Your account is deactivated. Please contact support.' });
         }
 
         const token = signToken(user);
@@ -630,7 +643,7 @@ export const googleLogin = async (req, res) => {
             isNewUser,
         });
     } catch (err) {
-        console.error('[googleLogin] Unexpected error:', err.message);
+        console.error('[googleLogin] Unexpected error:', err.message, err.code, err.stack?.split('\n').slice(0, 4).join(' | '));
         return res.status(500).json({
             success: false,
             message: 'An unexpected error occurred during Google sign-in. Please try again.',
