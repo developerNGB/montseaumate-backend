@@ -387,3 +387,54 @@ export const triggerBulkFollowup = async (req, res) => {
         if (!res.headersSent) res.status(500).json({ success: false, message: 'Server error' });
     }
 };
+
+export const deleteLead = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        // Verify the lead belongs to this user
+        const checkRes = await pool.query(
+            `SELECT id FROM leads WHERE id = $1 AND user_id = $2`,
+            [id, userId]
+        );
+
+        if (checkRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+
+        // Delete the lead
+        await pool.query(`DELETE FROM leads WHERE id = $1`, [id]);
+
+        return res.status(200).json({ success: true, message: 'Lead deleted successfully' });
+    } catch (err) {
+        console.error('[deleteLead] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error deleting lead' });
+    }
+};
+
+export const bulkDeleteLeads = async (req, res) => {
+    try {
+        const { ids } = req.body;
+        const userId = req.user.id;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'Invalid IDs array' });
+        }
+
+        // Delete leads that belong to this user
+        const result = await pool.query(
+            `DELETE FROM leads WHERE id = ANY($1) AND user_id = $2 RETURNING id`,
+            [ids, userId]
+        );
+
+        return res.status(200).json({ 
+            success: true, 
+            message: `${result.rowCount} leads deleted successfully`,
+            deletedCount: result.rowCount
+        });
+    } catch (err) {
+        console.error('[bulkDeleteLeads] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error deleting leads' });
+    }
+};

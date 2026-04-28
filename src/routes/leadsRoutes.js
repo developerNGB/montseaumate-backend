@@ -4,7 +4,9 @@ import {
     updateLeadStatus,
     importLeads,
     triggerLeadFollowup,
-    triggerBulkFollowup
+    triggerBulkFollowup,
+    deleteLead,
+    bulkDeleteLeads
 } from '../controllers/leadsController.js';
 import authenticate from '../middleware/authenticate.js';
 
@@ -27,5 +29,11 @@ router.post('/:id/trigger', triggerLeadFollowup);
 
 // POST /api/leads/trigger-bulk — dispatch follow-ups for recently imported leads
 router.post('/trigger-bulk', triggerBulkFollowup);
+
+// DELETE /api/leads/:id — delete single lead
+router.delete('/:id', deleteLead);
+
+// POST /api/leads/bulk-delete — delete multiple leads
+router.post('/bulk-delete', bulkDeleteLeads);
 
 export default router;
