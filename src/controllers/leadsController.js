@@ -186,33 +186,45 @@ export const importLeads = async (req, res) => {
             client.release();
         }
 
-        // Respond immediately — follow-up dispatch is async (fire-and-forget)
+        // Respond immediately — dispatch is async (fire-and-forget)
         res.status(200).json({ success: true, message: `${savedLeads.length} leads imported successfully` });
 
-        // Trigger follow-up sequence for each saved lead (non-blocking)
-        if (savedLeads.length > 0) {
-            const cfgRes = await pool.query(
-                `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
-                [req.user.id]
-            );
-            const cfg = cfgRes.rows[0];
-            if (cfg?.is_active) {
-                const sequence = (typeof cfg.followup_sequence === 'string'
-                    ? JSON.parse(cfg.followup_sequence)
-                    : cfg.followup_sequence) || [];
-                const firstMessage = sequence[0]?.message || cfg.message;
+        if (savedLeads.length === 0) return;
 
-                // Fire-and-forget: don't await so response has already been sent
-                Promise.allSettled(savedLeads.map(lead => dispatchFollowup(req.user.id, lead, firstMessage)))
-                    .then(results => {
-                        const counts = results.reduce((acc, r) => {
-                            const ch = r.value || 'error';
-                            acc[ch] = (acc[ch] || 0) + 1;
-                            return acc;
-                        }, {});
-                        console.log(`[importLeads] Follow-up dispatch complete:`, counts);
-                    });
-            }
+        // 1. Send capture auto-response to each imported lead (non-blocking)
+        const captureRes = await pool.query(
+            `SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`,
+            [req.user.id]
+        ).catch(() => ({ rows: [] }));
+        const captureCfg = captureRes.rows[0];
+        if (captureCfg?.lead_capture_active && captureCfg?.auto_response_message) {
+            Promise.allSettled(
+                savedLeads.filter(l => l.email || l.phone).map(lead =>
+                    dispatchFollowup(req.user.id, lead, captureCfg.auto_response_message)
+                )
+            ).then(r => console.log(`[importLeads] Auto-response sent to ${r.filter(x => x.status === 'fulfilled').length} leads`));
+        }
+
+        // 2. Trigger follow-up sequence if followup agent is active
+        const cfgRes = await pool.query(
+            `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
+            [req.user.id]
+        ).catch(() => ({ rows: [] }));
+        const cfg = cfgRes.rows[0];
+        if (cfg?.is_active) {
+            const sequence = (typeof cfg.followup_sequence === 'string'
+                ? JSON.parse(cfg.followup_sequence)
+                : cfg.followup_sequence) || [];
+            const firstMessage = sequence[0]?.message || cfg.message;
+            Promise.allSettled(savedLeads.map(lead => dispatchFollowup(req.user.id, lead, firstMessage)))
+                .then(results => {
+                    const counts = results.reduce((acc, r) => {
+                        const ch = r.value || 'error';
+                        acc[ch] = (acc[ch] || 0) + 1;
+                        return acc;
+                    }, {});
+                    console.log(`[importLeads] Follow-up dispatch complete:`, counts);
+                });
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message);
