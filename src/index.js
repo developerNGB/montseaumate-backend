@@ -307,6 +307,10 @@ const runMigrations = async () => {
         await safeQuery('lead_followup.lead_source',          `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'excel'`);
         await safeQuery('lead_followup.lead_sources',         `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["excel"]'`);
 
+        // review_funnel_settings column expansion
+        await safeQuery('review_funnel.lead_source',          `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'qr'`);
+        await safeQuery('review_funnel.lead_sources',         `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
+
         console.log('✅ Startup migrations & performance indices verified.');
         
         // Finalize Startup
