@@ -15,6 +15,8 @@ const dispatchFollowup = async (userId, lead, message) => {
         .replace(/\{name\}/gi, lead.full_name || 'there')
         .replace(/\{NAME\}/g,  lead.full_name || 'there');
 
+    console.log(`[Followup] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'})`);
+
     // 1. Native WhatsApp
     if (lead.phone) {
         try {
@@ -24,9 +26,10 @@ const dispatchFollowup = async (userId, lead, message) => {
             );
             if (waInt.rows[0]?.access_token === 'whatsapp_native_session') {
                 await whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg);
-                console.log(`[Followup] WhatsApp sent to ${lead.phone}`);
+                console.log(`[Followup] ✅ WhatsApp sent to ${lead.phone}`);
                 return 'whatsapp';
             }
+            console.log(`[Followup] WhatsApp not connected for user ${userId}`);
         } catch (e) {
             console.warn('[Followup] WhatsApp failed:', e.message);
         }
@@ -42,7 +45,7 @@ const dispatchFollowup = async (userId, lead, message) => {
                 body: JSON.stringify({ event: 'followup', lead, message: personalisedMsg }),
                 timeout: 8000,
             });
-            if (r.ok) { console.log(`[Followup] n8n triggered for ${lead.email || lead.phone}`); return 'n8n'; }
+            if (r.ok) { console.log(`[Followup] ✅ n8n triggered for ${lead.email || lead.phone}`); return 'n8n'; }
         } catch (e) {
             console.warn('[Followup] n8n failed:', e.message);
         }
@@ -51,20 +54,21 @@ const dispatchFollowup = async (userId, lead, message) => {
     // 3. Email fallback (emailService cascade: SMTP → Microsoft → Google → system gmail)
     if (lead.email) {
         try {
-            await sendDynamicEmail(userId, {
+            console.log(`[Followup] Attempting email to ${lead.email}...`);
+            const result = await sendDynamicEmail(userId, {
                 to: lead.email,
                 subject: 'Following up on your enquiry',
                 text: personalisedMsg,
                 html: `<p style="font-family:sans-serif;line-height:1.6">${personalisedMsg.replace(/\n/g, '<br>')}</p>`,
             });
-            console.log(`[Followup] Email sent to ${lead.email}`);
+            console.log(`[Followup] ✅ Email sent to ${lead.email} via ${result.provider || 'unknown provider'}`);
             return 'email';
         } catch (e) {
-            console.warn('[Followup] Email failed:', e.message);
+            console.error('[Followup] ❌ Email failed:', e.message, e.stack);
         }
     }
 
-    console.warn(`[Followup] No channel available for lead ${lead.id || lead.email}`);
+    console.warn(`[Followup] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
     return 'none';
 };
 
@@ -198,11 +202,16 @@ export const importLeads = async (req, res) => {
         ).catch(() => ({ rows: [] }));
         const captureCfg = captureRes.rows[0];
         if (captureCfg?.lead_capture_active && captureCfg?.auto_response_message) {
+            console.log(`[importLeads] Sending auto-responses to ${savedLeads.length} leads...`);
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
                     dispatchFollowup(req.user.id, lead, captureCfg.auto_response_message)
                 )
-            ).then(r => console.log(`[importLeads] Auto-response sent to ${r.filter(x => x.status === 'fulfilled').length} leads`));
+            ).then(r => {
+                const successful = r.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
+                const failed = r.filter(x => x.status === 'rejected' || x.value === 'none').length;
+                console.log(`[importLeads] ✅ Auto-response complete: ${successful} sent, ${failed} failed`);
+            });
         }
 
         // 2. Trigger follow-up sequence if followup agent is active
@@ -212,6 +221,7 @@ export const importLeads = async (req, res) => {
         ).catch(() => ({ rows: [] }));
         const cfg = cfgRes.rows[0];
         if (cfg?.is_active) {
+            console.log(`[importLeads] Follow-up agent active - sending first message to ${savedLeads.length} leads...`);
             const sequence = (typeof cfg.followup_sequence === 'string'
                 ? JSON.parse(cfg.followup_sequence)
                 : cfg.followup_sequence) || [];
@@ -219,12 +229,15 @@ export const importLeads = async (req, res) => {
             Promise.allSettled(savedLeads.map(lead => dispatchFollowup(req.user.id, lead, firstMessage)))
                 .then(results => {
                     const counts = results.reduce((acc, r) => {
-                        const ch = r.value || 'error';
+                        const ch = r.status === 'fulfilled' ? (r.value || 'error') : 'error';
                         acc[ch] = (acc[ch] || 0) + 1;
                         return acc;
                     }, {});
-                    console.log(`[importLeads] Follow-up dispatch complete:`, counts);
+                    const totalSent = (counts.whatsapp || 0) + (counts.email || 0) + (counts.n8n || 0);
+                    console.log(`[importLeads] ✅ Follow-up dispatch complete:`, counts, `Total sent: ${totalSent}`);
                 });
+        } else {
+            console.log(`[importLeads] Follow-up agent is inactive - skipping follow-up dispatch`);
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message);

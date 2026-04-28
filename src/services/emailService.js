@@ -14,6 +14,8 @@ import fetch from 'node-fetch';
  */
 export const sendDynamicEmail = async (userId, mailOptions) => {
     try {
+        console.log(`[EmailService] Starting dispatch for user ${userId} to ${mailOptions.to}`);
+        
         // 1. Fetch User SMTP Settings
         const smtpRes = await pool.query(
             `SELECT * FROM smtp_settings WHERE user_id = $1 AND is_active = true`,
@@ -41,7 +43,10 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
 
             const options = { ...mailOptions, from: mailOptions.from || finalFrom };
             const info = await transporter.sendMail(options);
-            return { success: true, messageId: info.messageId };
+            console.log(`[EmailService] ✅ Custom SMTP sent: ${info.messageId}`);
+            return { success: true, messageId: info.messageId, provider: 'smtp' };
+        } else {
+            console.log(`[EmailService] No Custom SMTP configured for user ${userId}`);
         }
 
         // 2. Try Microsoft Integration
@@ -77,13 +82,18 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
                 });
 
                 if (response.ok) {
+                    console.log(`[EmailService] ✅ Microsoft Graph sent to ${mailOptions.to}`);
                     return { success: true, provider: 'microsoft' };
                 } else {
                     const errData = await response.json();
-                    console.error('[EmailService] Microsoft Graph Send Failed:', errData);
+                    console.error('[EmailService] ❌ Microsoft Graph Send Failed:', errData);
                     // Fall through to next provider if allowed, or throw
                 }
+            } else {
+                console.log(`[EmailService] Microsoft integration found but no sender email`);
             }
+        } else {
+            console.log(`[EmailService] No Microsoft integration found for user ${userId}`);
         }
 
         // 3. Try Google Integration
@@ -110,12 +120,22 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
 
                 const options = { ...mailOptions, from: senderEmail };
                 const info = await transporter.sendMail(options);
+                console.log(`[EmailService] ✅ Google OAuth sent to ${mailOptions.to}: ${info.messageId}`);
                 return { success: true, messageId: info.messageId, provider: 'google' };
+            } else {
+                console.log(`[EmailService] Google OAuth available but no sender email found in metadata`);
             }
+        } else {
+            console.log(`[EmailService] No Google OAuth tokens found for user ${userId}`);
         }
 
         // 4. Default System Fallback
-        console.log(`[EmailService] Using System Gmail for user ${userId}`);
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            console.error('[EmailService] ❌ System fallback not configured - EMAIL_USER or EMAIL_PASS missing');
+            throw new Error('No email provider configured and system fallback not available');
+        }
+        
+        console.log(`[EmailService] Using System Gmail for user ${userId} (${process.env.EMAIL_USER})`);
         const systemTransporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
@@ -124,8 +144,18 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
             }
         });
 
+        // Verify connection before sending
+        try {
+            await systemTransporter.verify();
+            console.log('[EmailService] System Gmail connection verified');
+        } catch (verifyErr) {
+            console.error('[EmailService] ❌ System Gmail connection failed:', verifyErr.message);
+            throw verifyErr;
+        }
+
         const options = { ...mailOptions, from: mailOptions.from || process.env.EMAIL_USER };
         const info = await systemTransporter.sendMail(options);
+        console.log(`[EmailService] ✅ System Gmail sent: ${info.messageId}`);
         return { success: true, messageId: info.messageId, provider: 'system' };
 
     } catch (error) {
