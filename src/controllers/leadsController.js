@@ -6,6 +6,19 @@ import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
 /**
+ * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
+ */
+const extractNameFromEmail = (email) => {
+    if (!email) return null;
+    const localPart = email.split('@')[0];
+    // Remove numbers and split by common separators
+    const parts = localPart.replace(/[0-9]/g, '').split(/[._\-]/).filter(p => p.length > 1);
+    if (parts.length === 0) return null;
+    // Capitalize each part
+    return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+};
+
+/**
  * Create professional HTML email template
  */
 const createEmailTemplate = (message, leadName) => {
@@ -62,10 +75,10 @@ const createEmailTemplate = (message, leadName) => {
  * @param {string} subject - Optional custom subject line
  */
 const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from Our Team') => {
-    // Simple name handling: use provided name or just "there"
-    const leadName = lead.full_name && lead.full_name !== 'Imported Lead' 
-        ? lead.full_name 
-        : 'there';
+    // Name handling: use provided name, or extract from email, or fallback to "there"
+    const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
+        ? lead.full_name
+        : extractNameFromEmail(lead.email) || 'there';
     
     const personalisedMsg = (message || 'Hi {name}! Just following up on your enquiry.')
         .replace(/\{name\}/gi, leadName)
@@ -229,16 +242,17 @@ export const importLeads = async (req, res) => {
             for (const lead of uniqueLeads) {
                 const result = await client.query(
                     `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'New', true, NOW())
+                     VALUES ($1, $2, $3, $4, $5, $6, 'New', $7, NOW())
                      ON CONFLICT DO NOTHING
                      RETURNING *`,
                     [
                         req.user.id,
-                        lead.full_name || 'there',
+                        lead.full_name || extractNameFromEmail(lead.email) || 'there',
                         lead.email || '',
                         lead.phone || '',
                         lead.notes || '',
                         lead.source || 'Imported',
+                        true, // marketing_consent = YES
                     ]
                 );
                 if (result.rows[0]) savedLeads.push(result.rows[0]);
