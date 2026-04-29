@@ -238,7 +238,7 @@ export const importLeads = async (req, res) => {
                         lead.email || '',
                         lead.phone || '',
                         lead.notes || '',
-                        lead.source || 'Excel Upload',
+                        lead.source || 'Imported',
                     ]
                 );
                 if (result.rows[0]) savedLeads.push(result.rows[0]);
