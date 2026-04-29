@@ -232,17 +232,27 @@ export const importLeads = async (req, res) => {
         const seenEmail = new Set();
         const seenPhone = new Set();
         let fileDups = 0;
+        console.log(`[importLeads] Starting within-file dedup for ${leads.length} leads`);
         const batchUnique = leads.filter(l => {
             const emailKey = (l.email || '').toLowerCase().trim();
             const phoneKey = (l.phone || '').replace(/\D/g, '');
             // Check if this lead matches any previously seen (by email OR phone)
-            if (emailKey && seenEmail.has(emailKey)) { fileDups++; return false; }
-            if (phoneKey && seenPhone.has(phoneKey)) { fileDups++; return false; }
+            if (emailKey && seenEmail.has(emailKey)) { 
+                console.log(`[importLeads] File dup found by email: ${emailKey}`);
+                fileDups++; 
+                return false; 
+            }
+            if (phoneKey && seenPhone.has(phoneKey)) { 
+                console.log(`[importLeads] File dup found by phone: ${phoneKey}`);
+                fileDups++; 
+                return false; 
+            }
             // Track both keys for this lead
             if (emailKey) seenEmail.add(emailKey);
             if (phoneKey) seenPhone.add(phoneKey);
             return true;
         });
+        console.log(`[importLeads] Within-file dedup: ${leads.length} → ${batchUnique.length} unique, ${fileDups} duplicates`);
 
         // 2. Fetch automation configs + check existing duplicates — all in parallel
         const batchEmails = batchUnique.map(l => (l.email || '').toLowerCase().trim()).filter(Boolean);
@@ -280,13 +290,24 @@ export const importLeads = async (req, res) => {
 
         // 3. Filter out DB duplicates
         let dbDups = 0;
+        console.log(`[importLeads] Checking ${batchUnique.length} leads against DB. Existing emails: ${existingEmails.size}, phones: ${existingPhones.size}`);
+        console.log(`[importLeads] All emails in batch:`, batchUnique.map(l => l.email));
         const newLeads = batchUnique.filter(l => {
             const email = (l.email || '').toLowerCase().trim();
             const phone = (l.phone || '').replace(/\D/g, '');
-            if (email && existingEmails.has(email)) { dbDups++; return false; }
-            if (phone && existingPhones.has(phone)) { dbDups++; return false; }
+            if (email && existingEmails.has(email)) { 
+                console.log(`[importLeads] DB dup found by email: ${email}`);
+                dbDups++; 
+                return false; 
+            }
+            if (phone && existingPhones.has(phone)) { 
+                console.log(`[importLeads] DB dup found by phone: ${phone}`);
+                dbDups++; 
+                return false; 
+            }
             return true;
         });
+        console.log(`[importLeads] After DB dedup: ${batchUnique.length} → ${newLeads.length} new, ${dbDups} DB duplicates`);
 
         if (newLeads.length === 0) {
             return res.status(200).json({
