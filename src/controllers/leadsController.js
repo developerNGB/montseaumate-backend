@@ -235,14 +235,34 @@ export const importLeads = async (req, res) => {
             return true;
         });
 
+        // Check which automations are active before inserting
+        const [captureRes, followupRes] = await Promise.all([
+            pool.query(`SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`, [req.user.id]).catch(() => ({ rows: [] })),
+            pool.query(`SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`, [req.user.id]).catch(() => ({ rows: [] }))
+        ]);
+        const captureCfg = captureRes.rows[0];
+        const followupCfg = followupRes.rows[0];
+        const followupActive = followupCfg?.is_active;
+        const captureActive = captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
+
         const client = await pool.connect();
         let savedLeads = [];
         try {
             await client.query('BEGIN');
             for (const lead of uniqueLeads) {
+                // Determine initial followup state
+                let followupStepIndex = 0;
+                let lastFollowupAt = null;
+                
+                // If followup is active, set step to 0 and last_followup_at to NOW() 
+                // so cron picks up first step immediately
+                if (followupActive) {
+                    lastFollowupAt = new Date().toISOString();
+                }
+
                 const result = await client.query(
-                    `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'New', $7, NOW())
+                    `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'New', $7, $8, $9, NOW())
                      ON CONFLICT DO NOTHING
                      RETURNING *`,
                     [
@@ -253,6 +273,8 @@ export const importLeads = async (req, res) => {
                         lead.notes || '',
                         lead.source || 'Imported',
                         true, // marketing_consent = YES
+                        followupStepIndex,
+                        lastFollowupAt,
                     ]
                 );
                 if (result.rows[0]) savedLeads.push(result.rows[0]);
@@ -265,18 +287,13 @@ export const importLeads = async (req, res) => {
             client.release();
         }
 
-        // Respond immediately — dispatch is async (fire-and-forget)
+        // Respond immediately — cron will handle all messaging
         res.status(200).json({ success: true, message: `${savedLeads.length} leads imported successfully` });
 
         if (savedLeads.length === 0) return;
 
-        // 1. Send capture auto-response to each imported lead (non-blocking)
-        const captureRes = await pool.query(
-            `SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`,
-            [req.user.id]
-        ).catch(() => ({ rows: [] }));
-        const captureCfg = captureRes.rows[0];
-        if (captureCfg?.lead_capture_active && captureCfg?.auto_response_message) {
+        // Fire-and-forget: Send capture auto-responses immediately (non-blocking)
+        if (captureActive) {
             console.log(`[importLeads] Sending auto-responses to ${savedLeads.length} leads...`);
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
@@ -284,35 +301,14 @@ export const importLeads = async (req, res) => {
                 )
             ).then(r => {
                 const successful = r.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
-                const failed = r.filter(x => x.status === 'rejected' || x.value === 'none').length;
-                console.log(`[importLeads] ✅ Auto-response complete: ${successful} sent, ${failed} failed`);
+                console.log(`[importLeads] ✅ Auto-response complete: ${successful} sent`);
             });
         }
 
-        // 2. Trigger follow-up sequence if followup agent is active
-        const cfgRes = await pool.query(
-            `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
-            [req.user.id]
-        ).catch(() => ({ rows: [] }));
-        const cfg = cfgRes.rows[0];
-        if (cfg?.is_active) {
-            console.log(`[importLeads] Follow-up agent active - sending first message to ${savedLeads.length} leads...`);
-            const sequence = (typeof cfg.followup_sequence === 'string'
-                ? JSON.parse(cfg.followup_sequence)
-                : cfg.followup_sequence) || [];
-            const firstMessage = sequence[0]?.message || cfg.message;
-            Promise.allSettled(savedLeads.map(lead => dispatchFollowup(req.user.id, lead, firstMessage)))
-                .then(results => {
-                    const counts = results.reduce((acc, r) => {
-                        const ch = r.status === 'fulfilled' ? (r.value || 'error') : 'error';
-                        acc[ch] = (acc[ch] || 0) + 1;
-                        return acc;
-                    }, {});
-                    const totalSent = (counts.whatsapp || 0) + (counts.email || 0) + (counts.n8n || 0);
-                    console.log(`[importLeads] ✅ Follow-up dispatch complete:`, counts, `Total sent: ${totalSent}`);
-                });
-        } else {
-            console.log(`[importLeads] Follow-up agent is inactive - skipping follow-up dispatch`);
+        // Follow-ups are now handled by cron - leads have followup_step_index=0 and last_followup_at=NOW()
+        // Cron will pick them up within 10 seconds and send based on sequence schedule
+        if (followupActive) {
+            console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up sequence. Cron will send first message immediately.`);
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message);
@@ -431,7 +427,6 @@ export const triggerLeadFollowup = async (req, res) => {
 
 export const triggerBulkFollowup = async (req, res) => {
     try {
-        const { source } = req.body;
         const cfgRes = await pool.query(
             `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
             [req.user.id]
@@ -441,22 +436,33 @@ export const triggerBulkFollowup = async (req, res) => {
             return res.status(200).json({ success: true, message: 'Follow-up agent is off duty' });
         }
 
-        const sequence = (typeof cfg.followup_sequence === 'string'
-            ? JSON.parse(cfg.followup_sequence)
-            : cfg.followup_sequence) || [];
-        const firstMessage = sequence[0]?.message || cfg.message;
-
-        // Get leads imported in the last 60 minutes with status New (any source)
+        // Get leads imported in the last 60 minutes with status New that haven't been scheduled yet
         const leadsRes = await pool.query(
-            `SELECT * FROM leads WHERE user_id = $1 AND lead_status = 'New' AND created_at > NOW() - INTERVAL '60 minutes'`,
+            `SELECT * FROM leads WHERE user_id = $1 AND lead_status = 'New' 
+             AND created_at > NOW() - INTERVAL '60 minutes' 
+             AND last_followup_at IS NULL`,
             [req.user.id]
         );
 
         const leads = leadsRes.rows;
-        res.status(200).json({ success: true, dispatching: leads.length });
+        if (leads.length === 0) {
+            return res.status(200).json({ success: true, message: 'No new leads to schedule', scheduled: 0 });
+        }
 
-        // Fire-and-forget dispatch
-        Promise.allSettled(leads.map(lead => dispatchFollowup(req.user.id, lead, firstMessage)));
+        // Schedule them for cron processing by setting last_followup_at = NOW()
+        await pool.query(
+            `UPDATE leads SET followup_step_index = 0, last_followup_at = NOW() 
+             WHERE id = ANY($1) AND user_id = $2`,
+            [leads.map(l => l.id), req.user.id]
+        );
+
+        res.status(200).json({ 
+            success: true, 
+            message: `${leads.length} leads scheduled for follow-up`,
+            scheduled: leads.length 
+        });
+
+        console.log(`[triggerBulkFollowup] ${leads.length} leads scheduled. Cron will send first message immediately.`);
     } catch (err) {
         console.error('[triggerBulkFollowup] Error:', err.message);
         if (!res.headersSent) res.status(500).json({ success: false, message: 'Server error' });
