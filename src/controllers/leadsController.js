@@ -6,16 +6,72 @@ import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
 /**
+ * Create professional HTML email template
+ */
+const createEmailTemplate = (message, leadName) => {
+    const currentYear = new Date().getFullYear();
+    // Use provided name or just "there" - don't extract from email
+    const greetingName = leadName && leadName !== 'Imported Lead' ? leadName : 'there';
+    return `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f5f5f5; }
+        .email-wrapper { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
+        .header { padding: 40px 30px; text-align: center; border-bottom: 3px solid #3b82f6; }
+        .header h1 { margin: 0; color: #1f2937; font-size: 24px; font-weight: 600; }
+        .content { padding: 40px 30px; }
+        .content p { margin: 0 0 20px 0; color: #4b5563; font-size: 16px; line-height: 1.7; }
+        .message-box { background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 20px; margin: 25px 0; border-radius: 0 8px 8px 0; }
+        .message-box p { margin: 0; color: #374151; }
+        .signature { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
+        .signature p { margin: 0; color: #6b7280; font-size: 14px; }
+        .footer { padding: 30px; text-align: center; background-color: #f9fafb; border-top: 1px solid #e5e7eb; }
+        .footer p { margin: 0; color: #9ca3af; font-size: 12px; }
+        .button { display: inline-block; padding: 12px 24px; background-color: #3b82f6; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <div class="header">
+            <h1>Follow-up from Our Team</h1>
+        </div>
+        <div class="content">
+            <p>Hi ${greetingName},</p>
+            <div class="message-box">
+                <p>${message.replace(/\n/g, '</p><p>')}</p>
+            </div>
+            <div class="signature">
+                <p>Best regards,<br>Customer Success Team</p>
+            </div>
+        </div>
+        <div class="footer">
+            <p>This email was sent to you as part of our follow-up service.<br>© ${currentYear} All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>`;
+};
+
+/**
  * Dispatch a follow-up message to a single lead.
  * Priority: Email (primary) → WhatsApp native → n8n (fallback).
  * Never throws — logs errors and continues.
+ * @param {string} subject - Optional custom subject line
  */
-const dispatchFollowup = async (userId, lead, message) => {
+const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from Our Team') => {
+    // Simple name handling: use provided name or just "there"
+    const leadName = lead.full_name && lead.full_name !== 'Imported Lead' 
+        ? lead.full_name 
+        : 'there';
+    
     const personalisedMsg = (message || 'Hi {name}! Just following up on your enquiry.')
-        .replace(/\{name\}/gi, lead.full_name || 'there')
-        .replace(/\{NAME\}/g,  lead.full_name || 'there');
+        .replace(/\{name\}/gi, leadName)
+        .replace(/\{NAME\}/g, leadName);
 
-    console.log(`[Followup] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'})`);
+    console.log(`[Followup] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
     // 1. EMAIL (Primary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
     if (lead.email) {
@@ -23,9 +79,9 @@ const dispatchFollowup = async (userId, lead, message) => {
             console.log(`[Followup] 📧 Attempting email to ${lead.email}...`);
             const result = await sendDynamicEmail(userId, {
                 to: lead.email,
-                subject: 'Following up on your enquiry',
+                subject: subject,
                 text: personalisedMsg,
-                html: `<p style="font-family:sans-serif;line-height:1.6">${personalisedMsg.replace(/\n/g, '<br>')}</p>`,
+                html: createEmailTemplate(personalisedMsg, leadName),
             });
             console.log(`[Followup] ✅ Email sent to ${lead.email} via ${result.provider || 'unknown provider'}`);
             return 'email';
@@ -178,7 +234,7 @@ export const importLeads = async (req, res) => {
                      RETURNING *`,
                     [
                         req.user.id,
-                        lead.full_name || 'Imported Lead',
+                        lead.full_name || 'there',
                         lead.email || '',
                         lead.phone || '',
                         lead.notes || '',
@@ -210,7 +266,7 @@ export const importLeads = async (req, res) => {
             console.log(`[importLeads] Sending auto-responses to ${savedLeads.length} leads...`);
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(req.user.id, lead, captureCfg.auto_response_message)
+                    dispatchFollowup(req.user.id, lead, captureCfg.auto_response_message, 'Thanks for reaching out!')
                 )
             ).then(r => {
                 const successful = r.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
@@ -376,10 +432,10 @@ export const triggerBulkFollowup = async (req, res) => {
             : cfg.followup_sequence) || [];
         const firstMessage = sequence[0]?.message || cfg.message;
 
-        // Get leads imported in the last 10 minutes with status New
+        // Get leads imported in the last 60 minutes with status New (any source)
         const leadsRes = await pool.query(
-            `SELECT * FROM leads WHERE user_id = $1 AND source = $2 AND lead_status = 'New' AND created_at > NOW() - INTERVAL '10 minutes'`,
-            [req.user.id, source || 'bulk_import']
+            `SELECT * FROM leads WHERE user_id = $1 AND lead_status = 'New' AND created_at > NOW() - INTERVAL '60 minutes'`,
+            [req.user.id]
         );
 
         const leads = leadsRes.rows;
