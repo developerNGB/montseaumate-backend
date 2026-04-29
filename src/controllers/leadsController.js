@@ -243,7 +243,9 @@ export const importLeads = async (req, res) => {
         const captureCfg = captureRes.rows[0];
         const followupCfg = followupRes.rows[0];
         const followupActive = followupCfg?.is_active;
-        const captureActive = captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
+        // skipCapture flag from Leads page import - only send follow-ups, not capture auto-response
+        const skipCapture = req.body.skipCapture;
+        const captureActive = !skipCapture && captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
 
         const client = await pool.connect();
         let savedLeads = [];

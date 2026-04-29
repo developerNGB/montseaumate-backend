@@ -27,53 +27,73 @@ const getScheduledTime = (startTime, delayValue, delayUnit) => {
 };
 
 const startFollowupCron = () => {
-    console.log('🤖 Automated Follow-up Cron (Multi-Sequence) Started');
+    console.log('🤖 Automated Follow-up Cron (Batch Mode) Started');
 
-    const processSequenceStep = async (lead, step, index) => {
-        try {
-            // ── STEP 1: CLAIM the lead atomically ────────────────────────────────
-            const claim = await pool.query(
-                `UPDATE leads
-                    SET followup_status = 'processing', updated_at = NOW()
-                  WHERE id = $1
-                    AND (followup_status IS NULL OR followup_status != 'processing')
-                  RETURNING id`,
-                [lead.id]
-            );
+    // ── Batch Process ALL leads that are due simultaneously ────────────────────
+    const processBatch = async (leads) => {
+        if (leads.length === 0) return;
+        
+        console.log(`[FollowupCron] 📦 Processing batch of ${leads.length} leads simultaneously`);
+        
+        // Group leads by user_id for efficient WhatsApp session checks
+        const waSessions = new Map();
+        
+        // Claim ALL leads first atomically
+        const leadIds = leads.map(l => l.id);
+        await pool.query(
+            `UPDATE leads SET followup_status = 'processing', updated_at = NOW() 
+             WHERE id = ANY($1) AND (followup_status IS NULL OR followup_status != 'processing')`,
+            [leadIds]
+        );
+
+        // Process ALL leads in parallel (batch send)
+        const results = await Promise.allSettled(leads.map(async (lead) => {
+            const sequence = typeof lead.followup_sequence === 'string' 
+                ? JSON.parse(lead.followup_sequence) 
+                : (lead.followup_sequence || []);
             
-            if (claim.rowCount === 0) return;
+            if (sequence.length === 0) return { lead, sent: false };
 
+            const currentIndex = lead.followup_step_index || 0;
+            const step = sequence[currentIndex];
+            
             const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-            const link    = `${baseUrl}/r/${lead.automation_id || ''}`;
-            const msg     = injectPlaceholders(step.message || '', {
-                name:   lead.full_name,
-                link:   link,
+            const link = `${baseUrl}/r/${lead.automation_id || ''}`;
+            const msg = injectPlaceholders(step.message || '', {
+                name: lead.full_name,
+                link: link,
                 company: lead.company_name || 'Our Company'
             });
 
             let waSent = false;
             let emailSent = false;
 
-            // ── STEP 2: TRY WhatsApp ──────────────────────────────────────────────
+            // ── TRY WhatsApp ─────────────────────────────────────────────────────
             try {
-                const intRes = await pool.query(
-                    `SELECT access_token, account_id FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
-                    [lead.user_id]
-                );
-                const waAuth = intRes.rows[0] || {};
-
-                if (waAuth.access_token === 'whatsapp_native_session' && lead.phone) {
-                    const sessionStatus = whatsappService.getSessionStatus(lead.user_id);
-                    if (sessionStatus.status === 'connected') {
-                        await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg);
-                        waSent = true;
-                    }
+                if (!waSessions.has(lead.user_id)) {
+                    const intRes = await pool.query(
+                        `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
+                        [lead.user_id]
+                    );
+                    const waAuth = intRes.rows[0] || {};
+                    waSessions.set(lead.user_id, {
+                        isNative: waAuth.access_token === 'whatsapp_native_session',
+                        session: waAuth.access_token === 'whatsapp_native_session' 
+                            ? whatsappService.getSessionStatus(lead.user_id) 
+                            : null
+                    });
+                }
+                
+                const session = waSessions.get(lead.user_id);
+                if (session?.isNative && session?.session?.status === 'connected' && lead.phone) {
+                    await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg);
+                    waSent = true;
                 }
             } catch (waErr) {
-                console.warn(`[FollowupCron] WhatsApp send failed for lead ${lead.id}:`, waErr.message);
+                console.warn(`[FollowupCron] WA failed for ${lead.id}:`, waErr.message);
             }
 
-            // ── STEP 3: TRY Email ─────────────────────────────────────────────────
+            // ── TRY Email ────────────────────────────────────────────────────────
             try {
                 if (lead.email) {
                     await sendDynamicEmail(lead.user_id, {
@@ -85,63 +105,70 @@ const startFollowupCron = () => {
                     emailSent = true;
                 }
             } catch (mailErr) {
-                console.warn(`[FollowupCron] Email send failed for lead ${lead.id}:`, mailErr.message);
+                console.warn(`[FollowupCron] Email failed for ${lead.id}:`, mailErr.message);
             }
 
-            // ── STEP 4: Update Lead State ─────────────────────────────────────────
-            // We consider it a success if AT LEAST one channel sent.
-            if (waSent || emailSent) {
-                await pool.query(
-                    `UPDATE leads
-                        SET followup_step_index = followup_step_index + 1,
-                            last_followup_at    = NOW(),
-                            followup_status     = 'pending',
-                            lead_status         = 'Contacted',
-                            updated_at          = NOW()
-                      WHERE id = $1`,
-                    [lead.id]
-                );
+            return { lead, waSent, emailSent, msg, stepIndex: currentIndex };
+        }));
 
-                // Activity log
-                await pool.query(
-                    `INSERT INTO activity_logs
-                        (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
-                     VALUES ($1, $2, $3, 'Success', $4, $5, NOW())`,
-                    [
-                        lead.user_id,
-                        'Lead Follow-up',
-                        `Sequence Step ${index + 1}`,
-                        `Follow-up #${index + 1} sent via ${waSent ? 'WA' : ''}${waSent && emailSent ? ' & ' : ''}${emailSent ? 'Email' : ''}`,
-                        JSON.stringify({ lead_name: lead.full_name, step: index + 1, waSent, emailSent })
-                    ]
-                );
+        // ── Batch Update ALL leads ─────────────────────────────────────────────
+        const successful = results.filter(r => r.status === 'fulfilled' && (r.value.waSent || r.value.emailSent));
+        const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.waSent && !r.value.emailSent));
 
-                console.log(`[FollowupCron] ✅ Step ${index + 1} sent to ${lead.full_name}`);
-            } else {
-                // If neither could send, mark as pending to retry or failed if no contact info
-                const status = (lead.phone || lead.email) ? 'pending' : 'failed';
-                await pool.query(
-                    `UPDATE leads SET followup_status = $1, updated_at = NOW() WHERE id = $2`,
-                    [status, lead.id]
-                );
-            }
-
-        } catch (err) {
-            console.error(`[FollowupCron] ❌ Process step failed for lead ${lead.id}:`, err.message);
+        // Update successful leads
+        if (successful.length > 0) {
+            const successIds = successful.map(r => r.value.lead.id);
             await pool.query(
-                `UPDATE leads SET followup_status = 'failed', updated_at = NOW() WHERE id = $1`,
-                [lead.id]
+                `UPDATE leads 
+                 SET followup_step_index = followup_step_index + 1,
+                     last_followup_at = NOW(),
+                     followup_status = 'pending',
+                     lead_status = 'Contacted',
+                     updated_at = NOW()
+                 WHERE id = ANY($1)`,
+                [successIds]
             );
+
+            // Bulk activity log
+            const logValues = successful.map(r => [
+                r.value.lead.user_id,
+                'Lead Follow-up',
+                `Sequence Step ${r.value.stepIndex + 1}`,
+                `Follow-up #${r.value.stepIndex + 1} sent via ${r.value.waSent ? 'WA' : ''}${r.value.waSent && r.value.emailSent ? ' & ' : ''}${r.value.emailSent ? 'Email' : ''}`,
+                JSON.stringify({ lead_name: r.value.lead.full_name, step: r.value.stepIndex + 1, waSent: r.value.waSent, emailSent: r.value.emailSent })
+            ]);
+            
+            for (const vals of logValues) {
+                await pool.query(
+                    `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+                     VALUES ($1, $2, $3, 'Success', $4, $5, NOW())`,
+                    vals
+                );
+            }
         }
+
+        // Update failed leads
+        if (failed.length > 0) {
+            const failedIds = failed.map(r => r.status === 'fulfilled' ? r.value.lead.id : null).filter(Boolean);
+            if (failedIds.length > 0) {
+                await pool.query(
+                    `UPDATE leads SET followup_status = 'pending', updated_at = NOW() WHERE id = ANY($1)`,
+                    [failedIds]
+                );
+            }
+        }
+
+        console.log(`[FollowupCron] ✅ Batch complete: ${successful.length} sent, ${failed.length} failed`);
     };
 
-    // ── Main Poll Loop ────────────────────────────────────────────────────────
+    // ── Main Poll Loop ─────────────────────────────────────────────────────────
     setInterval(async () => {
         try {
+            // Get ALL leads that need follow-up (not just 50)
             const query = `
                 SELECT 
                     l.id, l.user_id, l.full_name, l.phone, l.email, l.created_at, l.last_followup_at, l.followup_step_index,
-                    s.is_active as settings_active, s.followup_sequence,
+                    s.followup_sequence,
                     rfs.automation_id,
                     u.company_name
                 FROM leads l
@@ -152,35 +179,35 @@ const startFollowupCron = () => {
                   AND (l.lead_status = 'New' OR l.lead_status = 'Contacted')
                   AND (l.followup_status IS NULL OR l.followup_status != 'processing')
                   AND l.followup_step_index < jsonb_array_length(s.followup_sequence)
-                LIMIT 50
             `;
             const result = await pool.query(query);
 
-            for (const lead of result.rows) {
+            // Filter to only leads whose scheduled time has passed
+            const dueLeads = result.rows.filter(lead => {
                 const sequence = typeof lead.followup_sequence === 'string' 
                     ? JSON.parse(lead.followup_sequence) 
                     : (lead.followup_sequence || []);
+                if (sequence.length === 0) return false;
                 
-                if (sequence.length === 0) continue;
-
                 const currentIndex = lead.followup_step_index || 0;
-                if (currentIndex >= sequence.length) continue;
-
+                if (currentIndex >= sequence.length) return false;
+                
                 const nextStep = sequence[currentIndex];
                 const lastAt = lead.last_followup_at || lead.created_at;
-                
                 const scheduledTime = getScheduledTime(lastAt, nextStep.delay_value, nextStep.delay_unit);
                 
-                if (new Date() >= scheduledTime) {
-                    console.log(`[FollowupCron] 🚀 Triggering Step ${currentIndex + 1} for ${lead.full_name}`);
-                    await processSequenceStep(lead, nextStep, currentIndex);
-                }
+                return new Date() >= scheduledTime;
+            });
+
+            if (dueLeads.length > 0) {
+                console.log(`[FollowupCron] 🚀 ${dueLeads.length} leads are due for follow-up`);
+                await processBatch(dueLeads);
             }
 
         } catch (err) {
             console.error('[FollowupCron] ❌ Poll loop error:', err.message);
         }
-    }, 10 * 1000); // Check every 10s — fast fallback if instant send missed
+    }, 5 * 1000); // Check every 5 seconds
 };
 
 export default startFollowupCron;
