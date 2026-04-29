@@ -221,102 +221,135 @@ export const updateLeadStatus = async (req, res) => {
 
 export const importLeads = async (req, res) => {
     try {
-        const { leads } = req.body;
+        const { leads, skipCapture } = req.body;
         if (!Array.isArray(leads) || leads.length === 0) {
-            return res.status(400).json({ success: false, message: 'Invalid leads format' });
+            return res.status(400).json({ success: false, message: 'No leads provided' });
         }
 
-        // Deduplicate by email within this batch (extra server-side safety)
+        const userId = req.user.id;
+
+        // 1. Dedup within batch by email+phone (whichever present)
         const seen = new Set();
-        const uniqueLeads = leads.filter(l => {
-            const key = (l.email || '').toLowerCase().trim();
-            if (key && seen.has(key)) return false;
-            if (key) seen.add(key);
+        const batchUnique = leads.filter(l => {
+            const emailKey = (l.email || '').toLowerCase().trim();
+            const phoneKey = (l.phone || '').replace(/\D/g, '');
+            const key = emailKey || phoneKey;
+            if (!key) return true; // name-only lead — keep
+            if (seen.has(key)) return false;
+            seen.add(key);
             return true;
         });
 
-        // Check which automations are active before inserting
-        const [captureRes, followupRes] = await Promise.all([
-            pool.query(`SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`, [req.user.id]).catch(() => ({ rows: [] })),
-            pool.query(`SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`, [req.user.id]).catch(() => ({ rows: [] }))
-        ]);
-        const captureCfg = captureRes.rows[0];
-        const followupCfg = followupRes.rows[0];
-        const followupActive = followupCfg?.is_active;
-        // skipCapture flag from Leads page import - only send follow-ups, not capture auto-response
-        const skipCapture = req.body.skipCapture;
-        const captureActive = !skipCapture && captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
+        // 2. Fetch automation configs + check existing duplicates — all in parallel
+        const batchEmails = batchUnique.map(l => (l.email || '').toLowerCase().trim()).filter(Boolean);
+        const batchPhones = batchUnique.map(l => (l.phone || '').replace(/\D/g, '')).filter(Boolean);
 
-        const client = await pool.connect();
-        let savedLeads = [];
-        try {
-            await client.query('BEGIN');
-            for (const lead of uniqueLeads) {
-                // Determine initial followup state
-                let followupStepIndex = 0;
-                let lastFollowupAt = null;
-                
-                // If followup is active, set step to 0 and last_followup_at to NOW() 
-                // so cron picks up first step immediately
-                if (followupActive) {
-                    lastFollowupAt = new Date().toISOString();
-                }
-
-                const result = await client.query(
-                    `INSERT INTO leads (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'New', $7, $8, $9, NOW())
-                     ON CONFLICT DO NOTHING
-                     RETURNING *`,
-                    [
-                        req.user.id,
-                        lead.full_name || extractNameFromEmail(lead.email) || 'there',
-                        lead.email || '',
-                        lead.phone || '',
-                        lead.notes || '',
-                        lead.source || 'Imported',
-                        true, // marketing_consent = YES
-                        followupStepIndex,
-                        lastFollowupAt,
-                    ]
-                );
-                if (result.rows[0]) savedLeads.push(result.rows[0]);
-            }
-            await client.query('COMMIT');
-        } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-        } finally {
-            client.release();
+        const dupConditions = [];
+        const dupParams = [userId];
+        if (batchEmails.length > 0) {
+            dupParams.push(batchEmails);
+            dupConditions.push(`(email != '' AND lower(email) = ANY($${dupParams.length}))`);
+        }
+        if (batchPhones.length > 0) {
+            dupParams.push(batchPhones);
+            dupConditions.push(`(phone != '' AND regexp_replace(phone, '[^0-9]', '', 'g') = ANY($${dupParams.length}))`);
         }
 
-        // Respond immediately — cron will handle all messaging
-        res.status(200).json({ success: true, message: `${savedLeads.length} leads imported successfully` });
+        const [captureRes, followupRes, existingRes] = await Promise.all([
+            pool.query(`SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
+            pool.query(`SELECT is_active FROM lead_followup_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
+            dupConditions.length > 0
+                ? pool.query(
+                    `SELECT lower(email) AS email, regexp_replace(phone, '[^0-9]', '', 'g') AS phone
+                     FROM leads WHERE user_id = $1 AND (${dupConditions.join(' OR ')})`,
+                    dupParams
+                ).catch(() => ({ rows: [] }))
+                : Promise.resolve({ rows: [] }),
+        ]);
 
-        if (savedLeads.length === 0) return;
+        const captureCfg = captureRes.rows[0];
+        const followupActive = followupRes.rows[0]?.is_active;
+        const captureActive = !skipCapture && captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
 
-        // Fire-and-forget: Send capture auto-responses immediately (non-blocking)
-        if (captureActive) {
-            console.log(`[importLeads] Sending auto-responses to ${savedLeads.length} leads...`);
-            Promise.allSettled(
-                savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(req.user.id, lead, captureCfg.auto_response_message, 'Thanks for reaching out!')
-                )
-            ).then(r => {
-                const successful = r.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
-                console.log(`[importLeads] ✅ Auto-response complete: ${successful} sent`);
+        const existingEmails = new Set(existingRes.rows.map(r => r.email).filter(Boolean));
+        const existingPhones = new Set(existingRes.rows.map(r => r.phone).filter(Boolean));
+
+        // 3. Filter out DB duplicates
+        const newLeads = batchUnique.filter(l => {
+            const email = (l.email || '').toLowerCase().trim();
+            const phone = (l.phone || '').replace(/\D/g, '');
+            if (email && existingEmails.has(email)) return false;
+            if (phone && existingPhones.has(phone)) return false;
+            return true;
+        });
+
+        const skipped = leads.length - newLeads.length;
+
+        if (newLeads.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: 'All contacts already exist — nothing new added',
+                imported: 0,
+                skipped: leads.length,
             });
         }
 
-        // Follow-ups are now handled by cron - leads have followup_step_index=0 and last_followup_at=NOW()
-        // Cron will pick them up within 10 seconds and send based on sequence schedule
+        // 4. Bulk INSERT — single DB round-trip via unnest()
+        const lastFollowupAt = followupActive ? new Date().toISOString() : null;
+
+        const names    = newLeads.map(l => l.full_name || extractNameFromEmail(l.email) || 'Imported Lead');
+        const emails   = newLeads.map(l => (l.email || '').trim());
+        const phones   = newLeads.map(l => (l.phone || '').trim());
+        const notesArr = newLeads.map(l => l.notes || '');
+        const sources  = newLeads.map(l => l.source || 'Imported');
+
+        const insertRes = await pool.query(
+            `INSERT INTO leads
+                 (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
+             SELECT $1,
+                    unnest($2::text[]),
+                    unnest($3::text[]),
+                    unnest($4::text[]),
+                    unnest($5::text[]),
+                    unnest($6::text[]),
+                    'New', true, 0, $7, NOW()
+             ON CONFLICT DO NOTHING
+             RETURNING *`,
+            [userId, names, emails, phones, notesArr, sources, lastFollowupAt]
+        );
+
+        const savedLeads = insertRes.rows;
+        const actualSkipped = leads.length - savedLeads.length;
+
+        // Respond immediately — messaging is fire-and-forget
+        res.status(200).json({
+            success: true,
+            message: `${savedLeads.length} contacts imported`,
+            imported: savedLeads.length,
+            skipped: actualSkipped,
+        });
+
+        if (savedLeads.length === 0) return;
+
+        // 5. Fire-and-forget capture auto-responses
+        if (captureActive) {
+            Promise.allSettled(
+                savedLeads.filter(l => l.email || l.phone).map(lead =>
+                    dispatchFollowup(userId, lead, captureCfg.auto_response_message, 'Thanks for reaching out!')
+                )
+            ).then(results => {
+                const sent = results.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
+                console.log(`[importLeads] Auto-response: ${sent}/${savedLeads.length} sent`);
+            });
+        }
+
         if (followupActive) {
-            console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up sequence. Cron will send first message immediately.`);
+            console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up cron`);
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message);
-        // Only send error if headers not already sent
         if (!res.headersSent) {
-            return res.status(500).json({ success: false, message: 'Server error' });
+            res.status(500).json({ success: false, message: 'Import failed. Please try again.' });
         }
     }
 };

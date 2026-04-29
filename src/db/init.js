@@ -137,6 +137,11 @@ const initDB = async () => {
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS marketing_consent BOOLEAN DEFAULT false`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS consent_given BOOLEAN DEFAULT false`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS filtering_responses JSONB DEFAULT '{}'`);
+        await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
+        await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
+        // Unique indices for fast dedup — partial so empty strings don't conflict
+        await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_email ON leads (user_id, lower(email)) WHERE email IS NOT NULL AND email != ''`);
+        await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_phone ON leads (user_id, regexp_replace(phone, '[^0-9]', '', 'g')) WHERE phone IS NOT NULL AND phone != ''`);
         console.log('  ✅ leads table ready');
 
         // 7. LEAD FOLLOWUP SETTINGS
