@@ -228,15 +228,19 @@ export const importLeads = async (req, res) => {
 
         const userId = req.user.id;
 
-        // 1. Dedup within batch by email+phone (whichever present)
-        const seen = new Set();
+        // 1. Dedup within batch — mark as duplicate if email matches OR phone matches
+        const seenEmail = new Set();
+        const seenPhone = new Set();
+        let fileDups = 0;
         const batchUnique = leads.filter(l => {
             const emailKey = (l.email || '').toLowerCase().trim();
             const phoneKey = (l.phone || '').replace(/\D/g, '');
-            const key = emailKey || phoneKey;
-            if (!key) return true; // name-only lead — keep
-            if (seen.has(key)) return false;
-            seen.add(key);
+            // Check if this lead matches any previously seen (by email OR phone)
+            if (emailKey && seenEmail.has(emailKey)) { fileDups++; return false; }
+            if (phoneKey && seenPhone.has(phoneKey)) { fileDups++; return false; }
+            // Track both keys for this lead
+            if (emailKey) seenEmail.add(emailKey);
+            if (phoneKey) seenPhone.add(phoneKey);
             return true;
         });
 
@@ -275,22 +279,23 @@ export const importLeads = async (req, res) => {
         const existingPhones = new Set(existingRes.rows.map(r => r.phone).filter(Boolean));
 
         // 3. Filter out DB duplicates
+        let dbDups = 0;
         const newLeads = batchUnique.filter(l => {
             const email = (l.email || '').toLowerCase().trim();
             const phone = (l.phone || '').replace(/\D/g, '');
-            if (email && existingEmails.has(email)) return false;
-            if (phone && existingPhones.has(phone)) return false;
+            if (email && existingEmails.has(email)) { dbDups++; return false; }
+            if (phone && existingPhones.has(phone)) { dbDups++; return false; }
             return true;
         });
-
-        const skipped = leads.length - newLeads.length;
 
         if (newLeads.length === 0) {
             return res.status(200).json({
                 success: true,
                 message: 'All contacts already exist — nothing new added',
                 imported: 0,
-                skipped: leads.length,
+                fileDups,
+                dbDups,
+                total: leads.length,
             });
         }
 
@@ -319,14 +324,15 @@ export const importLeads = async (req, res) => {
         );
 
         const savedLeads = insertRes.rows;
-        const actualSkipped = leads.length - savedLeads.length;
 
         // Respond immediately — messaging is fire-and-forget
         res.status(200).json({
             success: true,
             message: `${savedLeads.length} contacts imported`,
             imported: savedLeads.length,
-            skipped: actualSkipped,
+            fileDups,
+            dbDups,
+            total: leads.length,
         });
 
         if (savedLeads.length === 0) return;
