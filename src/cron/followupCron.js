@@ -29,6 +29,56 @@ const getScheduledTime = (startTime, delayValue, delayUnit) => {
 const startFollowupCron = () => {
     console.log('🤖 Automated Follow-up Cron (Batch Mode) Started');
 
+    // ── Gmail Reply Checker ───────────────────────────────────────────────────
+    const checkGmailReplies = async () => {
+        try {
+            // Get all active users with Gmail integration
+            const usersRes = await pool.query(
+                `SELECT DISTINCT user_id FROM integrations WHERE provider = 'google'`
+            );
+            
+            for (const row of usersRes.rows) {
+                const userId = row.user_id;
+                const { access_token } = await getValidGoogleTokens(userId);
+                if (!access_token) continue;
+
+                // Search for recent unread or replied messages from our leads
+                // We'll look for messages received in the last 24 hours
+                const query = 'is:unread OR is:inbox'; 
+                const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=20`, {
+                    headers: { 'Authorization': `Bearer ${access_token}` }
+                });
+
+                if (!response.ok) continue;
+                const data = await response.json();
+                if (!data.messages) continue;
+
+                for (const msg of data.messages) {
+                    const msgRes = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}`, {
+                        headers: { 'Authorization': `Bearer ${access_token}` }
+                    });
+                    if (!msgRes.ok) continue;
+                    const message = await msgRes.json();
+                    
+                    // Extract sender email
+                    const fromHeader = message.payload.headers.find(h => h.name === 'From')?.value || '';
+                    const leadEmail = fromHeader.match(/<(.+)>|(\S+@\S+)/)?.[1] || fromHeader.match(/<(.+)>|(\S+@\S+)/)?.[2];
+                    
+                    if (leadEmail) {
+                        // If this email matches a lead for this user, mark them as Contacted
+                        await pool.query(
+                            `UPDATE leads SET lead_status = 'Contacted', updated_at = NOW() 
+                             WHERE user_id = $1 AND lower(email) = $2 AND lead_status != 'Contacted'`,
+                            [userId, leadEmail.toLowerCase()]
+                        );
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[GmailReplyChecker] Error:', err.message);
+        }
+    };
+
     // ── Batch Process ALL leads that are due simultaneously ────────────────────
     const processBatch = async (leads) => {
         if (leads.length === 0) return;
@@ -135,13 +185,14 @@ const startFollowupCron = () => {
                 'Lead Follow-up',
                 `Sequence Step ${r.value.stepIndex + 1}`,
                 `Follow-up #${r.value.stepIndex + 1} sent via ${r.value.waSent ? 'WA' : ''}${r.value.waSent && r.value.emailSent ? ' & ' : ''}${r.value.emailSent ? 'Email' : ''}`,
-                JSON.stringify({ lead_name: r.value.lead.full_name, step: r.value.stepIndex + 1, waSent: r.value.waSent, emailSent: r.value.emailSent })
+                JSON.stringify({ lead_name: r.value.lead.full_name, step: r.value.stepIndex + 1, waSent: r.value.waSent, emailSent: r.value.emailSent }),
+                `Follow-up #${r.value.stepIndex + 1} sent` // detail field
             ]);
             
             for (const vals of logValues) {
                 await pool.query(
                     `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
-                     VALUES ($1, $2, $3, 'Success', $4, $5, NOW())`,
+                     VALUES ($1, $2, $3, 'Success', $6, $5, NOW())`,
                     vals
                 );
             }
@@ -164,6 +215,11 @@ const startFollowupCron = () => {
     // ── Main Poll Loop ─────────────────────────────────────────────────────────
     setInterval(async () => {
         try {
+            // Run Gmail reply check periodically (every 5 minutes)
+            if (new Date().getMinutes() % 5 === 0) {
+                checkGmailReplies();
+            }
+
             // Get ALL leads that need follow-up (not just 50)
             const query = `
                 SELECT 
@@ -194,20 +250,23 @@ const startFollowupCron = () => {
                 
                 const nextStep = sequence[currentIndex];
                 const lastAt = lead.last_followup_at || lead.created_at;
+
+                // If last_followup_at is far in the past (like our -1 year hack), it's due IMMEDIATELY
+                if (new Date(lastAt) < new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+                    return true;
+                }
+
                 const scheduledTime = getScheduledTime(lastAt, nextStep.delay_value, nextStep.delay_unit);
-                
                 return new Date() >= scheduledTime;
             });
 
             if (dueLeads.length > 0) {
-                console.log(`[FollowupCron] 🚀 ${dueLeads.length} leads are due for follow-up`);
-                await processBatch(dueLeads);
+                processBatch(dueLeads);
             }
-
         } catch (err) {
-            console.error('[FollowupCron] ❌ Poll loop error:', err.message);
+            console.error('[FollowupCron] Poll Error:', err.message);
         }
-    }, 5 * 1000); // Check every 5 seconds
+    }, 60000); // Check every minute
 };
 
 export default startFollowupCron;

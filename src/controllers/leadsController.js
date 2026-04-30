@@ -325,7 +325,8 @@ export const importLeads = async (req, res) => {
         }
 
         // 4. Bulk INSERT — single DB round-trip via unnest()
-        const lastFollowupAt = followupActive ? new Date().toISOString() : null;
+        // Set last_followup_at = NOW() - 1 year to make them due for cron IMMEDIATELY
+        const lastFollowupAt = followupActive ? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString() : null;
 
         const names    = newLeads.map(l => l.full_name || extractNameFromEmail(l.email) || 'Imported Lead');
         const emails   = newLeads.map(l => (l.email || '').trim());
