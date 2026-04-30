@@ -149,6 +149,16 @@ export const register = async (req, res) => {
 
         const newUser = result.rows[0];
 
+        // ── Default Gmail Integration ────────────────
+        // By default, every user has their Gmail integrated. 
+        // We use the system fallback until they connect their own professional OAuth2 tokens.
+        await pool.query(
+            `INSERT INTO integrations (user_id, provider, account_id, metadata, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (user_id, provider) DO NOTHING`,
+            [newUser.id, 'google', newUser.email, JSON.stringify({ email: newUser.email, is_default: true })]
+        );
+
         // Cleanup used OTP
         await pool.query('DELETE FROM otp_verifications WHERE email = $1', [emailLower]);
 
