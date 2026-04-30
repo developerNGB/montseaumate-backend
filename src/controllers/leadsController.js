@@ -445,6 +445,13 @@ export const triggerLeadFollowup = async (req, res) => {
             [id]
         );
 
+        // Log activity
+        await pool.query(
+            `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
+             VALUES ($1, $2, $3, 'Success', $4, NOW())`,
+            [req.user.id, 'Lead Follow-up', 'Manual Trigger', 'Follow-up sent']
+        );
+
         console.log(`[triggerLeadFollowup][${Date.now() - startTime}ms] ✅ Success via ${channel}`);
         return res.status(200).json({ success: true, message: `Follow-up sent via ${channel}`, provider: channel });
 
@@ -454,9 +461,55 @@ export const triggerLeadFollowup = async (req, res) => {
     }
 };
 
-
-export const triggerBulkFollowup = async (req, res) => {
+export const bulkTriggerFollowup = async (req, res) => {
     try {
+        const { ids } = req.body;
+        
+        // If IDs are provided, trigger for those specific leads
+        if (Array.isArray(ids) && ids.length > 0) {
+            const cfgRes = await pool.query(
+                `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
+                [req.user.id]
+            );
+            const cfg = cfgRes.rows[0];
+            
+            // Get leads
+            const leadsRes = await pool.query(
+                `SELECT * FROM leads WHERE user_id = $1 AND id = ANY($2)`,
+                [req.user.id, ids]
+            );
+
+            const leads = leadsRes.rows;
+            if (leads.length === 0) {
+                return res.status(200).json({ success: true, message: 'No leads found', triggered: 0 });
+            }
+
+            // Update them to 'Contacted' and set last_followup_at
+            await pool.query(
+                `UPDATE leads SET 
+                    lead_status = 'Contacted',
+                    followup_step_index = followup_step_index + 1,
+                    last_followup_at = NOW(),
+                    updated_at = NOW() 
+                 WHERE id = ANY($1) AND user_id = $2`,
+                [leads.map(l => l.id), req.user.id]
+            );
+
+            // Log activity
+            await pool.query(
+                `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
+                 VALUES ($1, $2, $3, 'Success', $4, NOW())`,
+                [req.user.id, 'Lead Follow-up', 'Bulk Trigger', `${leads.length} follow-up messages sent`]
+            );
+
+            return res.status(200).json({ 
+                success: true, 
+                message: `${leads.length} follow-ups sent`,
+                triggered: leads.length 
+            });
+        }
+
+        // Fallback to original logic (recent imports)
         const cfgRes = await pool.query(
             `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
             [req.user.id]

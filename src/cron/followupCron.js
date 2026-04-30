@@ -184,9 +184,9 @@ const startFollowupCron = () => {
                 r.value.lead.user_id,
                 'Lead Follow-up',
                 `Sequence Step ${r.value.stepIndex + 1}`,
-                `Follow-up #${r.value.stepIndex + 1} sent via ${r.value.waSent ? 'WA' : ''}${r.value.waSent && r.value.emailSent ? ' & ' : ''}${r.value.emailSent ? 'Email' : ''}`,
+                `Follow-up sent via ${r.value.waSent ? 'WA' : ''}${r.value.waSent && r.value.emailSent ? ' & ' : ''}${r.value.emailSent ? 'Email' : ''}`,
                 JSON.stringify({ lead_name: r.value.lead.full_name, step: r.value.stepIndex + 1, waSent: r.value.waSent, emailSent: r.value.emailSent }),
-                `Follow-up #${r.value.stepIndex + 1} sent` // detail field
+                `Follow-up sent` // detail field
             ]);
             
             for (const vals of logValues) {
