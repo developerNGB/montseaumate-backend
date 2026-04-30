@@ -461,7 +461,7 @@ export const triggerLeadFollowup = async (req, res) => {
     }
 };
 
-export const bulkTriggerFollowup = async (req, res) => {
+export const triggerBulkFollowup = async (req, res) => {
     try {
         const { ids } = req.body;
         
