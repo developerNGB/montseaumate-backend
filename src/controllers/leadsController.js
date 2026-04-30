@@ -75,6 +75,7 @@ const createEmailTemplate = (message, leadName) => {
  * @param {string} subject - Optional custom subject line
  */
 const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from Our Team') => {
+    const dispatchStart = Date.now();
     // Name handling: use provided name, or extract from email, or fallback to "there"
     const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
         ? lead.full_name
@@ -84,41 +85,44 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from
         .replace(/\{name\}/gi, leadName)
         .replace(/\{NAME\}/g, leadName);
 
-    console.log(`[Followup] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
+    console.log(`[Followup][${dispatchStart}] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
     // 1. EMAIL (Primary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
     if (lead.email) {
         try {
-            console.log(`[Followup] 📧 Attempting email to ${lead.email}...`);
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${lead.email}...`);
             const result = await sendDynamicEmail(userId, {
                 to: lead.email,
                 subject: subject,
                 text: personalisedMsg,
                 html: createEmailTemplate(personalisedMsg, leadName),
             });
-            console.log(`[Followup] ✅ Email sent to ${lead.email} via ${result.provider || 'unknown provider'}`);
-            return 'email';
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
+            return result.provider || 'email';
         } catch (e) {
-            console.error('[Followup] ❌ Email failed:', e.message);
-            // Continue to next channel - don't return yet
+            console.error(`[Followup][${Date.now() - dispatchStart}ms] ❌ Email failed:`, e.message);
+            // If it's a specific user error (expired token), don't fallback to system gmail silently
+            if (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient')) {
+                throw e;
+            }
         }
     }
 
     // 2. Native WhatsApp (Secondary)
     if (lead.phone) {
         try {
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📱 Attempting WhatsApp to ${lead.phone}...`);
             const waInt = await pool.query(
                 `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
                 [userId]
             );
             if (waInt.rows[0]?.access_token === 'whatsapp_native_session') {
                 await whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg);
-                console.log(`[Followup] ✅ WhatsApp sent to ${lead.phone}`);
+                console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ WhatsApp sent`);
                 return 'whatsapp';
             }
-            console.log(`[Followup] WhatsApp not connected for user ${userId}`);
         } catch (e) {
-            console.warn('[Followup] WhatsApp failed:', e.message);
+            console.warn(`[Followup][${Date.now() - dispatchStart}ms] WhatsApp failed:`, e.message);
         }
     }
 
@@ -126,7 +130,7 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from
     const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
     if (webhookUrl) {
         try {
-            console.log(`[Followup] Attempting n8n webhook...`);
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] 🪝 Attempting n8n webhook...`);
             const r = await fetch(webhookUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -134,15 +138,15 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from
                 timeout: 8000,
             });
             if (r.ok) { 
-                console.log(`[Followup] ✅ n8n triggered for ${lead.email || lead.phone}`); 
+                console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ n8n triggered`); 
                 return 'n8n'; 
             }
         } catch (e) {
-            console.warn('[Followup] n8n failed:', e.message);
+            console.warn(`[Followup][${Date.now() - dispatchStart}ms] n8n failed:`, e.message);
         }
     }
 
-    console.warn(`[Followup] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
+    console.warn(`[Followup][${Date.now() - dispatchStart}ms] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
     return 'none';
 };
 
@@ -382,15 +386,21 @@ export const importLeads = async (req, res) => {
 };
 
 export const triggerLeadFollowup = async (req, res) => {
+    const startTime = Date.now();
     try {
         const { id } = req.params;
         
-        // Fetch lead and user config
+        // Fetch lead and ALL relevant user configs
         const query = `
-            SELECT l.*, u.company_name, u.email as owner_email, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback
+            SELECT 
+                l.*, 
+                u.company_name, u.email as owner_email, 
+                rfs.auto_response_message as funnel_msg, rfs.notification_email, rfs.whatsapp_number_fallback,
+                lfs.followup_sequence, lfs.is_active as lfs_active
             FROM leads l
             JOIN users u ON l.user_id = u.id
             LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+            LEFT JOIN lead_followup_settings lfs ON lfs.user_id = u.id
             WHERE l.id = $1 AND l.user_id = $2
         `;
         const leadResult = await pool.query(query, [id, req.user.id]);
@@ -400,89 +410,46 @@ export const triggerLeadFollowup = async (req, res) => {
         }
 
         const lead = leadResult.rows[0];
+        console.log(`[triggerLeadFollowup][${Date.now() - startTime}ms] Found lead ${id}`);
 
-        // Fetch integration tokens
-        const freshGoogleToken = await getValidGoogleToken(req.user.id);
-        const integrationsResult = await pool.query(
-            `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1`,
-            [req.user.id]
-        );
+        // Determine which message to send
+        let messageToSend = lead.funnel_msg; // Default to funnel auto-response
+        
+        const sequence = typeof lead.followup_sequence === 'string' 
+            ? JSON.parse(lead.followup_sequence) 
+            : (lead.followup_sequence || []);
 
-        const integrations = integrationsResult.rows.reduce((acc, curr) => {
-            acc[curr.provider] = {
-                access_token: curr.access_token,
-                refresh_token: curr.refresh_token,
-                account_id: curr.account_id
-            };
-            return acc;
-        }, {});
+        if (sequence.length > 0) {
+            const currentIndex = lead.followup_step_index || 0;
+            if (currentIndex < sequence.length) {
+                messageToSend = sequence[currentIndex].message;
+            }
+        }
 
-        const googleAuth = integrations['google'] || {};
-        const microsoftAuth = integrations['microsoft'] || {};
-        const whatsappAuth = integrations['whatsapp'] || {};
-        const currentGoogleAccessToken = freshGoogleToken || googleAuth.access_token;
-
-        // Fetch SMTP credentials for n8n
-        const smtpRes = await pool.query(
-            'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
-            [req.user.id]
-        );
-        const smtp = smtpRes.rows[0] || {};
-
-        const payload = {
-            event: 'manual_followup',
-            full_name: lead.full_name,
-            email: lead.email,
-            phone: lead.phone,
-            notes: lead.notes,
-            source: lead.source,
-            business_name: lead.company_name,
-            owner_email: lead.owner_email,
-            notification_email: lead.notification_email || lead.owner_email,
-            email: lead.notification_email || lead.owner_email, // Set 'email' as the alert email
-            lead_email: lead.email, // Keep lead email as lead_email
-            message: lead.message,
-            auto_response_message: lead.auto_response_message,
-            injected_message: injectPlaceholders(lead.auto_response_message, {
-                name: lead.full_name,
-                link: `${process.env.FRONTEND_URL}/r/${lead.automation_id || 'default'}`,
-                number: integrations['whatsapp']?.account_id || lead.whatsapp_number_fallback || ''
-            }),
-            whatsapp_number: integrations['whatsapp']?.account_id || lead.whatsapp_number_fallback || '',
-
-            // Integration tokens for n8n
-            client_id: process.env.GOOGLE_CLIENT_ID,
-            client_secret: process.env.GOOGLE_CLIENT_SECRET,
-            access_token: currentGoogleAccessToken || null,
-            refresh_token: googleAuth.refresh_token || null,
-            microsoft_access_token: microsoftAuth.access_token || null,
-            microsoft_refresh_token: microsoftAuth.refresh_token || null,
-            whatsapp_access_token: whatsappAuth.access_token || null,
-            whatsapp_refresh_token: whatsappAuth.refresh_token || null,
-            // SMTP credentials
-            smtp_host: smtp.host || null,
-            smtp_port: smtp.port || null,
-            smtp_secure: smtp.secure || false,
-            smtp_user: smtp.auth_user || null,
-            smtp_pass: smtp.auth_pass || null,
-            smtp_from_email: smtp.from_email || null,
-            smtp_from_name: smtp.from_name || null
-        };
+        if (!messageToSend) {
+            messageToSend = 'Hi {name}! Just following up on your enquiry.';
+        }
 
         // Dispatch via cascade: WhatsApp native → n8n → email
-        const channel = await dispatchFollowup(req.user.id, lead, lead.auto_response_message);
+        const channel = await dispatchFollowup(req.user.id, lead, messageToSend);
 
-        // Update status to Contacted
+        // Update status and increment sequence index so cron picks up the NEXT one
         await pool.query(
-            `UPDATE leads SET lead_status = 'Contacted', updated_at = NOW() WHERE id = $1`,
+            `UPDATE leads 
+             SET lead_status = 'Contacted', 
+                 followup_step_index = followup_step_index + 1, 
+                 last_followup_at = NOW(), 
+                 updated_at = NOW() 
+             WHERE id = $1`,
             [id]
         );
 
-        return res.status(200).json({ success: true, message: `Follow-up sent via ${channel}` });
+        console.log(`[triggerLeadFollowup][${Date.now() - startTime}ms] ✅ Success via ${channel}`);
+        return res.status(200).json({ success: true, message: `Follow-up sent via ${channel}`, provider: channel });
 
     } catch (err) {
-        console.error('[triggerLeadFollowup] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error(`[triggerLeadFollowup][${Date.now() - startTime}ms] ❌ Error:`, err.message);
+        return res.status(500).json({ success: false, message: 'Failed to send follow-up' });
     }
 };
 
