@@ -253,7 +253,6 @@ export const importLeads = async (req, res) => {
         // 3. Filter out DB duplicates
         let dbDups = 0;
         console.log(`[importLeads] Checking ${batchUnique.length} leads against DB. Existing emails: ${existingEmails.size}, phones: ${existingPhones.size}`);
-        console.log(`[importLeads] All emails in batch:`, batchUnique.map(l => l.email));
         const newLeads = batchUnique.filter(l => {
             const email = (l.email || '').toLowerCase().trim();
             const phone = (l.phone || '').replace(/\D/g, '');
@@ -283,8 +282,16 @@ export const importLeads = async (req, res) => {
         }
 
         // 4. Bulk INSERT — single DB round-trip via unnest()
-        // Set last_followup_at = NOW() - 1 year to make them due for cron IMMEDIATELY
-        const lastFollowupAt = followupActive ? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString() : null;
+        // Logic for scheduling follow-ups:
+        // - If we are sending a "Lead Capture" message now (captureActive), set last_followup_at = NOW()
+        //   so that the cron job waits for the first follow-up delay before sending.
+        // - If we are NOT sending a capture message (captureActive=false), set last_followup_at = 1 year ago
+        //   so that the cron job picks up the first follow-up message IMMEDIATELY.
+        const lastFollowupAt = followupActive 
+            ? (captureActive 
+                ? new Date().toISOString() 
+                : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString())
+            : null;
 
         const names    = newLeads.map(l => l.full_name || extractNameFromEmail(l.email) || 'Imported Lead');
         const emails   = newLeads.map(l => (l.email || '').trim());
