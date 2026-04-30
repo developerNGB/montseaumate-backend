@@ -114,12 +114,12 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
                 const contentType = mailOptions.html ? 'text/html' : 'text/plain';
 
                 const str = [
-                    `Content-Type: ${contentType}; charset="UTF-8"\n`,
                     `MIME-Version: 1.0\n`,
-                    `Content-Transfer-Encoding: 7bit\n`,
-                    `to: ${to}\n`,
-                    `from: ${from}\n`,
-                    `subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=\n\n`,
+                    `To: ${to}\n`,
+                    `From: ${from}\n`,
+                    `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=\n`,
+                    `Content-Type: ${contentType}; charset="UTF-8"\n`,
+                    `Content-Transfer-Encoding: 7bit\n\n`,
                     body
                 ].join('');
 
