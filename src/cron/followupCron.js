@@ -1,6 +1,6 @@
 import pool from '../db/pool.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
-import { getValidGoogleTokens } from '../services/authService.js';
+import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
