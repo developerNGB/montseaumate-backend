@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
-import { injectPlaceholders } from '../utils/templateUtils.js';
+import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
+import { getValidGoogleTokens } from '../services/authService.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
@@ -146,11 +147,14 @@ const startFollowupCron = () => {
             // ── TRY Email ────────────────────────────────────────────────────────
             try {
                 if (lead.email) {
+                    const isFirstMessage = currentIndex === 0;
+                    const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
+                    
                     await sendDynamicEmail(lead.user_id, {
                         to: lead.email,
-                        subject: `Follow-up from ${lead.company_name || 'Our Team'}`,
+                        subject: subject,
                         text: msg,
-                        html: `<p>${msg.replace(/\n/g, '<br>')}</p>`
+                        html: createEmailTemplate(msg, lead.full_name, subject)
                     });
                     emailSent = true;
                 }

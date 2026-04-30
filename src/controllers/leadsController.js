@@ -1,7 +1,7 @@
 import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
-import { injectPlaceholders } from '../utils/templateUtils.js';
+import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
@@ -19,71 +19,29 @@ const extractNameFromEmail = (email) => {
 };
 
 /**
- * Create professional HTML email template
- */
-const createEmailTemplate = (message, leadName) => {
-    const currentYear = new Date().getFullYear();
-    // Use provided name or just "there" - don't extract from email
-    const greetingName = leadName && leadName !== 'Imported Lead' ? leadName : 'there';
-    return `<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f5f5f5; }
-        .email-wrapper { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
-        .header { padding: 40px 30px; text-align: center; border-bottom: 3px solid #3b82f6; }
-        .header h1 { margin: 0; color: #1f2937; font-size: 24px; font-weight: 600; }
-        .content { padding: 40px 30px; }
-        .content p { margin: 0 0 20px 0; color: #4b5563; font-size: 16px; line-height: 1.7; }
-        .message-box { background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 20px; margin: 25px 0; border-radius: 0 8px 8px 0; }
-        .message-box p { margin: 0; color: #374151; }
-        .signature { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; }
-        .signature p { margin: 0; color: #6b7280; font-size: 14px; }
-        .footer { padding: 30px; text-align: center; background-color: #f9fafb; border-top: 1px solid #e5e7eb; }
-        .footer p { margin: 0; color: #9ca3af; font-size: 12px; }
-        .button { display: inline-block; padding: 12px 24px; background-color: #3b82f6; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 500; margin-top: 10px; }
-    </style>
-</head>
-<body>
-    <div class="email-wrapper">
-        <div class="header">
-            <h1>Follow-up from Our Team</h1>
-        </div>
-        <div class="content">
-            <p>Hi ${greetingName},</p>
-            <div class="message-box">
-                <p>${message.replace(/\n/g, '</p><p>')}</p>
-            </div>
-            <div class="signature">
-                <p>Best regards,<br>Customer Success Team</p>
-            </div>
-        </div>
-        <div class="footer">
-            <p>This email was sent to you as part of our follow-up service.<br>© ${currentYear} All rights reserved.</p>
-        </div>
-    </div>
-</body>
-</html>`;
-};
-
-/**
  * Dispatch a follow-up message to a single lead.
  * Priority: Email (primary) → WhatsApp native → n8n (fallback).
  * Never throws — logs errors and continues.
  * @param {string} subject - Optional custom subject line
  */
-const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from Our Team') => {
+const dispatchFollowup = async (userId, lead, message, subject = 'Message from Our Team') => {
     const dispatchStart = Date.now();
     // Name handling: use provided name, or extract from email, or fallback to "there"
     const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
         ? lead.full_name
         : extractNameFromEmail(lead.email) || 'there';
     
-    const personalisedMsg = (message || 'Hi {name}! Just following up on your enquiry.')
-        .replace(/\{name\}/gi, leadName)
-        .replace(/\{NAME\}/g, leadName);
+    // Get automation/funnel ID if available for the link
+    const link = lead.automation_id 
+        ? `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/r/${lead.automation_id}`
+        : (process.env.FRONTEND_URL || 'https://www.equipoexperto.com');
+
+    const personalisedMsg = injectPlaceholders(message || 'Hi {name}! Thanks for reaching out.', {
+        name: leadName,
+        full_name: leadName,
+        link: link,
+        company: lead.company_name || 'Our Team'
+    });
 
     console.log(`[Followup][${dispatchStart}] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
@@ -95,7 +53,7 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Follow-up from
                 to: lead.email,
                 subject: subject,
                 text: personalisedMsg,
-                html: createEmailTemplate(personalisedMsg, leadName),
+                html: createEmailTemplate(personalisedMsg, leadName, subject),
             });
             console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
             return result.provider || 'email';
@@ -274,7 +232,7 @@ export const importLeads = async (req, res) => {
         }
 
         const [captureRes, followupRes, existingRes] = await Promise.all([
-            pool.query(`SELECT auto_response_message, lead_capture_active FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
+            pool.query(`SELECT auto_response_message, lead_capture_active, automation_id FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             pool.query(`SELECT is_active FROM lead_followup_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             dupConditions.length > 0
                 ? pool.query(
@@ -367,7 +325,7 @@ export const importLeads = async (req, res) => {
         if (captureActive) {
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(userId, lead, captureCfg.auto_response_message, 'Thanks for reaching out!')
+                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id }, captureCfg.auto_response_message, 'Thanks for reaching out!')
                 )
             ).then(results => {
                 const sent = results.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
@@ -428,11 +386,15 @@ export const triggerLeadFollowup = async (req, res) => {
         }
 
         if (!messageToSend) {
-            messageToSend = 'Hi {name}! Just following up on your enquiry.';
+            messageToSend = 'Hi {name}! Thanks for reaching out.';
         }
 
+        // Determine subject: First message vs follow-up
+        const isFirstMessage = (lead.followup_step_index || 0) === 0;
+        const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
+
         // Dispatch via cascade: WhatsApp native → n8n → email
-        const channel = await dispatchFollowup(req.user.id, lead, messageToSend);
+        const channel = await dispatchFollowup(req.user.id, lead, messageToSend, subject);
 
         // Update status and increment sequence index so cron picks up the NEXT one
         await pool.query(
