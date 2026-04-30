@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, getProfile, updateProfile, updatePassword, forgotPassword, resetPassword, verifyResetToken, requestOTP, googleLogin, deleteAccount } from '../controllers/authController.js';
+import { register, login, getProfile, updateProfile, updatePassword, forgotPassword, resetPassword, verifyResetToken, requestOTP, googleLogin, deleteAccount, updatePlan } from '../controllers/authController.js';
 import authenticate from '../middleware/authenticate.js';
 import { clearJwtCookie } from '../utils/cookieHelpers.js';
 
@@ -19,6 +19,9 @@ router.get('/profile', authenticate, getProfile);
 
 // PUT /auth/profile — update profile data (protected)
 router.put('/profile', authenticate, updateProfile);
+
+// PUT /auth/plan — update user plan (protected)
+router.put('/plan', authenticate, updatePlan);
 
 // PUT /auth/password — update password (protected)
 router.put('/password', authenticate, updatePassword);

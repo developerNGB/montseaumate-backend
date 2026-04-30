@@ -678,6 +678,46 @@ export const googleLogin = async (req, res) => {
 };
 
 /**
+ * PUT /auth/plan
+ * Body: { plan }
+ */
+export const updatePlan = async (req, res) => {
+    try {
+        const { plan } = req.body;
+        const validPlans = ['free', 'Growth', 'Pro'];
+        
+        if (!plan || !validPlans.includes(plan)) {
+            return res.status(400).json({ success: false, message: 'Invalid plan selected.' });
+        }
+
+        const result = await pool.query(
+            `UPDATE users SET plan = $1, updated_at = NOW() 
+             WHERE id = $2 
+             RETURNING id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled`,
+            [plan, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
+        const updatedUser = result.rows[0];
+        const token = signToken(updatedUser);
+        setJwtCookie(res, token);
+
+        return res.status(200).json({
+            success: true,
+            message: `Plan upgraded to ${plan} successfully!`,
+            user: updatedUser,
+            token
+        });
+    } catch (err) {
+        console.error('[updatePlan] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error. Please try again later.' });
+    }
+};
+
+/**
  * DELETE /auth/account
  * Permanently deletes the authenticated user and all their data.
  */

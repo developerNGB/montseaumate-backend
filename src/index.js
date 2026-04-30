@@ -144,7 +144,7 @@ app.use((req, res, next) => {
         '/api/public', '/api/webhooks', '/api/marketplace',
         '/api/integrations', '/api/whatsapp', '/api/config',
         '/api/apollo', '/api/apify',  // Apollo/Apify uses JWT auth, not CSRF
-        '/api/f', '/api/r', '/api/l',  // Public feedback/review/lead endpoints
+        '/api/f', '/api/r', '/api/l', '/api/support', // Public feedback/review/lead/support endpoints
         '/auth/google', '/auth/microsoft', '/auth/account'
     ];
     if (skipPaths.some(path => req.path.startsWith(path))) {
