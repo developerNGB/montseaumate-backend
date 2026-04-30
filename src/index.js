@@ -145,7 +145,7 @@ app.use((req, res, next) => {
         '/api/integrations', '/api/whatsapp', '/api/config',
         '/api/apollo', '/api/apify',  // Apollo/Apify uses JWT auth, not CSRF
         '/api/f', '/api/r', '/api/l', '/api/support', // Public feedback/review/lead/support endpoints
-        '/auth/google', '/auth/microsoft', '/auth/account'
+        '/auth' // All auth routes use JWT/Bearer tokens or are public
     ];
     if (skipPaths.some(path => req.path.startsWith(path))) {
         return next();
