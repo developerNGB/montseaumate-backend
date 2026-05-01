@@ -1,7 +1,7 @@
 import apolloService from '../services/apolloService.js';
 import apifyNicheService from '../services/apifyNicheService.js';
 import pool from '../db/pool.js';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
     getUsageSnapshot,
     incrementMarketplaceUsage,
@@ -10,6 +10,14 @@ import {
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
 const SEARCH_COOLDOWN_SECONDS = 60;
 const DEFAULT_LEADS_PER_NICHE = 20;
+
+const safeIdentifier = (value, fallbackPrefix = 'apify') => {
+    const raw = String(value || `${fallbackPrefix}_${randomUUID()}`);
+    if (raw.length <= 180) return raw;
+
+    const hash = createHash('sha1').update(raw).digest('hex');
+    return `${fallbackPrefix}_${hash}`;
+};
 
 const getRequestedNiches = (body) => {
     if (Array.isArray(body.niches) && body.niches.length) {
@@ -48,10 +56,11 @@ const saveDiscoveredLeads = async (client, userId, leads, niche) => {
 
     for (const lead of leads) {
         const storedLead = toStoredLead(lead, niche);
+        const safeLeadId = safeIdentifier(storedLead.id, 'apify');
         const emailKey = storedLead.email && storedLead.email.includes('@')
             ? storedLead.email
-            : `apify_${String(storedLead.id || randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '_')}@placeholder.com`;
-        const externalId = String(storedLead.id || emailKey);
+            : `apify_${safeLeadId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}@placeholder.com`;
+        const externalId = safeIdentifier(storedLead.id || emailKey, 'lead');
         const notes = {
             title: storedLead.title,
             organization: storedLead.organization,
@@ -68,12 +77,7 @@ const saveDiscoveredLeads = async (client, userId, leads, niche) => {
                     user_id, full_name, email, phone,
                     source, lead_status, notes, created_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-                ON CONFLICT (user_id, email) DO UPDATE SET
-                    full_name = EXCLUDED.full_name,
-                    phone = EXCLUDED.phone,
-                    source = EXCLUDED.source,
-                    notes = EXCLUDED.notes,
-                    updated_at = NOW()`,
+                ON CONFLICT DO NOTHING`,
                 [
                     userId,
                     storedLead.full_name,
@@ -384,7 +388,7 @@ class ApolloController {
                     success: true,
                     jobId,
                     status: 'queued',
-                    message: 'Lead search started. You can leave this page and we will save the results automatically.',
+                    message: 'Lead search started. Results usually take 4-5 minutes. You can leave this page and we will save the results automatically.',
                     usage: {
                         ...usage,
                         reserved: requestedLimit,
