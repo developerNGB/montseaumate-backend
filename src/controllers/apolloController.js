@@ -86,6 +86,7 @@ class ApolloController {
                 id: lead.id,
                 first_name: lead.first_name,
                 last_name: lead.last_name,
+                full_name: lead.full_name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.organization,
                 email: lead.email,
                 phone: lead.phone,
                 title: lead.title,
@@ -99,6 +100,7 @@ class ApolloController {
 
             // Save discovered leads to database
             const savedLeads = [];
+            let saveFailed = false;
             for (const lead of scrapedLeads) {
                 try {
                     // Generate a unique email if none provided to avoid conflicts
@@ -138,31 +140,37 @@ class ApolloController {
                         savedLeads.push({ ...lead, db_id: result.rows[0].id });
                     }
                 } catch (dbError) {
+                    saveFailed = true;
                     console.error('Failed to save lead:', dbError);
                 }
             }
 
             // Log the activity
-            await pool.query(
-                `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
-                 VALUES ($1, $2, $3, $4, $5, NOW())`,
-                [
-                    userId,
-                    'Apify Niche Scout',
-                    'scout',
-                    'success',
-                    `Discovered ${savedLeads.length} leads for ${niche} via Google Maps scraping`
-                ]
-            );
+            try {
+                await pool.query(
+                    `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
+                     VALUES ($1, $2, $3, $4, $5, NOW())`,
+                    [
+                        userId,
+                        'Apify Niche Scout',
+                        'scout',
+                        'success',
+                        `Discovered ${scrapedLeads.length} leads for ${niche}`
+                    ]
+                );
+            } catch (activityError) {
+                console.error('Failed to log Apify lead search activity:', activityError.message);
+            }
 
             res.json({
                 success: true,
                 data: {
                     niche,
                     total_found: results.total_entries,
-                    leads: savedLeads,
-                    enriched_count: savedLeads.filter(l => l.enrichment_status === 'found').length,
+                    leads: savedLeads.length > 0 ? savedLeads : scrapedLeads,
+                    enriched_count: scrapedLeads.filter(l => l.enrichment_status === 'found').length,
                     saved_count: savedLeads.length,
+                    save_failed: saveFailed,
                     location: location || 'All locations',
                     source: 'Google Maps via Apify'
                 }

@@ -317,22 +317,27 @@ class ApifyNicheService {
             const results = await this.runActorSync(actorId, input, 180);
             console.log(`✅ Google Places returned ${results.length} results`);
 
-            return results.map(place => ({
-                id: place.placeId || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                first_name: this.extractFirstName(place.name),
+            return results.map(place => {
+                const businessName = place.name || place.title || place.companyName || place.organization || '';
+                const locationText = place.address || place.location?.formattedAddress || [place.city, place.state, place.countryCode].filter(Boolean).join(', ');
+
+                return {
+                id: place.placeId || place.url || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                first_name: this.extractFirstName(businessName),
                 last_name: '',
-                full_name: place.name,
+                full_name: businessName,
                 email: place.email || '',
                 phone: place.phone || place.phoneUnformatted || '',
                 title: this.inferTitleFromNiche(niche),
-                organization: place.name,
-                location: place.address || place.location?.formattedAddress || '',
+                organization: businessName,
+                location: locationText,
                 website: place.website || '',
                 linkedin_url: '',
                 enrichment_status: (place.email || place.phone) ? 'found' : 'pending',
                 source: `Apify - ${niche}`,
                 raw_data: place
-            }));
+                };
+            });
         } catch (error) {
             console.error('❌ Google Maps scraper failed:', {
                 message: error.message,
