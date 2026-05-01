@@ -117,15 +117,16 @@ class ApifyNicheService {
      * @param {string} location - Optional location filter
      * @param {string} query - Optional custom search query (overrides default terms)
      */
-    async scoutByNiche(niche, location = '', query = '') {
+    async scoutByNiche(niche, location = '', query = '', options = {}) {
         console.log(`🔍 Starting niche scout for: ${niche}, location: ${location || 'any'}, query: ${query || 'default'}`);
+        const maxResults = Math.max(1, Math.min(Number(options.maxResults || 20), 100));
 
         try {
             let results = [];
 
             // If custom query provided, use it directly
             if (query) {
-                results = await this.scrapeGoogleMaps([query], niche, location);
+                results = await this.scrapeGoogleMaps([query], niche, location, maxResults);
                 return {
                     people: results,
                     total_entries: results.length,
@@ -138,19 +139,19 @@ class ApifyNicheService {
             switch (niche) {
                 case 'real_estate':
                     // Use Google Maps scraper with real estate search terms
-                    results = await this.scrapeGoogleMaps(['real estate agencies', 'real estate agents', 'property brokers', 'realtors'], niche, location);
+                    results = await this.scrapeGoogleMaps(['real estate agencies', 'real estate agents', 'property brokers', 'realtors'], niche, location, maxResults);
                     break;
                 case 'car_sales':
                     // Use Google Maps scraper with car dealership search terms
-                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'], niche, location);
+                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'], niche, location, maxResults);
                     break;
                 case 'hr':
                     // Use Google Maps scraper with HR/recruitment search terms
-                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting', 'employment agencies'], niche, location);
+                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting', 'employment agencies'], niche, location, maxResults);
                     break;
                 case 'second_hand':
                     // Use Google Maps scraper with second hand retail search terms
-                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'], niche, location);
+                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'], niche, location, maxResults);
                     break;
                 default:
                     throw new Error(`Unknown niche: ${niche}`);
@@ -290,10 +291,11 @@ class ApifyNicheService {
     /**
      * Fallback Google Maps scraper for other niches
      */
-    async scrapeGoogleMaps(queries, niche, location = '') {
+    async scrapeGoogleMaps(queries, niche, location = '', maxResults = 20) {
         const searchQueries = location 
             ? queries.map(q => `${q} in ${location}`)
             : queries;
+        const cappedResults = Math.max(1, Math.min(Number(maxResults || 20), 100));
 
         console.log(`🔍 Google Maps search: ${searchQueries.join(', ')}`);
 
@@ -304,7 +306,7 @@ class ApifyNicheService {
             
             const input = {
                 searchStringsArray: searchQueries,
-                maxCrawledPlaces: 20,
+                maxCrawledPlaces: cappedResults,
                 maxImages: 0,
                 scrapeContacts: true,
                 scrapeContactsDelay: 1000,

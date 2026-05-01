@@ -3,14 +3,56 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
-import { getValidGoogleToken, getValidGoogleTokens } from '../utils/googleAuth.js';
-import { injectPlaceholders } from '../utils/templateUtils.js';
-import fetch from 'node-fetch';
+import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
+import { sendDynamicEmail } from '../services/emailService.js';
 
 // Load env vars for this controller
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../../../.env') });
+
+const sendInternalEmail = async (userId, to, subject, message) => {
+    if (!to) return 'none';
+    try {
+        const result = await sendDynamicEmail(userId, {
+            to,
+            subject,
+            text: message,
+            html: createEmailTemplate(message, 'there', subject),
+        });
+        return result.provider || 'email';
+    } catch (err) {
+        console.error('[PublicAutomation][Email] failed:', err.message);
+        return 'none';
+    }
+};
+
+const sendInternalWhatsApp = async (userId, phone, message) => {
+    if (!phone) return 'none';
+    try {
+        const waInt = await pool.query(
+            `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
+            [userId]
+        );
+        if (waInt.rows[0]?.access_token !== 'whatsapp_native_session') return 'none';
+        await whatsappService.sendWhatsAppMessage(userId, phone, message);
+        return 'whatsapp';
+    } catch (err) {
+        console.error('[PublicAutomation][WhatsApp] failed:', err.message);
+        return 'none';
+    }
+};
+
+const notifyOwnerInternally = async (config, subject, message) => {
+    const tasks = [];
+    if (config.email_enabled !== false) {
+        tasks.push(sendInternalEmail(config.user_id, config.notification_email || config.owner_email, subject, message));
+    }
+    if (config.whatsapp_enabled !== false) {
+        tasks.push(sendInternalWhatsApp(config.user_id, config.whatsapp_number_fallback, message));
+    }
+    await Promise.allSettled(tasks);
+};
 
 /**
  * POST /api/support/contact
@@ -126,12 +168,12 @@ export const getPublicReviewConfig = async (req, res) => {
 export const submitReview = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { rating, feedback, filtering_responses, n8nWebhook } = req.body;
+        const { rating, feedback, filtering_responses } = req.body;
 
         console.log(`[submitReview] Incoming review for ${automation_id}:`, { rating, feedback });
 
         const result = await pool.query(
-            `SELECT r.*, COALESCE(u.company_name, u.name) as business_name
+            `SELECT r.*, COALESCE(u.company_name, u.name) as business_name, u.email as owner_email
              FROM review_funnel_settings r
              JOIN users u ON u.id = r.user_id 
              WHERE r.automation_id = $1`,
@@ -170,103 +212,28 @@ export const submitReview = async (req, res) => {
             ]
         );
 
-        console.log(`[submitReview] Activity logged. Triggering n8n...`);
-
-        // 6. Trigger n8n explicitly and rely on N8N's decision engine
-        const finalWebhook = process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
-        console.log(`[submitReview] Webhook URL: ${finalWebhook}`);
-        
-        if (finalWebhook) {
-            try {
-                // Get fresh Google tokens (refreshes if expired, captures rotated refresh token)
-                const { access_token: googleAccessToken, refresh_token: googleRefreshToken } =
-                    await getValidGoogleTokens(config.user_id);
-
-                // Fetch WhatsApp integration tokens
-                const integrationsResult = await pool.query(
-                    `SELECT provider, access_token, refresh_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
-                    [config.user_id]
-                );
-                const whatsappAuth = integrationsResult.rows[0] || {};
-
-                console.log(`[submitReview] n8n fetch initiated for ${finalWebhook} (google token fresh: ${!!googleAccessToken})`);
-                const n8nRes = await fetch(finalWebhook, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        rating,
-                        feedback,
-                        business_name: config.business_name,
-                        automation_id,
-                        google_review_url: config.google_review_url,
-                        notification_email: config.notification_email,
-                        client_id: process.env.GOOGLE_CLIENT_ID,
-                        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-                        access_token: googleAccessToken || null,
-                        refresh_token: googleRefreshToken || null,
-                        whatsapp_access_token: whatsappAuth.access_token || null,
-                        whatsapp_refresh_token: whatsappAuth.refresh_token || null,
-                    })
-                });
-
-                const data = await n8nRes.json();
-
-                if (data.action) {
-                    return res.status(200).json({ success: true, ...data });
-                }
-
-                const isGenericSuccess = data.success === true || (data['0'] && data['0'].status === 'success');
-
-                if (isGenericSuccess) {
-                    // 📝 LOG ACTIVITY: REVIEW SUBMITTED
-                    await pool.query(
-                        `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-                        [
-                            config.user_id,
-                            'Review Funnel',
-                            'Review Submitted',
-                            'Success',
-                            `Received ${rating}-star review from public page.`,
-                            JSON.stringify({ rating, feedback, business_name: config.business_name })
-                        ]
-                    );
-
-                    if (rating > 3) {
-                        return res.status(200).json({
-                            success: true,
-                            action: 'redirect',
-                            url: config.google_review_url
-                        });
-                    } else {
-                        return res.status(200).json({
-                            success: true,
-                            action: 'message',
-                            message: data?.message || "Thank you so much for your honest feedback. Our owner has been directly notified so we can make this right!"
-                        });
-                    }
-                }
-
-                return res.status(200).json({
-                    success: true,
-                    action: 'message',
-                    message: "Thank you for your feedback! It has been recorded successfully."
-                });
-            } catch (err) {
-                console.error('N8N Webhook failed:', err.message);
-                return res.status(200).json({
-                    success: true,
-                    action: 'message',
-                    message: "Thank you for your feedback!"
-                });
-            }
-        } else {
+        if (rating > 3) {
             return res.status(200).json({
                 success: true,
-                action: 'message',
-                message: "Thank you! Feedback received."
+                action: 'redirect',
+                url: config.google_review_url,
+                message: 'Thank you! Would you mind sharing this on Google too?'
             });
         }
+
+        setImmediate(() => {
+            notifyOwnerInternally(
+                config,
+                `New ${rating}-star feedback`,
+                `New feedback for ${config.business_name}\n\nRating: ${rating}/5\nFeedback: ${feedback || 'No written feedback'}`
+            ).catch(err => console.error('[submitReview] owner notification failed:', err.message));
+        });
+
+        return res.status(200).json({
+            success: true,
+            action: 'message',
+            message: "Thank you so much for your honest feedback. The owner has been notified so we can make this right."
+        });
 
     } catch (err) {
         console.error('[submitReview] CRASH:', err);
@@ -367,198 +334,50 @@ export const submitFeedback = async (req, res) => {
             ]
         );
 
-        // 4. Fetch Integration Tokens (Server-Side Only - Secure)
-        let currentGoogleAccessToken = null;
-        let googleRefreshToken = null;
-        let whatsappAccessToken = null;
-        let whatsappRefreshToken = null;
-        let integrations = {};
+        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+        const ownerMsg = `New feedback for ${config.business_name}\n\nCustomer: ${customer_name || 'Guest'}\nEmail: ${customer_email || 'N/A'}\nPhone: ${customer_phone || 'N/A'}\nRating: ${rating_overall}/5\nComment: ${comment || 'No comment'}\nDashboard: ${baseUrl}/dashboard/feedback`;
+        setImmediate(() => {
+            notifyOwnerInternally(config, `New ${rating_overall}-star feedback`, ownerMsg)
+                .catch(err => console.error('[submitFeedback] owner notification failed:', err.message));
+        });
 
-        try {
-            // Get fresh Google tokens in one call (refreshes if expired, captures token rotation)
-            const googleTokens = await getValidGoogleTokens(config.user_id);
-            currentGoogleAccessToken = googleTokens.access_token;
-            googleRefreshToken = googleTokens.refresh_token;
-
-            const integrationsResult = await pool.query(
-                `SELECT provider, access_token, refresh_token, account_id FROM integrations WHERE user_id = $1 AND provider != 'google'`,
-                [config.user_id]
-            );
-
-            integrations = integrationsResult.rows.reduce((acc, curr) => {
-                acc[curr.provider] = {
-                    access_token: curr.access_token,
-                    refresh_token: curr.refresh_token,
-                    account_id: curr.account_id
-                };
-                return acc;
-            }, {});
-
-            whatsappAccessToken = integrations['whatsapp']?.access_token || null;
-            whatsappRefreshToken = integrations['whatsapp']?.refresh_token || null;
-        } catch (tokenErr) {
-            console.error('[submitFeedback] Token fetch failed:', tokenErr.message);
-        }
-
-        // Fetch SMTP credentials for n8n
-        const smtpRes = await pool.query(
-            'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
-            [config.user_id]
-        );
-        const smtp = smtpRes.rows[0] || {};
-
-        const payload = {
-            event: 'customer_feedback',
-            business_name: config.business_name,
-            owner_email: config.owner_email,
-            whatsapp_message: config.auto_response_message,
-            customer_name,
-            number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
-            notification_email: config.notification_email || config.owner_email,
-            email: config.notification_email || config.owner_email, // Set 'email' as the alert email
-            automation_id,
-            rating: rating_overall, // Standardized alias
-            rating_service,
-            rating_product,
-            rating_overall,
-            comment,
-            contact_requested,
-            auto_response_message: config.auto_response_message,
-            instant_response_template: config.auto_response_message,
-            customer: {
-                name: customer_name,
-                email: customer_email,
-                phone: customer_phone
-            },
-            injected_message: injectPlaceholders(config.auto_response_message, {
-                name: customer_name,
-                link: `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/r/${automation_id}`,
-                number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || ''
-            }),
-            whatsapp_number: integrations['whatsapp']?.account_id || config.whatsapp_number_fallback || '',
-            // Integration tokens for n8n (Server-side injected for security)
-            // Credentials for n8n to act on behalf of user
-            client_id: process.env.GOOGLE_CLIENT_ID,
-            client_secret: process.env.GOOGLE_CLIENT_SECRET,
-            access_token: currentGoogleAccessToken || null,
-            refresh_token: googleRefreshToken || null,
-            // Debug info
-            _debug_token_status: currentGoogleAccessToken ? 'valid' : 'null_or_failed',
-            _debug_client_id_set: !!process.env.GOOGLE_CLIENT_ID,
-            whatsapp_access_token: whatsappAccessToken || null,
-            whatsapp_refresh_token: whatsappRefreshToken || null,
-            // SMTP credentials
-            smtp_host: smtp.host || null,
-            smtp_port: smtp.port || null,
-            smtp_secure: smtp.secure || false,
-            smtp_user: smtp.auth_user || null,
-            smtp_pass: smtp.auth_pass || null,
-            smtp_from_email: smtp.from_email || null,
-            smtp_from_name: smtp.from_name || null
-        };
-
-        console.log(`[submitFeedback] Triggering n8n for ${automation_id}...`);
-
-        // Only use env variable - no database fallback
-        const reviewFeedbackWebhook = process.env.N8N_REVIEW_FEEDBACK_WEBHOOK;
-        console.log(`[submitFeedback] Webhook URL: ${reviewFeedbackWebhook}`);
-        
-        let n8nResponseData = null;
-        let debugStatus = "pending";
-
-        // 5. Trigger review-feedback webhook and WAIT for response to drive the UI
-        if (!reviewFeedbackWebhook) {
-            console.error('[submitFeedback] No webhook URL configured!');
-            debugStatus = "error: no webhook url";
-        } else {
-        try {
-            const n8nRes = await fetch(reviewFeedbackWebhook, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+        if (customer_phone && config.whatsapp_enabled !== false) {
+            const defaultMsg = "Thank you! We've received your feedback and will get back to you shortly if needed.";
+            const finalMsg = injectPlaceholders(config.auto_response_message || defaultMsg, {
+                name: customer_name || 'there',
+                link: `${baseUrl}/r/${automation_id}`
             });
-            
-            const rawData = await n8nRes.json();
-            const data = Array.isArray(rawData) ? rawData[0] : rawData;
-
-            if (data && (data.action || data.message || data.status === 'success')) {
-                n8nResponseData = data;
-                debugStatus = "success";
-                console.log('[submitFeedback] n8n responded successfully');
-            } else {
-                debugStatus = "no_action_in_response";
-                console.warn('[submitFeedback] n8n returned no valid action/message/status');
-            }
-        } catch (e) {
-            console.error('[submitFeedback] n8n fetch failed:', e.message);
-            debugStatus = "error: " + e.message;
-        }
+            setImmediate(() => {
+                sendInternalWhatsApp(config.user_id, customer_phone, finalMsg)
+                    .catch(err => console.error('[submitFeedback] customer WhatsApp failed:', err.message));
+            });
         }
 
-        // Secondary fire-and-forget webhooks (Generic lead followup if configured)
-        const extraWebhook = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
-        if (extraWebhook && extraWebhook !== reviewFeedbackWebhook) {
-            fetch(extraWebhook, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            }).catch(e => {});
+        if (customer_email && config.email_enabled !== false) {
+            const emailMsg = injectPlaceholders(config.auto_response_message || "Thank you! We've received your feedback.", {
+                name: customer_name || 'there',
+                link: `${baseUrl}/r/${automation_id}`
+            });
+            setImmediate(() => {
+                sendInternalEmail(config.user_id, customer_email, 'Thanks for your feedback', emailMsg)
+                    .catch(err => console.error('[submitFeedback] customer email failed:', err.message));
+            });
         }
+
         console.log(`\n==================== [FEEDBACK SUBMITTED] ====================`);
         console.log(`👤 Customer: ${customer_name || 'Guest'}`);
         console.log(`⭐ Rating: ${rating_overall}/5`);
         console.log(`📱 Contact Requested: ${contact_requested ? 'YES' : 'NO'}`);
         console.log(`📱 Phone: ${customer_phone || 'None'}`);
-
-        // 7. DIRECT NATIVE DISPATCH: If the user has a native WhatsApp session
-        if (whatsappAccessToken === 'whatsapp_native_session') {
-            const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-            
-            // A. NOTIFY OWNER (INSTANT FULL DATA DUMP)
-            const ownerPhone = integrations['whatsapp']?.account_id;
-            if (ownerPhone) {
-                const ownerMsg = `📥 [FEEDBACK RECEIVED]\n\n👤 Customer: ${customer_name || 'Guest'}\n📧 Email: ${customer_email || 'N/A'}\n📱 Phone: ${customer_phone || 'N/A'}\n\n⭐ Rating: ${rating_overall}/5\n💬 Comment: ${comment || 'No comment'}\n\n🔗 Dashboard: ${baseUrl}/dashboard/feedback`;
-                
-                whatsappService.sendWhatsAppMessage(config.user_id, ownerPhone, ownerMsg)
-                    .then(() => console.log(`[WA-OwnerNotify] ✅ Success for owner: ${ownerPhone}`))
-                    .catch(e => console.error(`[WA-OwnerNotify] ❌ Failed for owner:`, e.message));
-            }
-
-            // B. NOTIFY CUSTOMER (If number provided)
-            if (customer_phone) {
-                const defaultMsg = "Thank you! We've received your feedback and will get back to you shortly if needed.";
-                const finalMsg = injectPlaceholders(config.auto_response_message || defaultMsg, {
-                    name: customer_name || 'there',
-                    link: `${baseUrl}/r/${automation_id}`
-                });
-                
-                whatsappService.sendWhatsAppMessage(config.user_id, customer_phone, finalMsg)
-                    .then(() => console.log(`[NativeFeedback] ✅ Success for customer: ${customer_phone}`))
-                    .catch(e => console.error(`[NativeFeedback] ❌ Failed for customer:`, e.message));
-            }
-        } else {
-            console.log(`[WA-Native] ⚠️ WhatsApp NOT connected (native session). Skipping dispatches.`);
-        }
         console.log(`===============================================================\n`);
-
-        // 5. Build Response Object - n8n failure is non-fatal, data is already saved
-        if (debugStatus.startsWith('error')) {
-            console.warn(`[submitFeedback] N8N failed (non-fatal): ${debugStatus}`);
-        }
 
         const finalResponse = {
             success: true,
-            _debug: { n8n_status: debugStatus }
         };
 
-        // If rating is high, prioritize Google Suggestion regardless of n8n override
         if (rating_overall >= 4) {
             finalResponse.action = 'suggest_google';
-            finalResponse.message = n8nResponseData?.message || "Thank you! Your feedback is invaluable. Would you mind sharing your experience on Google as well?";
-            finalResponse.google_url = config.google_review_url;
-        } else if (n8nResponseData) {
-            finalResponse.action = n8nResponseData.action || 'message';
-            finalResponse.message = n8nResponseData.message || "Feedback received";
+            finalResponse.message = "Thank you! Your feedback is invaluable. Would you mind sharing your experience on Google as well?";
             finalResponse.google_url = config.google_review_url;
         } else {
             finalResponse.action = 'message';
@@ -579,7 +398,7 @@ export const submitFeedback = async (req, res) => {
 export const submitLead = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { full_name, email, phone, message, filtering_responses, captureWebhook, autoResponseWebhook, consent_given, marketing_consent } = req.body;
+        const { full_name, email, phone, message, filtering_responses, consent_given, marketing_consent } = req.body;
         console.log(`[submitLead] Incoming lead for ${automation_id}:`, { full_name, email, marketing_consent });
 
         if (!full_name || !email || !phone) {
@@ -591,7 +410,9 @@ export const submitLead = async (req, res) => {
         }
 
         const result = await pool.query(
-            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.is_active, rfs.auto_response_message, rfs.notification_email, rfs.whatsapp_number_fallback, u.email as owner_email
+            `SELECT rfs.user_id, rfs.lead_capture_active, rfs.is_active, rfs.auto_response_message,
+                    rfs.notification_email, rfs.whatsapp_number_fallback, rfs.whatsapp_enabled, rfs.email_enabled,
+                    u.email as owner_email
              FROM review_funnel_settings rfs
              JOIN users u ON rfs.user_id = u.id
              WHERE rfs.automation_id = $1`,
@@ -632,7 +453,7 @@ export const submitLead = async (req, res) => {
             ]
         );
 
-        // ✅ RESPOND IMMEDIATELY — never block the form on WhatsApp or n8n
+        // Respond immediately — never block the public form on notification delivery.
         res.status(200).json({
             success: true,
             status: 'success',
@@ -640,7 +461,7 @@ export const submitLead = async (req, res) => {
             data: { user_id, owner_email, date: current_date }
         });
 
-        // === BACKGROUND: WhatsApp + Webhooks (fire-and-forget, never blocks response) ===
+        // === BACKGROUND: WhatsApp + email (fire-and-forget, never blocks response) ===
         setImmediate(async () => {
             try {
                 console.log(`\n==================== [LEAD BG DISPATCH] ====================`);
@@ -662,20 +483,31 @@ export const submitLead = async (req, res) => {
                 }, {});
 
                 const whatsappAuth = integrations['whatsapp'] || {};
+                const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+                let questionsStr = '';
+                if (filtering_responses && typeof filtering_responses === 'object') {
+                    questionsStr = '\n\nResponses:\n' + Object.entries(filtering_responses)
+                        .map(([q, a]) => `- ${q}: ${a}`).join('\n');
+                }
+                const ownerMsg = `New lead\n\nName: ${full_name}\nEmail: ${email}\nPhone: ${phone}\nMessage: ${message || 'No message'}${questionsStr}\n\nDashboard: ${baseUrl}/dashboard/leads`;
+                const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
+                const finalCustomerMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
+                    name: full_name || 'there',
+                    link: `${baseUrl}/l/${automation_id}`,
+                    number: whatsappAuth.account_id || ''
+                });
+
+                if (result.rows[0].email_enabled !== false) {
+                    await sendInternalEmail(user_id, result.rows[0].notification_email || owner_email, 'New lead captured', ownerMsg);
+                    await sendInternalEmail(user_id, email, 'Thanks for contacting us', finalCustomerMsg);
+                }
+
                 console.log(`[WA-Check] token="${whatsappAuth.access_token}" | account="${whatsappAuth.account_id}"`);
 
-                if (whatsappAuth.access_token === 'whatsapp_native_session') {
-                    const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-
+                if (result.rows[0].whatsapp_enabled !== false && whatsappAuth.access_token === 'whatsapp_native_session') {
                     // A. OWNER — full data dump
                     const ownerPhone = whatsappAuth.account_id;
                     if (ownerPhone) {
-                        let questionsStr = '';
-                        if (filtering_responses && typeof filtering_responses === 'object') {
-                            questionsStr = '\n\n📝 Responses:\n' + Object.entries(filtering_responses)
-                                .map(([q, a]) => `• ${q}: ${a}`).join('\n');
-                        }
-                        const ownerMsg = `🚀 [NEW LEAD]\n\n👤 ${full_name}\n📧 ${email}\n📱 ${phone}\n💬 ${message || 'No message'}${questionsStr}\n\n🔗 ${baseUrl}/dashboard/leads`;
                         console.log(`[WA-Owner] → ${ownerPhone}`);
                         whatsappService.sendWhatsAppMessage(user_id, ownerPhone, ownerMsg)
                             .then(() => console.log(`[WA-Owner] ✅ Sent`))
@@ -686,14 +518,8 @@ export const submitLead = async (req, res) => {
 
                     // B. CUSTOMER — auto-response
                     if (phone) {
-                        const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
-                        const finalMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
-                            name: full_name || 'there',
-                            link: `${baseUrl}/l/${automation_id}`,
-                            number: whatsappAuth.account_id || ''
-                        });
                         console.log(`[WA-Customer] → ${phone}`);
-                        whatsappService.sendWhatsAppMessage(user_id, phone, finalMsg)
+                        whatsappService.sendWhatsAppMessage(user_id, phone, finalCustomerMsg)
                             .then(() => console.log(`[WA-Customer] ✅ Sent`))
                             .catch(e => console.error(`[WA-Customer] ❌ ${e.message}`));
                     }
@@ -763,52 +589,6 @@ export const submitLead = async (req, res) => {
                 console.log(`============================================================\n`);
             } catch (bgErr) {
                 console.error(`[BG-Dispatch] ❌ Error:`, bgErr.message);
-            }
-
-            // n8n / webhook (optional)
-            try {
-                if (captureWebhook || autoResponseWebhook) {
-                    const freshGoogleToken = await getValidGoogleToken(user_id).catch(() => null);
-                    const googleAuth = integrations['google'] || {};
-                    const whatsappAuth = integrations['whatsapp'] || {};
-
-                    // Fetch SMTP credentials for n8n
-                    const smtpRes = await pool.query(
-                        'SELECT host, port, secure, auth_user, auth_pass, from_email, from_name FROM smtp_settings WHERE user_id = $1 AND is_active = true',
-                        [user_id]
-                    );
-                    const smtp = smtpRes.rows[0] || {};
-
-                    const payload = {
-                        automation_id, user_id, owner_email,
-                        lead_email: email,
-                        email: result.rows[0].notification_email || owner_email,
-                        full_name, phone, message: message || '',
-                        filtering_responses, source: 'Public Link',
-                        consent: !!consent_given, marketing_consent: !!marketing_consent,
-                        date: current_date,
-                        // Credentials for n8n
-                        client_id: process.env.GOOGLE_CLIENT_ID,
-                        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-                        access_token: freshGoogleToken || googleAuth.access_token || null,
-                        refresh_token: googleAuth.refresh_token || null,
-                        whatsapp_access_token: whatsappAuth.access_token || null,
-                        whatsapp_refresh_token: whatsappAuth.refresh_token || null,
-                        // SMTP credentials
-                        smtp_host: smtp.host || null,
-                        smtp_port: smtp.port || null,
-                        smtp_secure: smtp.secure || false,
-                        smtp_user: smtp.auth_user || null,
-                        smtp_pass: smtp.auth_pass || null,
-                        smtp_from_email: smtp.from_email || null,
-                        smtp_from_name: smtp.from_name || null
-                    };
-
-                    if (captureWebhook) fetch(captureWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
-                    if (autoResponseWebhook) fetch(autoResponseWebhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
-                }
-            } catch (e) {
-                console.error('[BG-Webhook] ❌', e.message);
             }
         });
 

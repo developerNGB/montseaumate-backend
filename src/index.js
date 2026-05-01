@@ -290,6 +290,39 @@ const runMigrations = async () => {
         await safeQuery('marketplace_leads.seller_phone', `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_phone VARCHAR(100)`);
         await safeQuery('marketplace_leads.seller_email', `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS seller_email VARCHAR(255)`);
         await safeQuery('marketplace_leads.contact_url',  `ALTER TABLE marketplace_leads ADD COLUMN IF NOT EXISTS contact_url TEXT`);
+        await safeQuery('marketplace_usage_table', `
+            CREATE TABLE IF NOT EXISTS marketplace_usage (
+                id SERIAL PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                period VARCHAR(7) NOT NULL,
+                leads_fetched INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(user_id, period)
+            )
+        `);
+        await safeQuery('marketplace_search_jobs_table', `
+            CREATE TABLE IF NOT EXISTS marketplace_search_jobs (
+                id UUID PRIMARY KEY,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                niche VARCHAR(80) NOT NULL,
+                query TEXT,
+                location TEXT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'queued',
+                requested_limit INTEGER NOT NULL DEFAULT 0,
+                fetched_count INTEGER NOT NULL DEFAULT 0,
+                saved_count INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT,
+                result_summary JSONB DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                started_at TIMESTAMPTZ,
+                completed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        await safeQuery('idx_marketplace_usage_user_period', `CREATE INDEX IF NOT EXISTS idx_marketplace_usage_user_period ON marketplace_usage(user_id, period)`);
+        await safeQuery('idx_marketplace_jobs_user_status', `CREATE INDEX IF NOT EXISTS idx_marketplace_jobs_user_status ON marketplace_search_jobs(user_id, status)`);
+        await safeQuery('idx_marketplace_jobs_user_created', `CREATE INDEX IF NOT EXISTS idx_marketplace_jobs_user_created ON marketplace_search_jobs(user_id, created_at DESC)`);
 
         // leads table expansion
         await safeQuery('leads.followup_step_index', `ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);

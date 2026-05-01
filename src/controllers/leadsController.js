@@ -1,6 +1,4 @@
 import pool from '../db/pool.js';
-import fetch from 'node-fetch';
-import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
@@ -20,12 +18,14 @@ const extractNameFromEmail = (email) => {
 
 /**
  * Dispatch a follow-up message to a single lead.
- * Priority: Email (primary) → WhatsApp native → n8n (fallback).
+ * Priority: WhatsApp native → email cascade. No external automation service.
  * Never throws — logs errors and continues.
  * @param {string} subject - Optional custom subject line
  */
-const dispatchFollowup = async (userId, lead, message, subject = 'Message from Our Team') => {
+const dispatchFollowup = async (userId, lead, message, subject = 'Message from Our Team', options = {}) => {
     const dispatchStart = Date.now();
+    const whatsappEnabled = options.whatsappEnabled !== false;
+    const emailEnabled = options.emailEnabled !== false;
     // Name handling: use provided name, or extract from email, or fallback to "there"
     const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
         ? lead.full_name
@@ -45,29 +45,8 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
 
     console.log(`[Followup][${dispatchStart}] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
-    // 1. EMAIL (Primary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
-    if (lead.email) {
-        try {
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${lead.email}...`);
-            const result = await sendDynamicEmail(userId, {
-                to: lead.email,
-                subject: subject,
-                text: personalisedMsg,
-                html: createEmailTemplate(personalisedMsg, leadName, subject),
-            });
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
-            return result.provider || 'email';
-        } catch (e) {
-            console.error(`[Followup][${Date.now() - dispatchStart}ms] ❌ Email failed:`, e.message);
-            // If it's a specific user error (expired token), don't fallback to system gmail silently
-            if (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient')) {
-                throw e;
-            }
-        }
-    }
-
-    // 2. Native WhatsApp (Secondary)
-    if (lead.phone) {
+    // 1. Native WhatsApp (Primary)
+    if (whatsappEnabled && lead.phone) {
         try {
             console.log(`[Followup][${Date.now() - dispatchStart}ms] 📱 Attempting WhatsApp to ${lead.phone}...`);
             const waInt = await pool.query(
@@ -84,23 +63,23 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
         }
     }
 
-    // 3. n8n webhook (Tertiary/Fallback)
-    const webhookUrl = process.env.N8N_LEAD_FOLLOWUP_WEBHOOK;
-    if (webhookUrl) {
+    // 2. EMAIL (Secondary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
+    if (emailEnabled && lead.email) {
         try {
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] 🪝 Attempting n8n webhook...`);
-            const r = await fetch(webhookUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ event: 'followup', lead, message: personalisedMsg }),
-                timeout: 8000,
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${lead.email}...`);
+            const result = await sendDynamicEmail(userId, {
+                to: lead.email,
+                subject: subject,
+                text: personalisedMsg,
+                html: createEmailTemplate(personalisedMsg, leadName, subject),
             });
-            if (r.ok) { 
-                console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ n8n triggered`); 
-                return 'n8n'; 
-            }
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
+            return result.provider || 'email';
         } catch (e) {
-            console.warn(`[Followup][${Date.now() - dispatchStart}ms] n8n failed:`, e.message);
+            console.error(`[Followup][${Date.now() - dispatchStart}ms] ❌ Email failed:`, e.message);
+            if (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient')) {
+                throw e;
+            }
         }
     }
 
@@ -232,7 +211,7 @@ export const importLeads = async (req, res) => {
         }
 
         const [captureRes, followupRes, existingRes] = await Promise.all([
-            pool.query(`SELECT auto_response_message, lead_capture_active, automation_id FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
+            pool.query(`SELECT auto_response_message, lead_capture_active, automation_id, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             pool.query(`SELECT is_active FROM lead_followup_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             dupConditions.length > 0
                 ? pool.query(
@@ -332,7 +311,10 @@ export const importLeads = async (req, res) => {
         if (captureActive) {
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id }, captureCfg.auto_response_message, 'Thanks for reaching out!')
+                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
+                        whatsappEnabled: captureCfg.whatsapp_enabled,
+                        emailEnabled: captureCfg.email_enabled,
+                    })
                 )
             ).then(results => {
                 const sent = results.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
@@ -362,7 +344,9 @@ export const triggerLeadFollowup = async (req, res) => {
                 l.*, 
                 u.company_name, u.email as owner_email, 
                 rfs.auto_response_message as funnel_msg, rfs.notification_email, rfs.whatsapp_number_fallback,
-                lfs.followup_sequence, lfs.is_active as lfs_active
+                lfs.followup_sequence, lfs.is_active as lfs_active,
+                lfs.whatsapp_enabled as lfs_whatsapp_enabled,
+                lfs.email_enabled as lfs_email_enabled
             FROM leads l
             JOIN users u ON l.user_id = u.id
             LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
@@ -400,8 +384,11 @@ export const triggerLeadFollowup = async (req, res) => {
         const isFirstMessage = (lead.followup_step_index || 0) === 0;
         const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
 
-        // Dispatch via cascade: WhatsApp native → n8n → email
-        const channel = await dispatchFollowup(req.user.id, lead, messageToSend, subject);
+        // Dispatch via internal cascade only: WhatsApp native → email.
+        const channel = await dispatchFollowup(req.user.id, lead, messageToSend, subject, {
+            whatsappEnabled: lead.lfs_whatsapp_enabled,
+            emailEnabled: lead.lfs_email_enabled,
+        });
 
         // Update status and increment sequence index so cron picks up the NEXT one
         await pool.query(

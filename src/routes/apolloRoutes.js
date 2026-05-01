@@ -49,4 +49,11 @@ router.post('/test-apify', apolloController.testApify);
  */
 router.post('/scrape', apolloController.scoutByNiche);
 
+/**
+ * @route   GET /api/apify/jobs/:jobId
+ * @desc    Poll Apify background search status
+ * @access  Private
+ */
+router.get('/jobs/:jobId', apolloController.getSearchJob);
+
 export default router;

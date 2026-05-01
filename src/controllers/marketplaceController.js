@@ -189,7 +189,7 @@ export const getStoredLeads = async (req, res) => {
                         location, url, image_url, description, fetched_at, created_at,
                         size, rooms, floor, agency, brand, model, year, mileage, fuel,
                         company, salary, contract_type, is_remote,
-                        seller_name, seller_phone, seller_email, contact_url
+                        seller_name, seller_phone, seller_email, contact_url, raw_data
                  FROM marketplace_leads ${where}
                  ORDER BY fetched_at DESC
                  LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -202,6 +202,10 @@ export const getStoredLeads = async (req, res) => {
             id:           r.external_id,
             source:       r.source,
             category:     r.category,
+            full_name:    r.seller_name || r.title,
+            email:        r.seller_email,
+            phone:        r.seller_phone,
+            notes:        r.raw_data?.notes || r.raw_data || {},
             title:        r.title,
             price:        r.price,
             currency:     r.currency,

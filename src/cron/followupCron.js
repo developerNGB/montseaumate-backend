@@ -121,7 +121,7 @@ const startFollowupCron = () => {
 
             // ── TRY WhatsApp ─────────────────────────────────────────────────────
             try {
-                if (!waSessions.has(lead.user_id)) {
+                if (lead.whatsapp_enabled !== false && !waSessions.has(lead.user_id)) {
                     const intRes = await pool.query(
                         `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
                         [lead.user_id]
@@ -136,7 +136,7 @@ const startFollowupCron = () => {
                 }
                 
                 const session = waSessions.get(lead.user_id);
-                if (session?.isNative && session?.session?.status === 'connected' && lead.phone) {
+                if (lead.whatsapp_enabled !== false && session?.isNative && session?.session?.status === 'connected' && lead.phone) {
                     await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg);
                     waSent = true;
                 }
@@ -146,7 +146,7 @@ const startFollowupCron = () => {
 
             // ── TRY Email ────────────────────────────────────────────────────────
             try {
-                if (lead.email) {
+                if (lead.email_enabled !== false && lead.email) {
                     const isFirstMessage = currentIndex === 0;
                     const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
                     
@@ -228,7 +228,7 @@ const startFollowupCron = () => {
             const query = `
                 SELECT 
                     l.id, l.user_id, l.full_name, l.phone, l.email, l.created_at, l.last_followup_at, l.followup_step_index,
-                    s.followup_sequence,
+                    s.followup_sequence, s.whatsapp_enabled, s.email_enabled,
                     rfs.automation_id,
                     u.company_name
                 FROM leads l
