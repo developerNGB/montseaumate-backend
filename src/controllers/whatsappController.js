@@ -6,8 +6,12 @@ export const connectWhatsApp = async (req, res) => {
         await whatsappService.initWhatsAppClient(req.user.id);
         res.json({ success: true, message: 'Initialization started' });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[connectWhatsApp] Error:', err.message);
+        res.status(500).json({
+            success: false,
+            message: 'WhatsApp could not start. Check the server database connection and try again.',
+            details: err.message,
+        });
     }
 };
 

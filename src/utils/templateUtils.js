@@ -12,7 +12,7 @@ export const injectPlaceholders = (template, data = {}) => {
     result = result.replace(/{name}/gi, participantName);
     
     // Replace {link} or {{link}} with data.link, data.publicUrl, or ''
-    const targetLink = data.link || data.publicUrl || '';
+    const targetLink = resolveMessageLink(template, data);
     result = result.replace(/{{link}}/gi, targetLink);
     result = result.replace(/{link}/gi, targetLink);
 
@@ -22,6 +22,19 @@ export const injectPlaceholders = (template, data = {}) => {
     result = result.replace(/{number}/gi, contactNumber);
     
     return result;
+};
+
+export const looksLikeReviewRequest = (template = '') => {
+    const text = String(template).toLowerCase();
+    return /\b(review|google|rating|feedback|reseña|valoraci[oó]n|opini[oó]n)\b/.test(text);
+};
+
+export const resolveMessageLink = (template, data = {}) => {
+    if (looksLikeReviewRequest(template)) {
+        return data.googleReviewUrl || data.reviewUrl || data.link || data.publicUrl || '';
+    }
+
+    return data.link || data.publicUrl || '';
 };
 
 /**

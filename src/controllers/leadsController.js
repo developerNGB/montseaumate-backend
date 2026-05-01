@@ -40,6 +40,8 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
         name: leadName,
         full_name: leadName,
         link: link,
+        reviewUrl: link,
+        googleReviewUrl: lead.google_review_url,
         company: lead.company_name || 'Our Team'
     });
 
@@ -211,7 +213,7 @@ export const importLeads = async (req, res) => {
         }
 
         const [captureRes, followupRes, existingRes] = await Promise.all([
-            pool.query(`SELECT auto_response_message, lead_capture_active, automation_id, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
+            pool.query(`SELECT auto_response_message, google_review_url, lead_capture_active, automation_id, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             pool.query(`SELECT is_active FROM lead_followup_settings WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] })),
             dupConditions.length > 0
                 ? pool.query(
@@ -311,7 +313,7 @@ export const importLeads = async (req, res) => {
         if (captureActive) {
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
+                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id, google_review_url: captureCfg.google_review_url }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
                         whatsappEnabled: captureCfg.whatsapp_enabled,
                         emailEnabled: captureCfg.email_enabled,
                     })
@@ -343,7 +345,7 @@ export const triggerLeadFollowup = async (req, res) => {
             SELECT 
                 l.*, 
                 u.company_name, u.email as owner_email, 
-                rfs.auto_response_message as funnel_msg, rfs.notification_email, rfs.whatsapp_number_fallback,
+                rfs.auto_response_message as funnel_msg, rfs.google_review_url, rfs.notification_email, rfs.whatsapp_number_fallback,
                 lfs.followup_sequence, lfs.is_active as lfs_active,
                 lfs.whatsapp_enabled as lfs_whatsapp_enabled,
                 lfs.email_enabled as lfs_email_enabled

@@ -345,7 +345,8 @@ export const submitFeedback = async (req, res) => {
             const defaultMsg = "Thank you! We've received your feedback and will get back to you shortly if needed.";
             const finalMsg = injectPlaceholders(config.auto_response_message || defaultMsg, {
                 name: customer_name || 'there',
-                link: `${baseUrl}/r/${automation_id}`
+                link: `${baseUrl}/r/${automation_id}`,
+                googleReviewUrl: config.google_review_url
             });
             setImmediate(() => {
                 sendInternalWhatsApp(config.user_id, customer_phone, finalMsg)
@@ -356,7 +357,8 @@ export const submitFeedback = async (req, res) => {
         if (customer_email && config.email_enabled !== false) {
             const emailMsg = injectPlaceholders(config.auto_response_message || "Thank you! We've received your feedback.", {
                 name: customer_name || 'there',
-                link: `${baseUrl}/r/${automation_id}`
+                link: `${baseUrl}/r/${automation_id}`,
+                googleReviewUrl: config.google_review_url
             });
             setImmediate(() => {
                 sendInternalEmail(config.user_id, customer_email, 'Thanks for your feedback', emailMsg)
@@ -411,6 +413,7 @@ export const submitLead = async (req, res) => {
 
         const result = await pool.query(
             `SELECT rfs.user_id, rfs.lead_capture_active, rfs.is_active, rfs.auto_response_message,
+                    rfs.google_review_url,
                     rfs.notification_email, rfs.whatsapp_number_fallback, rfs.whatsapp_enabled, rfs.email_enabled,
                     u.email as owner_email
              FROM review_funnel_settings rfs
@@ -494,6 +497,8 @@ export const submitLead = async (req, res) => {
                 const finalCustomerMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
                     name: full_name || 'there',
                     link: `${baseUrl}/l/${automation_id}`,
+                    reviewUrl: `${baseUrl}/r/${automation_id}`,
+                    googleReviewUrl: result.rows[0].google_review_url,
                     number: whatsappAuth.account_id || ''
                 });
 
@@ -552,6 +557,8 @@ export const submitLead = async (req, res) => {
                                         const step0Msg = injectPlaceholders(step0.message || '', {
                                             name: full_name,
                                             link: `${baseUrl}/r/${automation_id}`,
+                                            reviewUrl: `${baseUrl}/r/${automation_id}`,
+                                            googleReviewUrl: result.rows[0].google_review_url,
                                             number: whatsappAuth.account_id || ''
                                         });
                                         await whatsappService.sendWhatsAppMessage(user_id, phone, step0Msg);

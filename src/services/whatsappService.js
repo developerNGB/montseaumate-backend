@@ -106,6 +106,7 @@ export const initWhatsAppClient = async (userId) => {
         console.error(`[WA-Init] Client init error for user ${userId}:`, e.message);
         clientStatus.set(userId, 'error');
         clients.delete(userId);
+        throw e;
     }
     
     return { success: true };
