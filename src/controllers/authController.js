@@ -616,17 +616,22 @@ export const googleLogin = async (req, res) => {
         const emailLower = googleUser.email.toLowerCase().trim();
         const name = googleUser.name || emailLower.split('@')[0];
 
-        // Atomic upsert: insert if new, do nothing if email already exists, then fetch
-        // ON CONFLICT prevents race-condition failures when two requests arrive simultaneously
-        const upsertResult = await pool.query(
-            `INSERT INTO users (name, email, password_hash, company_name)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (email) DO NOTHING
-             RETURNING id`,
-            [name, emailLower, '', '']
-        );
+        const existingUser = await pool.query('SELECT id FROM users WHERE lower(email) = $1 LIMIT 1', [emailLower]);
+        let isNewUser = existingUser.rows.length === 0;
 
-        const isNewUser = upsertResult.rows.length > 0;
+        if (isNewUser) {
+            try {
+                await pool.query(
+                    `INSERT INTO users (name, email, password_hash, company_name)
+                     VALUES ($1, $2, $3, $4)`,
+                    [name, emailLower, '', '']
+                );
+            } catch (insertErr) {
+                // A concurrent login may have created the same Google account first.
+                if (insertErr.code !== '23505') throw insertErr;
+                isNewUser = false;
+            }
+        }
 
         // Now fetch the full user row (always present after upsert)
         let result;
@@ -634,14 +639,16 @@ export const googleLogin = async (req, res) => {
             result = await pool.query(
                 `SELECT id, name, email, company_name, phone, plan, role, status,
                         COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled
-                 FROM users WHERE email = $1`,
+                 FROM users WHERE lower(email) = $1
+                 LIMIT 1`,
                 [emailLower]
             );
         } catch (e) {
             if (e.code !== '42703') throw e; // undefined_column — column not yet migrated
             result = await pool.query(
                 `SELECT id, name, email, company_name, phone, plan, role, status
-                 FROM users WHERE email = $1`,
+                 FROM users WHERE lower(email) = $1
+                 LIMIT 1`,
                 [emailLower]
             );
             result.rows = result.rows.map(r => ({ ...r, weekly_reports_enabled: true }));
