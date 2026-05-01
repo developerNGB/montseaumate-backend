@@ -31,6 +31,9 @@ const getRequestedNiches = (body) => {
 
 const toStoredLead = (lead, niche) => {
     const fullName = lead.full_name || `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.organization || 'Business';
+    const sourceLabel = typeof lead.source === 'string' && lead.source.toLowerCase().includes('apify')
+        ? lead.source.replace(/apify/gi, 'Marketplaces')
+        : lead.source;
     return {
         id: lead.id,
         first_name: lead.first_name || '',
@@ -44,7 +47,7 @@ const toStoredLead = (lead, niche) => {
         website: lead.website || '',
         linkedin_url: lead.linkedin_url || '',
         enrichment_status: lead.enrichment_status || 'pending',
-        source: lead.source || `Apify - ${niche}`,
+        source: sourceLabel || `Marketplaces - ${niche}`,
         category: niche,
         raw_data: lead.raw_data || lead,
     };
