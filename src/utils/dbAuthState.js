@@ -6,6 +6,16 @@ import { proto, initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
  * This replaces useMultiFileAuthState so sessions survive server restarts on Render.
  */
 export const useDBAuthState = async (userId) => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            PRIMARY KEY (user_id, key)
+        )
+    `);
+
     const readData = async (key) => {
         try {
             const result = await pool.query(
@@ -16,7 +26,7 @@ export const useDBAuthState = async (userId) => {
             return JSON.parse(result.rows[0].value, BufferJSON.reviver);
         } catch (e) {
             console.error(`[DBAuthState] Read error for key "${key}":`, e.message);
-            return null;
+            throw e;
         }
     };
 
@@ -31,6 +41,7 @@ export const useDBAuthState = async (userId) => {
             );
         } catch (e) {
             console.error(`[DBAuthState] Write error for key "${key}":`, e.message);
+            throw e;
         }
     };
 
@@ -42,6 +53,7 @@ export const useDBAuthState = async (userId) => {
             );
         } catch (e) {
             console.error(`[DBAuthState] Delete error for key "${key}":`, e.message);
+            throw e;
         }
     };
 

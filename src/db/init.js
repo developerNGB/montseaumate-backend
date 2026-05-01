@@ -66,6 +66,18 @@ const initDB = async () => {
         await client.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`);
         console.log('  ✅ integrations table ready');
 
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS whatsapp_sessions (
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (user_id, key)
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_user_id ON whatsapp_sessions(user_id)`);
+        console.log('  ✅ whatsapp_sessions table ready');
+
         // 4. REVIEW FUNNEL SETTINGS
         await client.query(`
             CREATE TABLE IF NOT EXISTS review_funnel_settings (

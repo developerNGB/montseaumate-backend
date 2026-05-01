@@ -11,8 +11,13 @@ const clientStatus = new Map();
 let cachedVersion;
 export const initWhatsAppClient = async (userId) => {
     if (clients.has(userId)) {
-        console.log(`[WA-Init] Client already exists for user ${userId}, skipping.`);
-        return { success: true, message: 'Client already initializing or ready' };
+        const status = clientStatus.get(userId);
+        if (status !== 'error' && status !== 'disconnected') {
+            console.log(`[WA-Init] Client already exists for user ${userId}, skipping.`);
+            return { success: true, message: 'Client already initializing or ready' };
+        }
+        clients.delete(userId);
+        clientQRs.delete(userId);
     }
 
     clientStatus.set(userId, 'initializing');
@@ -42,8 +47,16 @@ export const initWhatsAppClient = async (userId) => {
             logger: pino({ level: 'silent' }), // Keep logs clean; we have our own logs
             browser: ['Equipo Experto', 'Chrome', '1.0.0']
         });
+        clients.set(userId, sock);
         
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', async () => {
+            try {
+                await saveCreds();
+            } catch (err) {
+                console.error(`[WA-Socket] Failed to persist credentials for user ${userId}:`, err.message);
+                clientStatus.set(userId, 'error');
+            }
+        });
         
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect, qr } = update;
@@ -81,7 +94,6 @@ export const initWhatsAppClient = async (userId) => {
                 console.log(`[WA-Socket] ✅ CONNECTED! Session is live for user ${userId}`);
                 clientStatus.set(userId, 'connected');
                 clientQRs.delete(userId);
-                clients.set(userId, sock);
                 
                 const phoneNumber = (sock.user.id || '').split(':')[0].split('@')[0];
                 console.log(`[WA-Socket] Phone number registered: ${phoneNumber}`);
