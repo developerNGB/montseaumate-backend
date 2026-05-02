@@ -2,6 +2,7 @@ import apolloService from '../services/apolloService.js';
 import apifyNicheService from '../services/apifyNicheService.js';
 import pool from '../db/pool.js';
 import { createHash, randomUUID } from 'crypto';
+import * as whatsappService from '../services/whatsappService.js';
 import {
     getUsageSnapshot,
     incrementMarketplaceUsage,
@@ -11,6 +12,87 @@ import {
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
 const SEARCH_COOLDOWN_SECONDS = 60;
 const DEFAULT_LEADS_PER_NICHE = 20;
+
+/** Readable labels for WhatsApp summaries (aligned with scout niche ids). */
+const SCOUT_NICHE_LABELS = {
+    real_estate: 'Real Estate',
+    car_sales: 'Car Sales',
+    hr: 'HR / Recruitment',
+    second_hand: 'Second-hand / Retail',
+};
+
+const formatMarketplaceWhatsAppSummary = ({
+    location,
+    nicheCounts,
+    totalFound,
+    totalSaved,
+    saveFailed,
+    queriesPreview,
+}) => {
+    const baseUrl = (process.env.FRONTEND_URL || 'https://www.equipoexperto.com').replace(/\/$/, '');
+    const lines = Object.entries(nicheCounts).map(([nicheId, count]) => {
+        const label = SCOUT_NICHE_LABELS[nicheId] || nicheId.replace(/_/g, ' ');
+        return `• ${label}: ${count}`;
+    });
+    const nicheBlock =
+        lines.length > 0
+            ? `\n📂 By group:\n${lines.join('\n')}`
+            : '';
+    const queryLine = queriesPreview
+        ? `\n🔎 Search terms: ${queriesPreview}`
+        : '';
+    const warn = saveFailed
+        ? '\n⚠️ Some leads could not be saved — open the app and check Marketplace.'
+        : '';
+
+    return (
+        `🔔 *Marketplace lead search finished*\n\n` +
+        `📍 Location: ${location}\n` +
+        `📊 Leads found: *${totalFound}*\n` +
+        `💾 Saved (this run): *${totalSaved}*${nicheBlock}${queryLine}${warn}\n\n` +
+        `View saved leads:\n${baseUrl}/dashboard/marketplace`
+    );
+};
+
+const sendMarketplaceJobCompletionWhatsApp = async (userId, message) => {
+    try {
+        const [intRes, cfgRes] = await Promise.all([
+            pool.query(
+                `SELECT access_token, account_id FROM integrations 
+                 WHERE user_id = $1 AND provider = 'whatsapp'`,
+                [userId]
+            ),
+            pool.query(
+                `SELECT whatsapp_number_fallback FROM review_funnel_settings WHERE user_id = $1`,
+                [userId]
+            ),
+        ]);
+
+        const int = intRes.rows[0];
+        if (!int || int.access_token !== 'whatsapp_native_session') {
+            return;
+        }
+
+        const fallback = (cfgRes.rows[0]?.whatsapp_number_fallback || '').trim().replace(/\D/g, '');
+        const ownerAccount = String(int.account_id || '').trim().replace(/\D/g, '');
+        const targetPhone = fallback || ownerAccount;
+        if (!targetPhone) {
+            console.log('[MarketplaceJob][WA] No owner phone — skip scout summary WhatsApp.');
+            return;
+        }
+
+        const status = whatsappService.getSessionStatus(userId)?.status;
+        if (status !== 'connected') {
+            console.log(`[MarketplaceJob][WA] Session not connected (${status}) — skip scout summary.`);
+            return;
+        }
+
+        await whatsappService.sendWhatsAppMessage(userId, targetPhone, message);
+        console.log(`[MarketplaceJob][WA] Scout summary delivered to ${targetPhone}`);
+    } catch (e) {
+        console.warn('[MarketplaceJob][WA] Scout summary WhatsApp failed:', e.message);
+    }
+};
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const isGmail = (email = '') => /@gmail\.com$/i.test(String(email || '').trim());
 const isWebUrl = (value = '') => /^https?:\/\//i.test(String(value || '').trim());
@@ -187,6 +269,10 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
     let allLeads = [];
     let totalSaved = 0;
     let saveFailed = false;
+    const nicheCounts = {};
+    for (const r of requests) {
+        nicheCounts[r.niche] = 0;
+    }
 
     try {
         await client.query(
@@ -210,6 +296,7 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
             const scrapedLeads = (results.people || []).slice(0, limitForNiche).map(lead => toStoredLead(lead, request.niche));
             remaining -= scrapedLeads.length;
             allLeads = allLeads.concat(scrapedLeads);
+            nicheCounts[request.niche] += scrapedLeads.length;
 
             const saveResult = await saveDiscoveredLeads(client, userId, scrapedLeads, request.niche);
             totalSaved += saveResult.savedCount;
@@ -258,6 +345,23 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
                 }),
             ]
         );
+
+        const queriesPreview = requests
+            .map((r) => r.query)
+            .filter(Boolean)
+            .join(' • ')
+            .slice(0, 220);
+        const waSummary = formatMarketplaceWhatsAppSummary({
+            location,
+            nicheCounts,
+            totalFound: allLeads.length,
+            totalSaved,
+            saveFailed,
+            queriesPreview: queriesPreview || null,
+        });
+        setImmediate(() => {
+            sendMarketplaceJobCompletionWhatsApp(userId, waSummary);
+        });
     } catch (error) {
         console.error('[MarketplaceJob] failed:', error);
         await client.query(

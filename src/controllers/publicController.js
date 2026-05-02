@@ -341,13 +341,20 @@ export const submitFeedback = async (req, res) => {
                 .catch(err => console.error('[submitFeedback] owner notification failed:', err.message));
         });
 
+        /** After survey submit only — never reuse auto_response_message (invite copy + funnel link). */
+        const POST_SURVEY_THANK_YOU =
+            'Hi {name}! Thank you for your feedback — we have received it and truly appreciate you taking the time.\n\n' +
+            'If you need anything else from us, just reply here and we will be glad to help.';
+        const thankYouSubstitutions = {
+            name: customer_name || 'there',
+            link: '',
+            googleReviewUrl: '',
+            reviewUrl: '',
+            publicUrl: '',
+        };
+
         if (customer_phone && config.whatsapp_enabled !== false) {
-            const defaultMsg = "Thank you! We've received your feedback and will get back to you shortly if needed.";
-            const finalMsg = injectPlaceholders(config.auto_response_message || defaultMsg, {
-                name: customer_name || 'there',
-                link: `${baseUrl}/r/${automation_id}`,
-                googleReviewUrl: config.google_review_url
-            });
+            const finalMsg = injectPlaceholders(POST_SURVEY_THANK_YOU, thankYouSubstitutions);
             setImmediate(() => {
                 sendInternalWhatsApp(config.user_id, customer_phone, finalMsg)
                     .catch(err => console.error('[submitFeedback] customer WhatsApp failed:', err.message));
@@ -355,11 +362,7 @@ export const submitFeedback = async (req, res) => {
         }
 
         if (customer_email && config.email_enabled !== false) {
-            const emailMsg = injectPlaceholders(config.auto_response_message || "Thank you! We've received your feedback.", {
-                name: customer_name || 'there',
-                link: `${baseUrl}/r/${automation_id}`,
-                googleReviewUrl: config.google_review_url
-            });
+            const emailMsg = injectPlaceholders(POST_SURVEY_THANK_YOU, thankYouSubstitutions);
             setImmediate(() => {
                 sendInternalEmail(config.user_id, customer_email, 'Thanks for your feedback', emailMsg)
                     .catch(err => console.error('[submitFeedback] customer email failed:', err.message));
