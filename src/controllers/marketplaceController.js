@@ -6,6 +6,25 @@
 
 import pool from '../db/pool.js';
 import { runApifyScraper } from '../services/apifyService.js';
+import { getPlanEntitlements } from '../services/subscriptionPlans.js';
+
+async function rejectClassifiedIfNotEntitled(userId, res) {
+    const billing = (
+        await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId])
+    ).rows[0];
+    const entitlements = getPlanEntitlements(billing?.plan ?? 'free', billing?.trial_ends_at ?? null);
+    if (entitlements.classified_marketplace_bulk) return false;
+    res.status(403).json({
+        success: false,
+        code: 'PLAN_FEATURE_LOCKED',
+        feature: 'classified_marketplace_bulk',
+        message: entitlements.trial_active
+            ? 'Classified marketplace import is available once your trial ends and you subscribe to Growth or Pro.'
+            : 'Bulk lead import from Spanish classified portals requires Growth or Pro.',
+        entitlements,
+    });
+    return true;
+}
 
 // Whitelist — only these IDs are accepted from the client
 const ALLOWED = new Set([
@@ -30,6 +49,9 @@ const DISPLAY_NAMES = {
 
 export const fetchMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
+
+    if (await rejectClassifiedIfNotEntitled(userId, res)) return;
+
     const { marketplaces } = req.body;
 
     if (!Array.isArray(marketplaces) || marketplaces.length === 0) {
@@ -92,6 +114,9 @@ export const fetchMarketplaceLeads = async (req, res) => {
 
 export const storeMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
+
+    if (await rejectClassifiedIfNotEntitled(userId, res)) return;
+
     const { leads } = req.body;
 
     if (!Array.isArray(leads) || leads.length === 0) {

@@ -1,5 +1,5 @@
 import pool from '../db/pool.js';
-import { isTrialing } from '../services/subscriptionPlans.js';
+import { getPlanEntitlements, isTrialing } from '../services/subscriptionPlans.js';
 
 export const getDashboardStats = async (req, res) => {
     try {
@@ -199,6 +199,10 @@ export const getDashboardStats = async (req, res) => {
                 plan: billRow.plan ?? 'free',
                 trial_ends_at: billRow.trial_ends_at ?? null,
                 trial_active: !onPaidGrowthOrPro && isTrialing(billRow.trial_ends_at ?? null),
+                entitlements: getPlanEntitlements(
+                    billRow.plan ?? 'free',
+                    billRow.trial_ends_at ?? null
+                ),
             },
         });
 

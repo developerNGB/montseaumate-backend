@@ -1,7 +1,7 @@
 import pool from '../db/pool.js';
 import crypto from 'crypto';
 import qrcode from 'qrcode';
-import { countEmployeesAfterPatch, getMaxEmployees } from '../services/subscriptionPlans.js';
+import { countEmployeesAfterPatch, getMaxEmployees, getMaxFollowupSequenceSteps } from '../services/subscriptionPlans.js';
 
 async function loadBillingRow(userId) {
     const u = await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId]);
@@ -279,7 +279,33 @@ export const saveLeadFollowupConfig = async (req, res) => {
         const reminder_delay_value = passed.reminder_delay_value !== undefined ? passed.reminder_delay_value : (existing.reminder_delay_value ?? 48);
         const reminder_delay_unit = passed.reminder_delay_unit !== undefined ? passed.reminder_delay_unit : (existing.reminder_delay_unit ?? 'hours');
         const reminder_message = passed.reminder_message !== undefined ? passed.reminder_message : (existing.reminder_message ?? 'Hi again! Just a friendly reminder about your inquiry. We haven\'t heard back and want to make sure you got our last message.');
-        const followup_sequence = passed.followup_sequence || existing.followup_sequence || [];
+        const rawFollowupSeq =
+            passed.followup_sequence !== undefined
+                ? passed.followup_sequence
+                : (existing.followup_sequence ?? []);
+        let followup_sequence =
+            typeof rawFollowupSeq === 'string'
+                ? (() => {
+                      try {
+                          return JSON.parse(rawFollowupSeq);
+                      } catch {
+                          return [];
+                      }
+                  })()
+                : rawFollowupSeq;
+        if (!Array.isArray(followup_sequence)) followup_sequence = [];
+
+        const billingLf = await loadBillingRow(req.user.id);
+        const maxFollowSteps = getMaxFollowupSequenceSteps(billingLf.plan, billingLf.trial_ends_at);
+        if (maxFollowSteps !== null && followup_sequence.length > maxFollowSteps) {
+            return res.status(403).json({
+                success: false,
+                code: 'FOLLOWUP_SEQUENCE_PLAN_LIMIT',
+                message: `Your plan allows up to ${maxFollowSteps} follow-up step(s) in this sequence. Remove extra steps or upgrade to use more.`,
+                max_steps: maxFollowSteps,
+                attempted: followup_sequence.length,
+            });
+        }
 
         const rfEmp = await pool.query(
             'SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1',
@@ -290,7 +316,6 @@ export const saveLeadFollowupConfig = async (req, res) => {
             lf: existing,
             patch: { followup_active: is_active },
         });
-        const billingLf = await loadBillingRow(req.user.id);
         if (projectedLfEmp > getMaxEmployees(billingLf.plan, billingLf.trial_ends_at)) {
             return respondEmployeeLimit(res, billingLf, projectedLfEmp);
         }

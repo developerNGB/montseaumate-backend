@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { createHash } from 'crypto';
 
 const APIFY_BASE_URL = 'https://api.apify.com/v2';
 
@@ -179,11 +180,11 @@ class ApifyNicheService {
     /**
      * Scrape Google Maps for businesses by niche
      * @param {string} niche - e.g., 'real_estate', 'car_sales', 'hr', 'second_hand'
-     * @param {string} location - Optional location filter
+     * @param {string} geoScope - Country / region text (required for production searches), e.g. Spain
      * @param {string} query - Optional custom search query (overrides default terms)
      */
-    async scoutByNiche(niche, location = '', query = '', options = {}) {
-        console.log(`🔍 Starting niche scout for: ${niche}, location: ${location || 'any'}, query: ${query || 'default'}`);
+    async scoutByNiche(niche, geoScope = '', query = '', options = {}) {
+        console.log(`🔍 Starting niche scout for: ${niche}, geo: ${geoScope || 'none'}, query: ${query || 'default'}`);
         const maxResults = Math.max(1, Math.min(Number(options.maxResults || 20), 100));
 
         try {
@@ -191,12 +192,12 @@ class ApifyNicheService {
 
             // If custom query provided, use it directly
             if (query) {
-                results = await this.scrapeGoogleMaps([query], niche, location, maxResults);
+                results = await this.scrapeGoogleMaps([query], niche, geoScope, maxResults);
                 return {
                     people: results,
                     total_entries: results.length,
                     niche,
-                    location
+                    location: geoScope,
                 };
             }
 
@@ -204,19 +205,19 @@ class ApifyNicheService {
             switch (niche) {
                 case 'real_estate':
                     // Use Google Maps scraper with real estate search terms
-                    results = await this.scrapeGoogleMaps(['real estate agencies', 'real estate agents', 'property brokers', 'realtors'], niche, location, maxResults);
+                    results = await this.scrapeGoogleMaps(['real estate agencies', 'real estate agents', 'property brokers', 'realtors'], niche, geoScope, maxResults);
                     break;
                 case 'car_sales':
                     // Use Google Maps scraper with car dealership search terms
-                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'], niche, location, maxResults);
+                    results = await this.scrapeGoogleMaps(['car dealerships', 'auto sales', 'car showrooms', 'automotive dealers'], niche, geoScope, maxResults);
                     break;
                 case 'hr':
                     // Use Google Maps scraper with HR/recruitment search terms
-                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting', 'employment agencies'], niche, location, maxResults);
+                    results = await this.scrapeGoogleMaps(['recruitment agencies', 'staffing companies', 'HR consulting', 'employment agencies'], niche, geoScope, maxResults);
                     break;
                 case 'second_hand':
                     // Use Google Maps scraper with second hand retail search terms
-                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'], niche, location, maxResults);
+                    results = await this.scrapeGoogleMaps(['second hand shops', 'vintage stores', 'thrift shops', 'consignment shops', 'resale boutiques'], niche, geoScope, maxResults);
                     break;
                 default:
                     throw new Error(`Unknown niche: ${niche}`);
@@ -226,7 +227,7 @@ class ApifyNicheService {
                 people: results,
                 total_entries: results.length,
                 niche,
-                location
+                location: geoScope,
             };
         } catch (error) {
             console.error('❌ Apify Niche Scout Error:', error.message);
@@ -234,7 +235,7 @@ class ApifyNicheService {
                 people: [],
                 total_entries: 0,
                 niche,
-                location,
+                location: geoScope,
                 error: error.message
             };
         }
@@ -356,10 +357,15 @@ class ApifyNicheService {
     /**
      * Fallback Google Maps scraper for other niches
      */
-    async scrapeGoogleMaps(queries, niche, location = '', maxResults = 20) {
-        const searchQueries = location 
-            ? queries.map(q => `${q} in ${location}`)
-            : queries;
+    /**
+     * @param geoScope Required for normal flows — ISO country name (e.g. Spain) so Maps runs country-wide,
+     *        not anchored to one city when the caller provides a whole country label.
+     */
+    async scrapeGoogleMaps(queries, niche, geoScope = '', maxResults = 20) {
+        const searchQueries =
+            geoScope && String(geoScope).trim()
+                ? queries.map((q) => `${q} in ${String(geoScope).trim()}`)
+                : queries;
         const cappedResults = Math.max(1, Math.min(Number(maxResults || 20), 100));
 
         console.log(`🔍 Google Maps search: ${searchQueries.join(', ')}`);
@@ -384,14 +390,25 @@ class ApifyNicheService {
             const results = await this.runActorSync(actorId, input, 180);
             console.log(`✅ Google Places returned ${results.length} results`);
 
-            return results.map(place => {
+            return results.map((place) => {
                 const businessName = place.name || place.title || place.companyName || place.organization || '';
-                const locationText = place.address || place.location?.formattedAddress || [place.city, place.state, place.countryCode].filter(Boolean).join(', ');
+                const locationText =
+                    place.address ||
+                    place.location?.formattedAddress ||
+                    [place.city, place.state, place.countryCode].filter(Boolean).join(', ');
                 const bestEmail = extractBestEmail(place);
                 const bestWebsite = extractBestWebsite(place);
 
+                const stableFingerprint = [businessName, locationText, bestWebsite].filter(Boolean).join('|').toLowerCase().trim();
+                const deterministicId =
+                    place.placeId ||
+                    (typeof place.url === 'string' && /^https?:\/\//i.test(place.url.trim()) ? place.url.trim() : null) ||
+                    (stableFingerprint
+                        ? `gmaps_${createHash('sha256').update(stableFingerprint).digest('hex').slice(0, 40)}`
+                        : `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
+
                 return {
-                id: place.placeId || place.url || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                id: deterministicId,
                 first_name: this.extractFirstName(businessName),
                 last_name: '',
                 full_name: businessName,

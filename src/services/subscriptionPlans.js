@@ -91,6 +91,71 @@ export const countActiveEmployeesFromRows = (rfRow, lfRow) => {
 };
 
 /**
+ * Highest follow-up automation steps allowed per tier (beyond the legacy single-message path).
+ * `null` means no cap.
+ */
+export const getMaxFollowupSequenceSteps = (plan, trialEndsAt) => {
+    if (isTrialing(trialEndsAt)) return 2;
+    const tier = normalizeBillingPlan(plan);
+    if (tier === 'free_trial') return 2;
+    switch (tier) {
+        case 'growth':
+            return 5;
+        case 'pro':
+        case 'enterprise':
+            return null;
+        case 'basic':
+        default:
+            return 2;
+    }
+};
+
+/**
+ * Plan-based feature gates (single source of truth for APIs + `/api/apollo/usage`).
+ * Tier names are internal; `tier_key` aligns with normalized billing tier.
+ */
+export const getPlanEntitlements = (plan, trialEndsAt) => {
+    const trialing = isTrialing(trialEndsAt);
+    const normalized = normalizeBillingPlan(plan);
+
+    /** Paid product tier ignoring capitalisation; trial users treated as Starter for premium flags */
+    let productTier = 'starter';
+    if (!trialing && normalized !== 'free_trial') {
+        if (normalized === 'enterprise') productTier = 'enterprise';
+        else if (normalized === 'pro') productTier = 'pro';
+        else if (normalized === 'growth') productTier = 'growth';
+        else productTier = 'starter';
+    }
+
+    const classifiedMarketplaceBulk =
+        !trialing && (productTier === 'growth' || productTier === 'pro' || productTier === 'enterprise');
+    const apolloContactSearch =
+        !trialing && (productTier === 'growth' || productTier === 'pro' || productTier === 'enterprise');
+    const apolloDeepEnrich =
+        !trialing && (productTier === 'pro' || productTier === 'enterprise');
+
+    const runsLimit = getMarketplaceRunsLimit(plan, trialEndsAt);
+    const maxEmp = getMaxEmployees(plan, trialEndsAt);
+
+    return {
+        plan: String(plan ?? 'free').trim(),
+        normalized_tier: normalized,
+        trial_active: trialing,
+        product_tier: productTier,
+        max_followup_sequence_steps: getMaxFollowupSequenceSteps(plan, trialEndsAt),
+        /** POST /api/marketplace/fetch + /store — multi-portal Apify classified scrape */
+        classified_marketplace_bulk: classifiedMarketplaceBulk,
+        /** POST /api/apollo/search — Apollo.io people search */
+        apollo_b2b_search: apolloContactSearch,
+        /** POST /api/apollo/enrich — paid enrichment */
+        apollo_enrich: apolloDeepEnrich,
+        runs_limit: runsLimit,
+        max_employees: maxEmp,
+        marketplace_scout_included: runsLimit > 0,
+    };
+};
+
+/**
  * Simulate count after toggle or config save fields.
  */
 export const countEmployeesAfterPatch = ({

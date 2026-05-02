@@ -3,11 +3,19 @@ import apifyNicheService from '../services/apifyNicheService.js';
 import pool from '../db/pool.js';
 import { createHash, randomUUID } from 'crypto';
 import * as whatsappService from '../services/whatsappService.js';
+import { getPlanEntitlements } from '../services/subscriptionPlans.js';
 import {
     getUsageSnapshot,
     incrementMarketplaceUsage,
     tryConsumeMarketplaceRun,
 } from '../services/marketplaceUsageService.js';
+
+async function loadEntitlements(userId) {
+    const row = (
+        await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId])
+    ).rows[0];
+    return getPlanEntitlements(row?.plan ?? 'free', row?.trial_ends_at ?? null);
+}
 
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
 const SEARCH_COOLDOWN_SECONDS = 60;
@@ -22,7 +30,7 @@ const SCOUT_NICHE_LABELS = {
 };
 
 const formatMarketplaceWhatsAppSummary = ({
-    location,
+    countryLabel,
     nicheCounts,
     totalFound,
     totalSaved,
@@ -47,9 +55,9 @@ const formatMarketplaceWhatsAppSummary = ({
 
     return (
         `🔔 *Marketplace lead search finished*\n\n` +
-        `📍 Location: ${location}\n` +
-        `📊 Leads found: *${totalFound}*\n` +
-        `💾 Saved (this run): *${totalSaved}*${nicheBlock}${queryLine}${warn}\n\n` +
+        `🌍 Country: ${countryLabel}\n` +
+        `📊 Leads found (this run): *${totalFound}*\n` +
+        `💾 New leads saved: *${totalSaved}*${nicheBlock}${queryLine}${warn}\n\n` +
         `View saved leads:\n${baseUrl}/dashboard/marketplace`
     );
 };
@@ -177,17 +185,63 @@ const toStoredLead = (lead, niche) => {
     };
 };
 
-const saveDiscoveredLeads = async (client, userId, leads, niche) => {
-    let savedCount = 0;
-    let saveFailed = false;
+const normalizeDedupeDigits = (value) => String(value || '').replace(/\D/g, '').slice(-15);
 
-    for (const lead of leads) {
-        const storedLead = toStoredLead(lead, niche);
-        const safeLeadId = safeIdentifier(storedLead.id, 'apify');
-        const emailKey = storedLead.email && storedLead.email.includes('@')
+const canonicalHost = (url = '') => {
+    const s = String(url || '').trim();
+    if (!s) return '';
+    try {
+        const u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`);
+        return u.hostname.replace(/^www\./i, '').toLowerCase();
+    } catch {
+        return '';
+    }
+};
+
+/** Collapse duplicate businesses within one Apify response (same place / phone / site). */
+const dedupeIncomingRawLeads = (people = []) => {
+    const seen = new Set();
+    const out = [];
+    for (const p of people) {
+        const raw = p.raw_data || {};
+        const pid =
+            (typeof p.id === 'string' && p.id.length > 8 && !/^gmaps_\d+_/.test(p.id) ? p.id : '') ||
+            (typeof raw.placeId === 'string' && raw.placeId.length > 8 ? raw.placeId : '');
+        const phone = normalizeDedupeDigits(p.phone || p.phoneUnformatted || raw.phone);
+        const url = canonicalHost(pickLeadWebsite({ ...p, raw_data: raw }));
+        let key = pid ? `pid:${pid}` : '';
+        if (!key && phone.length >= 8) key = `ph:${phone}`;
+        if (!key && url) key = `url:${url}`;
+        if (!key) {
+            const name = `${p.organization || ''}|${p.full_name || ''}`.toLowerCase();
+            key = `name:${name}`;
+        }
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(p);
+    }
+    return out;
+};
+
+const marketplacePersistKeys = (storedLead) => {
+    const safeLeadId = safeIdentifier(storedLead.id, 'apify');
+    const emailKey =
+        storedLead.email && storedLead.email.includes('@')
             ? storedLead.email
             : `apify_${safeLeadId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}@placeholder.com`;
-        const externalId = safeIdentifier(storedLead.id || emailKey, 'lead');
+    const externalId = safeIdentifier(storedLead.id || emailKey, 'lead');
+    return { safeLeadId, emailKey, externalId };
+};
+
+const saveStoredMarketplaceLeads = async (client, userId, storedLeadsMapped) => {
+    let savedCount = 0;
+    let saveFailed = false;
+    /** Confirmed persisted rows — used only for job result preview. */
+    const insertedLeads = [];
+
+    for (const storedLead of storedLeadsMapped) {
+        const cat = storedLead.category || 'general';
+        const { emailKey, externalId } = marketplacePersistKeys(storedLead);
         const notes = {
             title: storedLead.title,
             organization: storedLead.organization,
@@ -199,6 +253,36 @@ const saveDiscoveredLeads = async (client, userId, leads, niche) => {
         };
 
         try {
+            const marketInsert = await client.query(
+                `INSERT INTO marketplace_leads (
+                    user_id, external_id, source, category, title, currency,
+                    location, url, description, fetched_at,
+                    seller_name, seller_phone, seller_email, contact_url, raw_data
+                ) VALUES (
+                    $1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),$10,$11,$12,$13,$14
+                )
+                ON CONFLICT (user_id, external_id) DO NOTHING
+                RETURNING id`,
+                [
+                    userId,
+                    externalId,
+                    storedLead.source,
+                    cat,
+                    storedLead.full_name,
+                    'EUR',
+                    storedLead.location,
+                    storedLead.website || null,
+                    storedLead.title || storedLead.organization || null,
+                    storedLead.full_name,
+                    storedLead.phone || null,
+                    storedLead.email || null,
+                    storedLead.website || null,
+                    JSON.stringify({ ...storedLead, notes }),
+                ]
+            );
+
+            if (!marketInsert.rowCount) continue;
+
             await client.query(
                 `INSERT INTO leads (
                     user_id, full_name, email, phone,
@@ -216,57 +300,21 @@ const saveDiscoveredLeads = async (client, userId, leads, niche) => {
                 ]
             );
 
-            await client.query(
-                `INSERT INTO marketplace_leads (
-                    user_id, external_id, source, category, title, currency,
-                    location, url, description, fetched_at,
-                    seller_name, seller_phone, seller_email, contact_url, raw_data
-                ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),$10,$11,$12,$13,$14
-                )
-                ON CONFLICT (user_id, external_id) DO UPDATE SET
-                    source = EXCLUDED.source,
-                    category = EXCLUDED.category,
-                    title = EXCLUDED.title,
-                    location = EXCLUDED.location,
-                    url = EXCLUDED.url,
-                    seller_name = EXCLUDED.seller_name,
-                    seller_phone = EXCLUDED.seller_phone,
-                    seller_email = EXCLUDED.seller_email,
-                    contact_url = EXCLUDED.contact_url,
-                    raw_data = EXCLUDED.raw_data,
-                    fetched_at = NOW()`,
-                [
-                    userId,
-                    externalId,
-                    storedLead.source,
-                    niche,
-                    storedLead.full_name,
-                    'EUR',
-                    storedLead.location,
-                    storedLead.website || null,
-                    storedLead.title || storedLead.organization || null,
-                    storedLead.full_name,
-                    storedLead.phone || null,
-                    storedLead.email || null,
-                    storedLead.website || null,
-                    JSON.stringify({ ...storedLead, notes }),
-                ]
-            );
-
             savedCount++;
+            insertedLeads.push(storedLead);
         } catch (dbError) {
             saveFailed = true;
             console.error('Failed to save marketplace lead:', dbError.message);
         }
     }
 
-    return { savedCount, saveFailed };
+    return { savedCount, saveFailed, insertedLeads };
 };
 
-const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedLimit, perNicheLimit }) => {
+const runMarketplaceJob = async ({ jobId, userId, requests, country, requestedLimit, perNicheLimit }) => {
     const client = await pool.connect();
-    let allLeads = [];
+    let totalDiscoveredDeduped = 0;
+    const leadsNewToAccount = [];
     let totalSaved = 0;
     let saveFailed = false;
     const nicheCounts = {};
@@ -282,28 +330,47 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
             [jobId, userId]
         );
 
+        const existingRes = await client.query(`SELECT external_id FROM marketplace_leads WHERE user_id = $1`, [
+            userId,
+        ]);
+        const existingExternal = new Set(existingRes.rows.map((r) => r.external_id));
+        const seenThisJob = new Set();
+
         let remaining = requestedLimit;
         for (const request of requests) {
             if (remaining <= 0) break;
 
             const limitForNiche = Math.min(perNicheLimit, remaining);
+
             const results = await apifyNicheService.scoutByNiche(
                 request.niche,
-                location,
+                country,
                 request.query,
                 { maxResults: limitForNiche }
             );
-            const scrapedLeads = (results.people || []).slice(0, limitForNiche).map(lead => toStoredLead(lead, request.niche));
-            remaining -= scrapedLeads.length;
-            allLeads = allLeads.concat(scrapedLeads);
-            nicheCounts[request.niche] += scrapedLeads.length;
+            const rawBatch = dedupeIncomingRawLeads(results.people || []).slice(0, limitForNiche);
+            totalDiscoveredDeduped += rawBatch.length;
+            nicheCounts[request.niche] += rawBatch.length;
 
-            const saveResult = await saveDiscoveredLeads(client, userId, scrapedLeads, request.niche);
+            const toPersist = [];
+            for (const raw of rawBatch) {
+                const sl = toStoredLead(raw, request.niche);
+                const { externalId } = marketplacePersistKeys(sl);
+                if (existingExternal.has(externalId) || seenThisJob.has(externalId)) continue;
+                seenThisJob.add(externalId);
+                existingExternal.add(externalId);
+                toPersist.push(sl);
+            }
+
+            remaining -= rawBatch.length;
+
+            const saveResult = await saveStoredMarketplaceLeads(client, userId, toPersist);
             totalSaved += saveResult.savedCount;
             saveFailed = saveFailed || saveResult.saveFailed;
+            leadsNewToAccount.push(...(saveResult.insertedLeads || []));
         }
 
-        await incrementMarketplaceUsage(client, userId, allLeads.length);
+        await incrementMarketplaceUsage(client, userId, totalDiscoveredDeduped);
 
         try {
             await client.query(
@@ -314,7 +381,7 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
                     'Marketplace Lead Search',
                     'scout',
                     saveFailed ? 'attention' : 'success',
-                    `Discovered ${allLeads.length} leads in ${location}`,
+                    `Discovered ${totalDiscoveredDeduped} lead(s); ${totalSaved} new saved (${country})`,
                 ]
             );
         } catch (activityError) {
@@ -333,13 +400,14 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
             [
                 jobId,
                 userId,
-                allLeads.length,
+                totalDiscoveredDeduped,
                 totalSaved,
                 JSON.stringify({
-                    leads: allLeads,
+                    leads: leadsNewToAccount,
                     save_failed: saveFailed,
-                    location,
-                    total_found: allLeads.length,
+                    location: country,
+                    country,
+                    total_found: totalDiscoveredDeduped,
                     saved_count: totalSaved,
                     source: 'Google Maps via Apify',
                 }),
@@ -352,9 +420,9 @@ const runMarketplaceJob = async ({ jobId, userId, requests, location, requestedL
             .join(' • ')
             .slice(0, 220);
         const waSummary = formatMarketplaceWhatsAppSummary({
-            location,
+            countryLabel: country,
             nicheCounts,
-            totalFound: allLeads.length,
+            totalFound: totalDiscoveredDeduped,
             totalSaved,
             saveFailed,
             queriesPreview: queriesPreview || null,
@@ -386,6 +454,19 @@ class ApolloController {
      */
     async search(req, res) {
         try {
+            const entitlements = await loadEntitlements(req.user.id);
+            if (!entitlements.apollo_b2b_search) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'PLAN_FEATURE_LOCKED',
+                    feature: 'apollo_b2b_search',
+                    error: entitlements.trial_active
+                        ? 'Apollo people search unlocks after your trial when you subscribe to Growth or Pro.'
+                        : 'Apollo people search is available on Growth and Pro.',
+                    entitlements,
+                });
+            }
+
             const { titles, locations, keywords, page = 1, perPage = 10 } = req.body;
 
             const results = await apolloService.searchPeople({
@@ -416,7 +497,9 @@ class ApolloController {
      */
     async scoutByNiche(req, res) {
         try {
-            const { location, perPage = DEFAULT_LEADS_PER_NICHE } = req.body;
+            const { perPage = DEFAULT_LEADS_PER_NICHE, country: bodyCountry } = req.body;
+            /** Prefer `country`; keep `location` for older clients mapping to region/country scope. */
+            const country = String(bodyCountry ?? req.body.location ?? '').trim();
             const userId = req.user.id;
             const requests = getRequestedNiches(req.body)
                 .filter(item => item.niche)
@@ -432,10 +515,10 @@ class ApolloController {
                 });
             }
 
-            if (!location || !String(location).trim()) {
+            if (!country) {
                 return res.status(400).json({
                     success: false,
-                    error: 'City is required before starting a Marketplace search.'
+                    error: 'Country is required before starting a Marketplace search.'
                 });
             }
 
@@ -527,7 +610,7 @@ class ApolloController {
                         userId,
                         requests.map(item => item.niche).join(','),
                         requests.map(item => item.query).filter(Boolean).join(' | '),
-                        String(location).trim(),
+                        country,
                         requestedLimit,
                         JSON.stringify({ requests }),
                     ]
@@ -542,7 +625,7 @@ class ApolloController {
                         jobId,
                         userId,
                         requests,
-                        location: String(location).trim(),
+                        country,
                         requestedLimit,
                         perNicheLimit,
                     });
@@ -649,6 +732,19 @@ class ApolloController {
      */
     async enrich(req, res) {
         try {
+            const entitlements = await loadEntitlements(req.user.id);
+            if (!entitlements.apollo_enrich) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'PLAN_FEATURE_LOCKED',
+                    feature: 'apollo_enrich',
+                    error: entitlements.trial_active
+                        ? 'Contact enrichment unlocks after your trial on a Pro subscription.'
+                        : 'Contact enrichment is available on Pro.',
+                    entitlements,
+                });
+            }
+
             const { apolloId } = req.body;
 
             if (!apolloId) {
@@ -717,6 +813,17 @@ class ApolloController {
      */
     async testApify(req, res) {
         try {
+            const entitlements = await loadEntitlements(req.user.id);
+            if (!entitlements.apollo_b2b_search) {
+                return res.status(403).json({
+                    success: false,
+                    code: 'PLAN_FEATURE_LOCKED',
+                    feature: 'apollo_b2b_search',
+                    error: 'This diagnostic is restricted to Growth and Pro accounts.',
+                    entitlements,
+                });
+            }
+
             const axios = (await import('axios')).default;
             const token = process.env.APIFY_API_TOKEN;
             

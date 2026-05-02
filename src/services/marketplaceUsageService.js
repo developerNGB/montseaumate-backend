@@ -4,6 +4,7 @@ import {
     countActiveEmployeesFromRows,
     normalizeBillingPlan,
     isTrialing,
+    getPlanEntitlements,
 } from './subscriptionPlans.js';
 
 /** @deprecated Prefer getMarketplaceRunsLimit + search_runs; kept for dashboards */
@@ -62,6 +63,7 @@ export const getUsageSnapshot = async (client, userId) => {
     const runsUsed = Number(usageRow?.search_runs || 0);
 
     const runsRemaining = runsLimit <= 0 ? 0 : Math.max(runsLimit - runsUsed, 0);
+    const entitlements = getPlanEntitlements(plan, trialEndsAt);
 
     return {
         plan,
@@ -73,6 +75,7 @@ export const getUsageSnapshot = async (client, userId) => {
         runs_remaining: runsRemaining,
         leads_fetched_month: leadsFetched,
         marketplace_included: runsLimit > 0,
+        entitlements,
         /** legacy fields */
         limit: runsLimit,
         used: runsUsed,
@@ -190,6 +193,8 @@ async function buildMiniSnapshot(client, userId, period, userRow, searchRunsUsed
         /* non-fatal */
     }
 
+    const entitlements = getPlanEntitlements(plan, trialEndsAt);
+
     return {
         plan,
         period,
@@ -200,6 +205,7 @@ async function buildMiniSnapshot(client, userId, period, userRow, searchRunsUsed
         runs_remaining: runsRemaining,
         leads_fetched_month: leadsMonth,
         marketplace_included: runsLimit > 0,
+        entitlements,
         employee_slots_max: maxEmployees,
         employee_slots_active: activeEmployees,
         employee_slots_remaining: Math.max(maxEmployees - activeEmployees, 0),
