@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { isTrialing } from '../services/subscriptionPlans.js';
 
 export const getDashboardStats = async (req, res) => {
     try {
@@ -18,7 +19,8 @@ export const getDashboardStats = async (req, res) => {
             pipelineRes,
             leadsSparkRes,
             feedbackSparkRes,
-            reviewsSparkRes
+            reviewsSparkRes,
+            userBillingRes,
         ] = await Promise.all([
             // 1. Leads
             pool.query(
@@ -91,7 +93,12 @@ export const getDashboardStats = async (req, res) => {
                  GROUP BY DATE(created_at) ORDER BY day ASC`,
                 [userId]
             ),
+            pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId]),
         ]);
+
+        const billRow = userBillingRes.rows[0] ?? {};
+        const planSlug = String(billRow.plan ?? 'free').trim();
+        const onPaidGrowthOrPro = /^pro$/i.test(planSlug) || /^growth$/i.test(planSlug);
 
         const leadsReceived = parseInt(leadsRes.rows[0].count, 10);
         const leadsRecent = parseInt(leadsRes.rows[0].recent_count || 0, 10);
@@ -187,7 +194,12 @@ export const getDashboardStats = async (req, res) => {
                 leadCapture: captureTriggerRes.rows[0]?.last_active || null,
                 leadFollowUp: followTriggerRes.rows[0]?.last_active || null
             },
-            pipeline: pipelineRes.rows
+            pipeline: pipelineRes.rows,
+            billing: {
+                plan: billRow.plan ?? 'free',
+                trial_ends_at: billRow.trial_ends_at ?? null,
+                trial_active: !onPaidGrowthOrPro && isTrialing(billRow.trial_ends_at ?? null),
+            },
         });
 
     } catch (err) {
