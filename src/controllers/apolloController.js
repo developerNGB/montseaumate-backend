@@ -225,12 +225,13 @@ const dedupeIncomingRawLeads = (people = []) => {
 
 const marketplacePersistKeys = (storedLead) => {
     const safeLeadId = safeIdentifier(storedLead.id, 'apify');
-    const emailKey =
-        storedLead.email && storedLead.email.includes('@')
+    /** Fallback for external_id only — never persisted as CRM email (would leak IDs in UI). */
+    const fallbackId =
+        storedLead.email && String(storedLead.email).trim() && storedLead.email.includes('@')
             ? storedLead.email
-            : `apify_${safeLeadId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}@placeholder.com`;
-    const externalId = safeIdentifier(storedLead.id || emailKey, 'lead');
-    return { safeLeadId, emailKey, externalId };
+            : `apify_${safeLeadId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}`;
+    const externalId = safeIdentifier(storedLead.id || fallbackId, 'lead');
+    return { externalId };
 };
 
 const saveStoredMarketplaceLeads = async (client, userId, storedLeadsMapped) => {
@@ -241,7 +242,7 @@ const saveStoredMarketplaceLeads = async (client, userId, storedLeadsMapped) => 
 
     for (const storedLead of storedLeadsMapped) {
         const cat = storedLead.category || 'general';
-        const { emailKey, externalId } = marketplacePersistKeys(storedLead);
+        const { externalId } = marketplacePersistKeys(storedLead);
         const notes = {
             title: storedLead.title,
             organization: storedLead.organization,
@@ -292,7 +293,7 @@ const saveStoredMarketplaceLeads = async (client, userId, storedLeadsMapped) => 
                 [
                     userId,
                     storedLead.full_name,
-                    emailKey,
+                    (storedLead.email && String(storedLead.email).trim()) || '',
                     storedLead.phone || '',
                     storedLead.source,
                     'New',

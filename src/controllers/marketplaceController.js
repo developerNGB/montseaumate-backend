@@ -7,6 +7,7 @@
 import pool from '../db/pool.js';
 import { runApifyScraper } from '../services/apifyService.js';
 import { getPlanEntitlements } from '../services/subscriptionPlans.js';
+import { sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
 
 async function rejectClassifiedIfNotEntitled(userId, res) {
     const billing = (
@@ -230,7 +231,12 @@ export const getStoredLeads = async (req, res) => {
             source:       r.source,
             category:     r.category,
             full_name:    r.seller_name || r.title,
-            email:        (r.seller_email || (r.raw_data?.email) || (Array.isArray(r.raw_data?.emails) ? r.raw_data.emails.find(Boolean) : '') || ''),
+            email:        sanitizeLeadEmailForPublic(
+                r.seller_email
+                || r.raw_data?.email
+                || (Array.isArray(r.raw_data?.emails) ? r.raw_data.emails.find(Boolean) : '')
+                || ''
+            ),
             phone:        (r.seller_phone || r.raw_data?.phone || r.raw_data?.phoneUnformatted || ''),
             notes:        r.raw_data?.notes || r.raw_data || {},
             title:        r.title,
@@ -256,7 +262,7 @@ export const getStoredLeads = async (req, res) => {
             remote:       r.is_remote,
             seller_name:  r.seller_name,
             seller_phone: r.seller_phone,
-            seller_email: r.seller_email,
+            seller_email: sanitizeLeadEmailForPublic(r.seller_email || ''),
             contact_url:  r.contact_url,
         }));
 

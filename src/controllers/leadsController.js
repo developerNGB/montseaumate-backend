@@ -2,6 +2,7 @@ import pool from '../db/pool.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
+import { sanitizeLeadRow, sanitizeLeadEmailForPublic, sanitizeLeads } from '../utils/leadPrivacy.js';
 
 /**
  * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
@@ -26,10 +27,11 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
     const dispatchStart = Date.now();
     const whatsappEnabled = options.whatsappEnabled !== false;
     const emailEnabled = options.emailEnabled !== false;
+    const recipientEmail = sanitizeLeadEmailForPublic(lead.email);
     // Name handling: use provided name, or extract from email, or fallback to "there"
     const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
         ? lead.full_name
-        : extractNameFromEmail(lead.email) || 'there';
+        : extractNameFromEmail(recipientEmail) || 'there';
     
     // Get automation/funnel ID if available for the link
     const link = lead.automation_id 
@@ -45,7 +47,7 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
         company: lead.company_name || 'Our Team'
     });
 
-    console.log(`[Followup][${dispatchStart}] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
+    console.log(`[Followup][${dispatchStart}] Dispatching to ${recipientEmail || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
     const sentChannels = [];
 
@@ -68,11 +70,11 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
     }
 
     // 2. Email - via emailService cascade: SMTP → Microsoft → Google → system gmail
-    if (emailEnabled && lead.email) {
+    if (emailEnabled && recipientEmail) {
         try {
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${lead.email}...`);
+            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${recipientEmail}...`);
             const result = await sendDynamicEmail(userId, {
-                to: lead.email,
+                to: recipientEmail,
                 subject: subject,
                 text: personalisedMsg,
                 html: createEmailTemplate(personalisedMsg, leadName, subject),
@@ -135,7 +137,7 @@ export const getLeads = async (req, res) => {
         query += ` ORDER BY created_at DESC`;
 
         const result = await pool.query(query, params);
-        return res.status(200).json({ success: true, leads: result.rows });
+        return res.status(200).json({ success: true, leads: sanitizeLeads(result.rows) });
     } catch (err) {
         console.error('[getLeads] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });
@@ -161,7 +163,7 @@ export const updateLeadStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Lead not found' });
         }
 
-        return res.status(200).json({ success: true, lead: result.rows[0] });
+        return res.status(200).json({ success: true, lead: sanitizeLeadRow(result.rows[0]) });
     } catch (err) {
         console.error('[updateLeadStatus] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });

@@ -336,6 +336,13 @@ const runMigrations = async () => {
         await safeQuery('idx_marketplace_jobs_user_status', `CREATE INDEX IF NOT EXISTS idx_marketplace_jobs_user_status ON marketplace_search_jobs(user_id, status)`);
         await safeQuery('idx_marketplace_jobs_user_created', `CREATE INDEX IF NOT EXISTS idx_marketplace_jobs_user_created ON marketplace_search_jobs(user_id, created_at DESC)`);
 
+        await safeQuery('leads.scrub_placeholder_emails', `
+            UPDATE leads
+            SET email = ''
+            WHERE trim(email) ILIKE '%@placeholder.com'
+               OR lower(trim(email)) = 'pending@apify.local'
+        `);
+
         // leads table expansion
         await safeQuery('leads.followup_step_index', `ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
         await safeQuery('leads.last_followup_at',    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);

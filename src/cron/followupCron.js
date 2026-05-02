@@ -3,6 +3,7 @@ import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.
 import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
+import { sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
 
 /**
  * Helper to calculate the next scheduled time for a follow-up step.
@@ -146,12 +147,13 @@ const startFollowupCron = () => {
 
             // ── TRY Email ────────────────────────────────────────────────────────
             try {
-                if (lead.email_enabled !== false && lead.email) {
+                const emailAddr = sanitizeLeadEmailForPublic(lead.email);
+                if (lead.email_enabled !== false && emailAddr) {
                     const isFirstMessage = currentIndex === 0;
                     const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
                     
                     await sendDynamicEmail(lead.user_id, {
-                        to: lead.email,
+                        to: emailAddr,
                         subject: subject,
                         text: msg,
                         html: createEmailTemplate(msg, lead.full_name, subject)

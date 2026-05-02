@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import { getPlanEntitlements, isTrialing } from '../services/subscriptionPlans.js';
+import { sanitizeLeads } from '../utils/leadPrivacy.js';
 
 export const getDashboardStats = async (req, res) => {
     try {
@@ -194,7 +195,7 @@ export const getDashboardStats = async (req, res) => {
                 leadCapture: captureTriggerRes.rows[0]?.last_active || null,
                 leadFollowUp: followTriggerRes.rows[0]?.last_active || null
             },
-            pipeline: pipelineRes.rows,
+            pipeline: sanitizeLeads(pipelineRes.rows),
             billing: {
                 plan: billRow.plan ?? 'free',
                 trial_ends_at: billRow.trial_ends_at ?? null,
