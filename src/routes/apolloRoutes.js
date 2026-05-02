@@ -8,6 +8,13 @@ const router = express.Router();
 router.use(authMiddleware);
 
 /**
+ * @route   GET /api/apollo/usage
+ * @desc    Marketplace run credits / plan snapshot for current month (UTC)
+ * @access  Private
+ */
+router.get('/usage', apolloController.getMarketplaceUsage);
+
+/**
  * @route   POST /api/apollo/search
  * @desc    Search for leads using Apollo API
  * @access  Private

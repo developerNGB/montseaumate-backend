@@ -311,6 +311,8 @@ const runMigrations = async () => {
                 UNIQUE(user_id, period)
             )
         `);
+        await safeQuery('users.trial_ends_at', `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ`);
+        await safeQuery('marketplace_usage.search_runs', `ALTER TABLE marketplace_usage ADD COLUMN IF NOT EXISTS search_runs INTEGER NOT NULL DEFAULT 0`);
         await safeQuery('marketplace_search_jobs_table', `
             CREATE TABLE IF NOT EXISTS marketplace_search_jobs (
                 id UUID PRIMARY KEY,

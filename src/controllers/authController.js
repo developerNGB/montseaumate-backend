@@ -141,9 +141,9 @@ export const register = async (req, res) => {
         const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
 
         const result = await pool.query(
-            `INSERT INTO users (name, email, password_hash, company_name)
-             VALUES ($1, $2, $3, $4)
-             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled`,
+            `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
+             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '14 days')
+             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, trial_ends_at`,
             [name.trim(), emailLower, password_hash, company_name.trim()]
         );
 
@@ -622,8 +622,8 @@ export const googleLogin = async (req, res) => {
         if (isNewUser) {
             try {
                 await pool.query(
-                    `INSERT INTO users (name, email, password_hash, company_name)
-                     VALUES ($1, $2, $3, $4)`,
+                    `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
+                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '14 days')`,
                     [name, emailLower, '', '']
                 );
             } catch (insertErr) {
@@ -638,7 +638,8 @@ export const googleLogin = async (req, res) => {
         try {
             result = await pool.query(
                 `SELECT id, name, email, company_name, phone, plan, role, status,
-                        COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled
+                        COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+                        trial_ends_at
                  FROM users WHERE lower(email) = $1
                  LIMIT 1`,
                 [emailLower]
@@ -651,7 +652,11 @@ export const googleLogin = async (req, res) => {
                  LIMIT 1`,
                 [emailLower]
             );
-            result.rows = result.rows.map(r => ({ ...r, weekly_reports_enabled: true }));
+            result.rows = result.rows.map(r => ({
+                ...r,
+                weekly_reports_enabled: true,
+                trial_ends_at: r.trial_ends_at ?? null,
+            }));
         }
 
         if (result.rows.length === 0) {
@@ -698,9 +703,9 @@ export const updatePlan = async (req, res) => {
         }
 
         const result = await pool.query(
-            `UPDATE users SET plan = $1, updated_at = NOW() 
-             WHERE id = $2 
-             RETURNING id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled`,
+            `UPDATE users SET plan = $1, trial_ends_at = NULL, updated_at = NOW()
+             WHERE id = $2
+             RETURNING id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled, trial_ends_at`,
             [plan, req.user.id]
         );
 

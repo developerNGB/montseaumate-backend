@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'crypto';
 import {
     getUsageSnapshot,
     incrementMarketplaceUsage,
+    tryConsumeMarketplaceRun,
 } from '../services/marketplaceUsageService.js';
 
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
@@ -344,25 +345,7 @@ class ApolloController {
 
             const client = await pool.connect();
             try {
-                const usage = await getUsageSnapshot(client, userId);
-
-                if (usage.limit <= 0) {
-                    return res.status(403).json({
-                        success: false,
-                        code: 'MARKETPLACE_NOT_INCLUDED',
-                        error: 'Marketplace lead search is not included in the free trial. Please choose a paid plan to use it.',
-                        usage,
-                    });
-                }
-
-                if (usage.remaining <= 0) {
-                    return res.status(403).json({
-                        success: false,
-                        code: 'MARKETPLACE_LIMIT_REACHED',
-                        error: `You have used all ${usage.limit} Marketplace leads for this month.`,
-                        usage,
-                    });
-                }
+                await client.query('BEGIN');
 
                 const activeJob = await client.query(
                     `SELECT id, status
@@ -373,6 +356,7 @@ class ApolloController {
                     [userId, ACTIVE_JOB_STATUSES]
                 );
                 if (activeJob.rows[0]) {
+                    await client.query('ROLLBACK');
                     return res.status(409).json({
                         success: false,
                         code: 'MARKETPLACE_JOB_ACTIVE',
@@ -390,6 +374,7 @@ class ApolloController {
                     [userId, SEARCH_COOLDOWN_SECONDS]
                 );
                 if (recentJob.rows[0]) {
+                    await client.query('ROLLBACK');
                     return res.status(429).json({
                         success: false,
                         code: 'MARKETPLACE_COOLDOWN',
@@ -397,8 +382,35 @@ class ApolloController {
                     });
                 }
 
-                const perNicheLimit = Math.max(1, Math.min(Number(perPage) || DEFAULT_LEADS_PER_NICHE, DEFAULT_LEADS_PER_NICHE));
-                const requestedLimit = Math.min(usage.remaining, perNicheLimit * requests.length);
+                const reserve = await tryConsumeMarketplaceRun(client, userId);
+                if (!reserve.ok) {
+                    await client.query('ROLLBACK');
+                    const snap = reserve.snapshot || (await getUsageSnapshot(pool, userId));
+                    if (reserve.code === 'MARKETPLACE_NOT_INCLUDED') {
+                        return res.status(403).json({
+                            success: false,
+                            code: reserve.code,
+                            error: snap.trial_active
+                                ? 'Marketplace searches are available after your trial ends or when you subscribe. During the trial we keep this feature off to control cost.'
+                                : 'Marketplace lead search is available on Starter, Growth, and Pro.',
+                            usage: snap,
+                        });
+                    }
+                    return res.status(403).json({
+                        success: false,
+                        code: reserve.code || 'MARKETPLACE_LIMIT_REACHED',
+                        error: snap.runs_limit
+                            ? `You have used all ${snap.runs_limit} Marketplace lead searches included in your plan this month (UTC calendar). Upgrade for more searches, or wait until next month.`
+                            : 'You have no Marketplace search credits remaining for this period.',
+                        usage: snap,
+                    });
+                }
+
+                const perNicheLimit = Math.max(
+                    1,
+                    Math.min(Number(perPage) || DEFAULT_LEADS_PER_NICHE, DEFAULT_LEADS_PER_NICHE)
+                );
+                const requestedLimit = perNicheLimit * requests.length;
                 const jobId = randomUUID();
 
                 await client.query(
@@ -416,6 +428,10 @@ class ApolloController {
                         JSON.stringify({ requests }),
                     ]
                 );
+
+                await client.query('COMMIT');
+
+                const usage = await getUsageSnapshot(pool, userId);
 
                 setImmediate(() => {
                     runMarketplaceJob({
@@ -435,9 +451,15 @@ class ApolloController {
                     message: 'Lead search started. Results usually take 4-5 minutes. You can leave this page and we will save the results automatically.',
                     usage: {
                         ...usage,
-                        reserved: requestedLimit,
+                        credits_reserved: 1,
+                        leads_budget_this_run: requestedLimit,
                     },
                 });
+            } catch (txnErr) {
+                try {
+                    await client.query('ROLLBACK');
+                } catch (_) { /* noop */ }
+                throw txnErr;
             } finally {
                 client.release();
             }
@@ -500,6 +522,19 @@ class ApolloController {
             res.status(500).json({
                 success: false,
                 error: error.message || 'Failed to fetch lead search status'
+            });
+        }
+    }
+
+    async getMarketplaceUsage(req, res) {
+        try {
+            const usage = await getUsageSnapshot(pool, req.user.id);
+            return res.json({ success: true, usage });
+        } catch (error) {
+            console.error('[getMarketplaceUsage]', error);
+            res.status(500).json({
+                success: false,
+                error: error.message || 'Failed to load Marketplace usage.',
             });
         }
     }

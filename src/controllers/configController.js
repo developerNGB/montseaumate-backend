@@ -1,7 +1,23 @@
 import pool from '../db/pool.js';
 import crypto from 'crypto';
 import qrcode from 'qrcode';
+import { countEmployeesAfterPatch, getMaxEmployees } from '../services/subscriptionPlans.js';
 
+async function loadBillingRow(userId) {
+    const u = await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId]);
+    return u.rows[0] || { plan: 'free', trial_ends_at: null };
+}
+
+function respondEmployeeLimit(res, billing, wouldTotal) {
+    const maxEmp = getMaxEmployees(billing.plan, billing.trial_ends_at);
+    return res.status(403).json({
+        success: false,
+        code: 'EMPLOYEE_PLAN_LIMIT',
+        message: `Your subscription allows ${maxEmp} active automation(s). Turn one off in Employees or upgrade your plan.`,
+        max_employees: maxEmp,
+        attempted: wouldTotal,
+    });
+}
 // GET /api/config/review-funnel
 export const getReviewFunnelConfig = async (req, res) => {
     try {
@@ -100,6 +116,25 @@ export const saveReviewFunnelConfig = async (req, res) => {
             if (googleIntRes.rows.length > 0 && googleIntRes.rows[0].account_id.startsWith('http')) {
                 finalGoogleReviewUrl = googleIntRes.rows[0].account_id;
             }
+        }
+
+        const lfEmpRes = await pool.query(
+            'SELECT is_active FROM lead_followup_settings WHERE user_id = $1',
+            [req.user.id]
+        );
+        const lfEmpRow = lfEmpRes.rows[0] || {};
+        const projectedEmployees = countEmployeesAfterPatch({
+            rf: existingConfig,
+            lf: lfEmpRow,
+            patch: {
+                is_active: finalReviewActive,
+                lead_capture_active: finalCaptureActive,
+            },
+        });
+        const billingRow = await loadBillingRow(req.user.id);
+        const maxEmployeesAllowed = getMaxEmployees(billingRow.plan, billingRow.trial_ends_at);
+        if (projectedEmployees > maxEmployeesAllowed) {
+            return respondEmployeeLimit(res, billingRow, projectedEmployees);
         }
 
         await pool.query(
@@ -246,6 +281,20 @@ export const saveLeadFollowupConfig = async (req, res) => {
         const reminder_message = passed.reminder_message !== undefined ? passed.reminder_message : (existing.reminder_message ?? 'Hi again! Just a friendly reminder about your inquiry. We haven\'t heard back and want to make sure you got our last message.');
         const followup_sequence = passed.followup_sequence || existing.followup_sequence || [];
 
+        const rfEmp = await pool.query(
+            'SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1',
+            [req.user.id]
+        );
+        const projectedLfEmp = countEmployeesAfterPatch({
+            rf: rfEmp.rows[0] || {},
+            lf: existing,
+            patch: { followup_active: is_active },
+        });
+        const billingLf = await loadBillingRow(req.user.id);
+        if (projectedLfEmp > getMaxEmployees(billingLf.plan, billingLf.trial_ends_at)) {
+            return respondEmployeeLimit(res, billingLf, projectedLfEmp);
+        }
+
         try {
             await pool.query(
                 `INSERT INTO lead_followup_settings
@@ -305,6 +354,29 @@ export const toggleRecipe = async (req, res) => {
     try {
         const { recipe, is_active } = req.body;
         const userId = req.user.id;
+
+        if (is_active === true) {
+            const [rfRes, lfRes, billingEmp] = await Promise.all([
+                pool.query(
+                    'SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1',
+                    [userId]
+                ),
+                pool.query('SELECT is_active FROM lead_followup_settings WHERE user_id = $1', [userId]),
+                loadBillingRow(userId),
+            ]);
+            const patch = {};
+            if (recipe === 'reviewFunnel') patch.is_active = true;
+            else if (recipe === 'leadCapture') patch.lead_capture_active = true;
+            else if (recipe === 'leadFollowUp') patch.followup_active = true;
+            const projected = countEmployeesAfterPatch({
+                rf: rfRes.rows[0] || {},
+                lf: lfRes.rows[0] || {},
+                patch,
+            });
+            if (projected > getMaxEmployees(billingEmp.plan, billingEmp.trial_ends_at)) {
+                return respondEmployeeLimit(res, billingEmp, projected);
+            }
+        }
 
         if (recipe === 'reviewFunnel') {
             await pool.query(
