@@ -1,10 +1,10 @@
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
+import { signAccessToken } from '../utils/accessToken.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -17,21 +17,7 @@ const getGoogleClient = () => {
 
 const SALT_ROUNDS = 10; // Optimized for performance while maintaining high security
 
-/**
- * Generate a signed JWT for a given user payload.
- */
-const signToken = (user) => {
-    return jwt.sign(
-        {
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            plan: user.plan,
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
-    );
-};
+const signToken = (user) => signAccessToken(user);
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',

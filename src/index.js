@@ -62,6 +62,7 @@ app.options('*', (req, res) => {
         res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
         res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With, X-CSRF-Token');
         res.header('Access-Control-Allow-Credentials', 'true');
+        res.header('Access-Control-Expose-Headers', 'X-New-Access-Token');
         res.header('Access-Control-Max-Age', '86400'); // 24 hours
     }
     res.status(204).end();
@@ -91,6 +92,7 @@ app.use(cors({
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With', 'X-CSRF-Token'],
+    exposedHeaders: ['X-New-Access-Token'],
     optionsSuccessStatus: 204 // Proper status code for OPTIONS
 }));
 
