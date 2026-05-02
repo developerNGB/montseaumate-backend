@@ -174,6 +174,8 @@ export const storeMarketplaceLeads = async (req, res) => {
 export const getStoredLeads = async (req, res) => {
     const userId = req.user.id;
     const { category, source, limit = 50, offset = 0 } = req.query;
+    const safeLimit = Math.max(1, Math.min(parseInt(limit, 10) || 50, 500));
+    const safeOffset = Math.max(0, parseInt(offset, 10) || 0);
 
     try {
         const params  = [userId];
@@ -193,9 +195,9 @@ export const getStoredLeads = async (req, res) => {
                  FROM marketplace_leads ${where}
                  ORDER BY fetched_at DESC
                  LIMIT $${idx} OFFSET $${idx + 1}`,
-                [...params, parseInt(limit), parseInt(offset)]
+                [...params, safeLimit, safeOffset]
             ),
-            pool.query(`SELECT COUNT(*) FROM marketplace_leads WHERE user_id = $1`, [userId]),
+            pool.query(`SELECT COUNT(*) FROM marketplace_leads ${where}`, params),
         ]);
 
         const leads = rows.rows.map(r => ({
@@ -236,7 +238,7 @@ export const getStoredLeads = async (req, res) => {
         return res.json({
             success: true, leads,
             total: parseInt(count.rows[0].count),
-            limit: parseInt(limit), offset: parseInt(offset),
+            limit: safeLimit, offset: safeOffset,
         });
 
     } catch (err) {

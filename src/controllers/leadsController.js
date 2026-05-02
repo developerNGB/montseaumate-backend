@@ -47,7 +47,9 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
 
     console.log(`[Followup][${dispatchStart}] Dispatching to ${lead.email || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
 
-    // 1. Native WhatsApp (Primary)
+    const sentChannels = [];
+
+    // 1. Native WhatsApp
     if (whatsappEnabled && lead.phone) {
         try {
             console.log(`[Followup][${Date.now() - dispatchStart}ms] 📱 Attempting WhatsApp to ${lead.phone}...`);
@@ -58,14 +60,14 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
             if (waInt.rows[0]?.access_token === 'whatsapp_native_session') {
                 await whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg);
                 console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ WhatsApp sent`);
-                return 'whatsapp';
+                sentChannels.push('whatsapp');
             }
         } catch (e) {
             console.warn(`[Followup][${Date.now() - dispatchStart}ms] WhatsApp failed:`, e.message);
         }
     }
 
-    // 2. EMAIL (Secondary) - via emailService cascade: SMTP → Microsoft → Google → system gmail
+    // 2. Email - via emailService cascade: SMTP → Microsoft → Google → system gmail
     if (emailEnabled && lead.email) {
         try {
             console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${lead.email}...`);
@@ -76,13 +78,17 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
                 html: createEmailTemplate(personalisedMsg, leadName, subject),
             });
             console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
-            return result.provider || 'email';
+            sentChannels.push(result.provider || 'email');
         } catch (e) {
             console.error(`[Followup][${Date.now() - dispatchStart}ms] ❌ Email failed:`, e.message);
-            if (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient')) {
+            if (sentChannels.length === 0 && (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient'))) {
                 throw e;
             }
         }
+    }
+
+    if (sentChannels.length > 0) {
+        return sentChannels.join('+');
     }
 
     console.warn(`[Followup][${Date.now() - dispatchStart}ms] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
