@@ -22,7 +22,7 @@ function respondEmployeeLimit(res, billing, wouldTotal) {
 export const getReviewFunnelConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, lead_sources, capture_sources, whatsapp_enabled, email_enabled FROM review_funnel_settings WHERE user_id = $1',
+            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, lead_sources, capture_sources, whatsapp_enabled, email_enabled, COALESCE(review_next_step_done, FALSE) AS review_next_step_done, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -63,7 +63,9 @@ export const getReviewFunnelConfig = async (req, res) => {
                 lead_sources: config.lead_sources ? (typeof config.lead_sources === 'string' ? JSON.parse(config.lead_sources) : config.lead_sources) : [config.lead_source || 'qr'],
                 capture_sources: config.capture_sources ? (typeof config.capture_sources === 'string' ? JSON.parse(config.capture_sources) : config.capture_sources) : [config.capture_source || 'qr'],
                 whatsapp_enabled: config.whatsapp_enabled ?? true,
-                email_enabled: config.email_enabled ?? true
+                email_enabled: config.email_enabled ?? true,
+                review_next_step_done: !!config.review_next_step_done,
+                capture_next_step_done: !!config.capture_next_step_done
             }
         });
     } catch (err) {
@@ -137,10 +139,13 @@ export const saveReviewFunnelConfig = async (req, res) => {
             return respondEmployeeLimit(res, billingRow, projectedEmployees);
         }
 
+        const reviewIntroDone = !!existingConfig.review_next_step_done || !!finalReviewActive;
+        const captureIntroDone = !!existingConfig.capture_next_step_done || !!finalCaptureActive;
+
         await pool.query(
             `INSERT INTO review_funnel_settings 
-                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled, review_next_step_done, capture_next_step_done, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 google_review_url = EXCLUDED.google_review_url,
                 notification_email = EXCLUDED.notification_email,
@@ -153,6 +158,8 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 capture_source = EXCLUDED.capture_source,
                 whatsapp_enabled = EXCLUDED.whatsapp_enabled,
                 email_enabled = EXCLUDED.email_enabled,
+                review_next_step_done = EXCLUDED.review_next_step_done,
+                capture_next_step_done = EXCLUDED.capture_next_step_done,
                 updated_at = NOW()`,
             [
                 req.user.id, automationId, 
@@ -165,7 +172,9 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 whatsapp_number_fallback !== undefined ? whatsapp_number_fallback : existingConfig.whatsapp_number_fallback || '', 
                 finalLeadSource, finalCaptureSource,
                 whatsapp_enabled !== undefined ? whatsapp_enabled : (existingConfig.whatsapp_enabled ?? true),
-                email_enabled !== undefined ? email_enabled : (existingConfig.email_enabled ?? true)
+                email_enabled !== undefined ? email_enabled : (existingConfig.email_enabled ?? true),
+                reviewIntroDone,
+                captureIntroDone,
             ]
         );
 
@@ -210,6 +219,10 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 capture_source: finalCaptureSource,
                 lead_sources: leadSourcesArr,
                 capture_sources: captureSourcesArr,
+                is_active: finalReviewActive,
+                lead_capture_active: finalCaptureActive,
+                review_next_step_done: reviewIntroDone,
+                capture_next_step_done: captureIntroDone,
             }
         });
 
@@ -223,7 +236,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
 export const getLeadFollowupConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -236,7 +249,8 @@ export const getLeadFollowupConfig = async (req, res) => {
             success: true, 
             config: {
                 ...config,
-                followup_sequence: typeof config.followup_sequence === 'string' ? JSON.parse(config.followup_sequence) : (config.followup_sequence || [])
+                followup_sequence: typeof config.followup_sequence === 'string' ? JSON.parse(config.followup_sequence) : (config.followup_sequence || []),
+                followup_next_step_done: !!config.followup_next_step_done,
             } 
         });
     } catch (err) {
@@ -254,7 +268,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
         let existingRes;
         try {
             existingRes = await pool.query(
-                'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence FROM lead_followup_settings WHERE user_id = $1',
+                'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
                 [req.user.id]
             );
         } catch (e) {
@@ -320,12 +334,14 @@ export const saveLeadFollowupConfig = async (req, res) => {
             return respondEmployeeLimit(res, billingLf, projectedLfEmp);
         }
 
+        const followIntroDone = !!existing.followup_next_step_done || !!is_active;
+
         try {
             await pool.query(
                 `INSERT INTO lead_followup_settings
                     (user_id, is_active, delay_value, delay_unit, message,
-                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, followup_next_step_done, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
                  ON CONFLICT (user_id) DO UPDATE SET
                     is_active = EXCLUDED.is_active,
                     delay_value = EXCLUDED.delay_value,
@@ -339,10 +355,11 @@ export const saveLeadFollowupConfig = async (req, res) => {
                     whatsapp_enabled = EXCLUDED.whatsapp_enabled,
                     email_enabled = EXCLUDED.email_enabled,
                     followup_sequence = EXCLUDED.followup_sequence,
+                    followup_next_step_done = EXCLUDED.followup_next_step_done,
                     updated_at = NOW()`,
                 [req.user.id, is_active, delay_value, delay_unit, message,
                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
-                    whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence)]
+                    whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence), followIntroDone]
             );
         } catch (e) {
             if (e.code !== '42703') throw e;
@@ -365,7 +382,8 @@ export const saveLeadFollowupConfig = async (req, res) => {
             message: 'Lead follow-up settings saved successfully!',
             config: {
                 is_active, delay_value, delay_unit, message,
-                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, followup_sequence
+                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, followup_sequence,
+                whatsapp_enabled, email_enabled, followup_next_step_done: followIntroDone,
             }
         });
 
@@ -405,23 +423,29 @@ export const toggleRecipe = async (req, res) => {
 
         if (recipe === 'reviewFunnel') {
             await pool.query(
-                `INSERT INTO review_funnel_settings (user_id, automation_id, google_review_url, notification_email, is_active)
-                 VALUES ($1, md5(random()::text), '', '', $2)
-                 ON CONFLICT (user_id) DO UPDATE SET is_active = EXCLUDED.is_active`,
+                `INSERT INTO review_funnel_settings (user_id, automation_id, google_review_url, notification_email, is_active, review_next_step_done)
+                 VALUES ($1, md5(random()::text), '', '', $2, $2)
+                 ON CONFLICT (user_id) DO UPDATE SET 
+                    is_active = EXCLUDED.is_active,
+                    review_next_step_done = COALESCE(review_funnel_settings.review_next_step_done, FALSE) OR EXCLUDED.is_active`,
                 [userId, is_active]
             );
         } else if (recipe === 'leadCapture') {
             await pool.query(
-                `INSERT INTO review_funnel_settings (user_id, automation_id, google_review_url, notification_email, lead_capture_active)
-                 VALUES ($1, md5(random()::text), '', '', $2)
-                 ON CONFLICT (user_id) DO UPDATE SET lead_capture_active = EXCLUDED.lead_capture_active`,
+                `INSERT INTO review_funnel_settings (user_id, automation_id, google_review_url, notification_email, lead_capture_active, capture_next_step_done)
+                 VALUES ($1, md5(random()::text), '', '', $2, $2)
+                 ON CONFLICT (user_id) DO UPDATE SET 
+                    lead_capture_active = EXCLUDED.lead_capture_active,
+                    capture_next_step_done = COALESCE(review_funnel_settings.capture_next_step_done, FALSE) OR EXCLUDED.lead_capture_active`,
                 [userId, is_active]
             );
         } else if (recipe === 'leadFollowUp') {
             await pool.query(
-                `INSERT INTO lead_followup_settings (user_id, is_active) 
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id) DO UPDATE SET is_active = EXCLUDED.is_active`,
+                `INSERT INTO lead_followup_settings (user_id, is_active, followup_next_step_done) 
+                 VALUES ($1, $2, $2)
+                 ON CONFLICT (user_id) DO UPDATE SET 
+                    is_active = EXCLUDED.is_active,
+                    followup_next_step_done = COALESCE(lead_followup_settings.followup_next_step_done, FALSE) OR EXCLUDED.is_active`,
                 [userId, is_active]
             );
         } else {

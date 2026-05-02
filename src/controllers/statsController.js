@@ -45,12 +45,12 @@ export const getDashboardStats = async (req, res) => {
             ),
             // 5. Recipe Config
             pool.query(
-                "SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1",
+                "SELECT is_active, lead_capture_active, COALESCE(review_next_step_done, FALSE) AS review_next_step_done, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done FROM review_funnel_settings WHERE user_id = $1",
                 [userId]
             ),
             // 6. Follow-up Config
             pool.query(
-                "SELECT is_active FROM lead_followup_settings WHERE user_id = $1",
+                "SELECT is_active, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1",
                 [userId]
             ),
             // 7. Last Review Trigger
@@ -183,6 +183,11 @@ export const getDashboardStats = async (req, res) => {
                 reviewFunnel: reviewFunnelActive,
                 leadCapture: leadCaptureActive,
                 leadFollowUp: leadFollowUpActive
+            },
+            employeeIntroDone: {
+                reviewFunnel: !!(recipesRes.rows[0]?.review_next_step_done),
+                leadCapture: !!(recipesRes.rows[0]?.capture_next_step_done),
+                leadFollowUp: !!(followUpConfigRes.rows[0]?.followup_next_step_done),
             },
             configured: {
                 // More precise configuration checks

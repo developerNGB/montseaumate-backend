@@ -368,6 +368,12 @@ const runMigrations = async () => {
         await safeQuery('review_funnel.capture_sources',      `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
         await safeQuery('review_funnel.whatsapp_enabled',     `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('review_funnel.email_enabled',        `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('review_funnel.review_next_step_done', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS review_next_step_done BOOLEAN DEFAULT FALSE`);
+        await safeQuery('review_funnel.capture_next_step_done', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_next_step_done BOOLEAN DEFAULT FALSE`);
+        await safeQuery('lead_follow.followup_next_step_done', `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS followup_next_step_done BOOLEAN DEFAULT FALSE`);
+        await safeQuery('review_intro_done_backfill', `UPDATE review_funnel_settings SET review_next_step_done = TRUE WHERE is_active IS TRUE AND review_next_step_done IS NOT TRUE`);
+        await safeQuery('capture_intro_done_backfill', `UPDATE review_funnel_settings SET capture_next_step_done = TRUE WHERE lead_capture_active IS TRUE AND capture_next_step_done IS NOT TRUE`);
+        await safeQuery('follow_intro_done_backfill', `UPDATE lead_followup_settings SET followup_next_step_done = TRUE WHERE is_active IS TRUE AND followup_next_step_done IS NOT TRUE`);
 
         // lead_capture_settings column expansion
         await safeQuery('lead_capture.lead_source',           `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS lead_source VARCHAR(50) DEFAULT 'qr'`);
