@@ -10,6 +10,45 @@ import {
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
 const SEARCH_COOLDOWN_SECONDS = 60;
 const DEFAULT_LEADS_PER_NICHE = 20;
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const isGmail = (email = '') => /@gmail\.com$/i.test(String(email || '').trim());
+const isWebUrl = (value = '') => /^https?:\/\//i.test(String(value || '').trim());
+
+const collectStrings = (value, list = []) => {
+    if (!value) return list;
+    if (Array.isArray(value)) {
+        value.forEach(item => collectStrings(item, list));
+        return list;
+    }
+    if (typeof value === 'object') {
+        Object.values(value).forEach(item => collectStrings(item, list));
+        return list;
+    }
+    list.push(String(value));
+    return list;
+};
+
+const pickLeadEmail = (lead = {}) => {
+    const candidates = new Set();
+    const addEmail = (value) => {
+        if (!value) return;
+        const matches = String(value).match(EMAIL_REGEX);
+        if (matches) matches.forEach(match => candidates.add(match.toLowerCase()));
+    };
+    [lead.email, lead.seller_email, lead.contact_email, lead.emails, lead.contacts, lead.raw_data].forEach(addEmail);
+    const emails = Array.from(candidates);
+    if (!emails.length) return '';
+    const gmail = emails.find(isGmail);
+    return gmail || emails[0];
+};
+
+const pickLeadWebsite = (lead = {}) => {
+    const direct = [lead.website, lead.url, lead.contact_url, lead.contactUrl, lead.webUrl].find(isWebUrl);
+    if (direct) return String(direct);
+    const pool = collectStrings([lead.website, lead.url, lead.contacts, lead.raw_data]);
+    const firstUrl = pool.find(isWebUrl);
+    return firstUrl || '';
+};
 
 const safeIdentifier = (value, fallbackPrefix = 'apify') => {
     const raw = String(value || `${fallbackPrefix}_${randomUUID()}`);
@@ -34,19 +73,21 @@ const toStoredLead = (lead, niche) => {
     const sourceLabel = typeof lead.source === 'string' && lead.source.toLowerCase().includes('apify')
         ? lead.source.replace(/apify/gi, 'Marketplaces')
         : lead.source;
+    const email = pickLeadEmail(lead);
+    const website = pickLeadWebsite(lead);
     return {
         id: lead.id,
         first_name: lead.first_name || '',
         last_name: lead.last_name || '',
         full_name: fullName,
-        email: lead.email || '',
+        email,
         phone: lead.phone || '',
         title: lead.title || '',
         organization: lead.organization || fullName,
         location: lead.location || '',
-        website: lead.website || '',
+        website,
         linkedin_url: lead.linkedin_url || '',
-        enrichment_status: lead.enrichment_status || 'pending',
+        enrichment_status: lead.enrichment_status || (email || lead.phone || website ? 'found' : 'pending'),
         source: sourceLabel || `Marketplaces - ${niche}`,
         category: niche,
         raw_data: lead.raw_data || lead,

@@ -8,6 +8,71 @@ const ACTORS = {
     carDealer: 'samstorm~auto-dealer-lead-scraper'
 };
 
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const isGmail = (email = '') => /@gmail\.com$/i.test(String(email || '').trim());
+const isWebUrl = (value = '') => /^https?:\/\//i.test(String(value || '').trim());
+
+const collectStrings = (value, list = []) => {
+    if (!value) return list;
+    if (Array.isArray(value)) {
+        value.forEach(item => collectStrings(item, list));
+        return list;
+    }
+    if (typeof value === 'object') {
+        Object.values(value).forEach(item => collectStrings(item, list));
+        return list;
+    }
+    list.push(String(value));
+    return list;
+};
+
+const extractBestEmail = (lead = {}) => {
+    const candidates = new Set();
+    const addEmail = (value) => {
+        if (!value) return;
+        const text = String(value);
+        const matches = text.match(EMAIL_REGEX);
+        if (matches) matches.forEach(match => candidates.add(match.toLowerCase()));
+    };
+
+    [
+        lead.email,
+        lead.sellerEmail,
+        lead.ownerEmail,
+        lead.contactEmail,
+        lead.emails,
+        lead.contacts,
+        lead.raw_data,
+    ].forEach(addEmail);
+
+    const emails = Array.from(candidates);
+    if (!emails.length) return '';
+    const gmail = emails.find(isGmail);
+    return gmail || emails[0];
+};
+
+const extractBestWebsite = (lead = {}) => {
+    const direct = [
+        lead.website,
+        lead.url,
+        lead.webUrl,
+        lead.contact_url,
+        lead.contactUrl,
+        lead.site,
+    ].find(isWebUrl);
+    if (direct) return String(direct);
+
+    const pool = collectStrings([
+        lead.website,
+        lead.url,
+        lead.contact_url,
+        lead.raw_data,
+        lead.contacts,
+    ]);
+    const firstUrl = pool.find(isWebUrl);
+    return firstUrl || '';
+};
+
 /**
  * Apify Niche Service
  * Scrapes B2B leads for specific niches using Apify actors
@@ -210,14 +275,14 @@ class ApifyNicheService {
                 first_name: this.extractFirstName(dealer.name),
                 last_name: '',
                 full_name: dealer.name,
-                email: dealer.email || '',
+                email: extractBestEmail(dealer),
                 phone: dealer.phone || '',
                 title: 'Sales Manager',
                 organization: dealer.name,
                 location: dealer.address || '',
-                website: dealer.website || '',
+                website: extractBestWebsite(dealer),
                 linkedin_url: '',
-                enrichment_status: (dealer.email && dealer.emailVerified) ? 'found' : (dealer.email ? 'pending' : 'none'),
+                enrichment_status: (extractBestEmail(dealer) || dealer.phone || extractBestWebsite(dealer)) ? 'found' : 'pending',
                 source: 'Apify - Car Dealerships',
                 raw_data: dealer
             }));
@@ -265,14 +330,14 @@ class ApifyNicheService {
                 first_name: this.extractFirstName(agent['Full Name'] || agent.name || agent.fullName),
                 last_name: '',
                 full_name: agent['Full Name'] || agent.name || agent.fullName || '',
-                email: agent['Email'] || agent.email || '',
+                email: extractBestEmail(agent),
                 phone: agent['Mobile Phones'] || agent['Office Phone'] || agent.phone || '',
                 title: agent['Title'] || agent.title || 'Real Estate Agent',
                 organization: agent['Office Name'] || agent.officeName || agent.company || '',
                 location: agent['Areas serviced'] || agent['Office Address'] || agent.location || agent.address || '',
-                website: agent['Office Website'] || agent['Web URL'] || agent.website || '',
+                website: extractBestWebsite(agent),
                 linkedin_url: '',
-                enrichment_status: (agent['Email'] || agent['Mobile Phones'] || agent.email || agent.phone) ? 'found' : 'pending',
+                enrichment_status: (extractBestEmail(agent) || agent['Mobile Phones'] || agent['Office Phone'] || agent.phone || extractBestWebsite(agent)) ? 'found' : 'pending',
                 source: 'Apify - Realtor Leads',
                 raw_data: agent
             }));
@@ -322,20 +387,22 @@ class ApifyNicheService {
             return results.map(place => {
                 const businessName = place.name || place.title || place.companyName || place.organization || '';
                 const locationText = place.address || place.location?.formattedAddress || [place.city, place.state, place.countryCode].filter(Boolean).join(', ');
+                const bestEmail = extractBestEmail(place);
+                const bestWebsite = extractBestWebsite(place);
 
                 return {
                 id: place.placeId || place.url || `gmaps_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                 first_name: this.extractFirstName(businessName),
                 last_name: '',
                 full_name: businessName,
-                email: place.email || '',
+                email: bestEmail,
                 phone: place.phone || place.phoneUnformatted || '',
                 title: this.inferTitleFromNiche(niche),
                 organization: businessName,
                 location: locationText,
-                website: place.website || '',
+                website: bestWebsite,
                 linkedin_url: '',
-                enrichment_status: (place.email || place.phone) ? 'found' : 'pending',
+                enrichment_status: (bestEmail || place.phone || place.phoneUnformatted || bestWebsite) ? 'found' : 'pending',
                 source: `Apify - ${niche}`,
                 raw_data: place
                 };
