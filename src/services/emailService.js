@@ -9,8 +9,9 @@ import fetch from 'node-fetch';
  * Prioritizes:
  * 1. User's custom SMTP settings
  * 2. User's Microsoft Integration (Email)
- * 3. User's Google Integration (Email)
- * 4. System fallback Gmail
+ * 3. User's Google Integration (OAuth Gmail — same inbox they connect under Integrations)
+ *
+ * No shared server Gmail fallback — users must link Google (or Microsoft/SMTP) to send as themselves.
  */
 export const sendDynamicEmail = async (userId, mailOptions) => {
     const startTime = Date.now();
@@ -161,27 +162,11 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
             }
         }
 
-        // 4. Default System Fallback
-        if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-            console.log(`[EmailService][${Date.now() - startTime}ms] Using System Gmail (${process.env.EMAIL_USER})`);
-            
-            const systemTransporter = nodemailer.createTransport({
-                service: 'gmail',
-                auth: {
-                    user: process.env.EMAIL_USER,
-                    pass: process.env.EMAIL_PASS
-                }
-            });
-
-            // Skip verification in production for speed, rely on try/catch
-            const options = { ...mailOptions, from: mailOptions.from || process.env.EMAIL_USER };
-            const info = await systemTransporter.sendMail(options);
-            console.log(`[EmailService][${Date.now() - startTime}ms] ✅ System Gmail sent: ${info.messageId}`);
-            return { success: true, messageId: info.messageId, provider: 'system' };
-        }
-
-        throw new Error('No email provider available');
-
+        throw new Error(
+            'No outbound email is configured for this workspace. Link the Gmail you use on your account — ' +
+                'open Dashboard → Integrations → Connect Google — or connect Microsoft Outlook, ' +
+                'or add SMTP. You can change this anytime in Integrations or SMTP settings.'
+        );
     } catch (error) {
         console.error(`[EmailService][${Date.now() - startTime}ms] ❌ Dispatch Error:`, error.message);
         throw error;

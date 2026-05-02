@@ -263,12 +263,10 @@ export const generateReportHtml = (user, stats) => {
 export const sendWeeklyReport = async (user, stats) => {
     const htmlContent = generateReportHtml(user, stats);
 
-    return sendDynamicEmail({
-        userId: user.id,
+    return sendDynamicEmail(user.id, {
         to: user.email,
         subject: `📈 Weekly Report: ${stats.newLeads} New Leads & ${stats.reviewsCollected} Reviews`,
         html: htmlContent,
-        fromName: "Equipo Experto"
     });
 };
 

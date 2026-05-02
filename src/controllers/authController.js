@@ -149,16 +149,6 @@ export const register = async (req, res) => {
 
         const newUser = result.rows[0];
 
-        // ── Default Gmail Integration ────────────────
-        // By default, every user has their Gmail integrated. 
-        // We use the system fallback until they connect their own professional OAuth2 tokens.
-        await pool.query(
-            `INSERT INTO integrations (user_id, provider, account_id, metadata, updated_at)
-             VALUES ($1, $2, $3, $4, NOW())
-             ON CONFLICT (user_id, provider) DO NOTHING`,
-            [newUser.id, 'google', newUser.email, JSON.stringify({ email: newUser.email, is_default: true })]
-        );
-
         // Cleanup used OTP
         await pool.query('DELETE FROM otp_verifications WHERE email = $1', [emailLower]);
 
@@ -174,7 +164,9 @@ export const register = async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message: 'Account verified and created successfully.',
+            message:
+                'Account verified and created successfully. Connect Google in Dashboard → Integrations ' +
+                'to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
             token, // Keep for backward compatibility during transition
             user: newUser,
         });
@@ -675,7 +667,9 @@ export const googleLogin = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'Google sign-in successful.',
+            message: isNewUser
+                ? 'Google sign-in successful. Connect Gmail once under Dashboard → Integrations if you still need it for sending outbound mail.'
+                : 'Google sign-in successful.',
             token,
             user,
             isNewUser,
