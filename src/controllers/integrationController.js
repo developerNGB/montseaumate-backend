@@ -126,7 +126,7 @@ export const providerCallback = async (req, res) => {
         const BASE = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
         let frontendRedirect = `${BASE}/dashboard/integrations`;
         if (jobId === 'onboarding') {
-            frontendRedirect = `${BASE}/welcome`;
+            frontendRedirect = `${BASE}/dashboard/integrations`;
         } else if (jobId) {
             frontendRedirect = `${BASE}/dashboard/employee/${jobId}`;
         }
