@@ -6,37 +6,37 @@ const LOCAL_DEV_ORIGINS = [
 ];
 
 /**
- * Allowed browser origins for CORS. Set CORS_ORIGINS to a comma-separated list
- * (e.g. https://app.example.com,https://www.example.com). In non-production,
- * localhost dev origins are always appended.
- *
- * If CORS_ORIGINS is empty in production, FRONTEND_URL is used as a single origin
- * (set CORS_ORIGINS explicitly when you use multiple frontends, e.g. Pages + custom domain).
+ * Built-in SPA origins so login works even when Render only sets FRONTEND_URL to the custom domain.
+ * Requests from Cloudflare Pages use Origin: https://<project>.pages.dev — it must be allowlisted here
+ * or in CORS_ORIGINS.
+ */
+const DEFAULT_BROWSER_ORIGINS = [
+    'https://equipoexperto.com',
+    'https://www.equipoexperto.com',
+    'https://montseaumateii.pages.dev',
+    'https://www.montseaumate.com',
+];
+
+/**
+ * Allowed browser origins for CORS.
+ * Includes DEFAULT_BROWSER_ORIGINS + CORS_ORIGINS + FRONTEND_URL (merged, deduped).
+ * In non-production, localhost dev origins are appended.
  */
 export function getCorsWhitelist() {
-    const raw = process.env.CORS_ORIGINS || '';
-    let fromEnv = raw
+    const fromEnv = (process.env.CORS_ORIGINS || '')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
 
-    if (fromEnv.length === 0 && process.env.NODE_ENV === 'production') {
-        const fe = (process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
-        if (fe) {
-            fromEnv = [fe];
-            console.warn(
-                '[CORS] CORS_ORIGINS empty — using FRONTEND_URL only. Add CORS_ORIGINS if the SPA is also served from other origins (www, Pages preview, etc.).'
-            );
-        } else {
-            console.warn(
-                '[CORS] CORS_ORIGINS and FRONTEND_URL are empty in production. Browser API calls will be blocked until you set them.'
-            );
-        }
-    }
+    const fe = (process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
 
-    const set = new Set(fromEnv);
+    const set = new Set(DEFAULT_BROWSER_ORIGINS);
+    fromEnv.forEach((o) => set.add(o));
+    if (fe) set.add(fe);
+
     if (process.env.NODE_ENV !== 'production') {
         LOCAL_DEV_ORIGINS.forEach((o) => set.add(o));
     }
+
     return [...set];
 }
