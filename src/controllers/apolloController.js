@@ -9,6 +9,7 @@ import {
     incrementMarketplaceUsage,
     tryConsumeMarketplaceRun,
 } from '../services/marketplaceUsageService.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 
 async function loadEntitlements(userId) {
     const row = (
@@ -37,7 +38,7 @@ const formatMarketplaceWhatsAppSummary = ({
     saveFailed,
     queriesPreview,
 }) => {
-    const baseUrl = (process.env.FRONTEND_URL || 'https://www.equipoexperto.com').replace(/\/$/, '');
+    const baseUrl = frontendBaseUrl() || '';
     const lines = Object.entries(nicheCounts).map(([nicheId, count]) => {
         const label = SCOUT_NICHE_LABELS[nicheId] || nicheId.replace(/_/g, ' ');
         return `• ${label}: ${count}`;
@@ -53,12 +54,13 @@ const formatMarketplaceWhatsAppSummary = ({
         ? '\n⚠️ Some leads could not be saved — open the app and check Marketplace.'
         : '';
 
+    const marketplaceLink = baseUrl ? `${baseUrl}/dashboard/marketplace` : 'Dashboard → Marketplace (set FRONTEND_URL for links)';
     return (
         `🔔 *Marketplace lead search finished*\n\n` +
         `🌍 Country: ${countryLabel}\n` +
         `📊 Leads found (this run): *${totalFound}*\n` +
         `💾 New leads saved: *${totalSaved}*${nicheBlock}${queryLine}${warn}\n\n` +
-        `View saved leads:\n${baseUrl}/dashboard/marketplace`
+        `View saved leads:\n${marketplaceLink}`
     );
 };
 

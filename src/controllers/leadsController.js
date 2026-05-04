@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
@@ -33,10 +34,11 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
         ? lead.full_name
         : extractNameFromEmail(recipientEmail) || 'there';
     
-    // Get automation/funnel ID if available for the link
-    const link = lead.automation_id 
-        ? `${process.env.FRONTEND_URL || 'https://www.equipoexperto.com'}/r/${lead.automation_id}`
-        : (process.env.FRONTEND_URL || 'https://www.equipoexperto.com');
+    const origin = frontendBaseUrl() || '';
+    if (!origin) {
+        console.error('[dispatchFollowup] FRONTEND_URL is not set; review/funnel links in messages may be wrong');
+    }
+    const link = lead.automation_id ? `${origin}/r/${lead.automation_id}` : origin;
 
     const personalisedMsg = injectPlaceholders(message || 'Hi {name}! Thanks for reaching out.', {
         name: leadName,

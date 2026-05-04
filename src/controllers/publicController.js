@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 import nodemailer from 'nodemailer';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import * as whatsappService from '../services/whatsappService.js';
@@ -334,8 +335,10 @@ export const submitFeedback = async (req, res) => {
             ]
         );
 
-        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-        const ownerMsg = `New feedback for ${config.business_name}\n\nCustomer: ${customer_name || 'Guest'}\nEmail: ${customer_email || 'N/A'}\nPhone: ${customer_phone || 'N/A'}\nRating: ${rating_overall}/5\nComment: ${comment || 'No comment'}\nDashboard: ${baseUrl}/dashboard/feedback`;
+        const baseUrl = frontendBaseUrl() || '';
+        if (!baseUrl) console.error('[submitFeedback] FRONTEND_URL is not set');
+        const dash = baseUrl ? `${baseUrl}/dashboard/feedback` : '(set FRONTEND_URL on server)';
+        const ownerMsg = `New feedback for ${config.business_name}\n\nCustomer: ${customer_name || 'Guest'}\nEmail: ${customer_email || 'N/A'}\nPhone: ${customer_phone || 'N/A'}\nRating: ${rating_overall}/5\nComment: ${comment || 'No comment'}\nDashboard: ${dash}`;
         setImmediate(() => {
             notifyOwnerInternally(config, `New ${rating_overall}-star feedback`, ownerMsg)
                 .catch(err => console.error('[submitFeedback] owner notification failed:', err.message));
@@ -489,18 +492,22 @@ export const submitLead = async (req, res) => {
                 }, {});
 
                 const whatsappAuth = integrations['whatsapp'] || {};
-                const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+                const baseUrl = frontendBaseUrl() || '';
+                if (!baseUrl) console.error('[submitLeadCapture] FRONTEND_URL is not set');
                 let questionsStr = '';
                 if (filtering_responses && typeof filtering_responses === 'object') {
                     questionsStr = '\n\nResponses:\n' + Object.entries(filtering_responses)
                         .map(([q, a]) => `- ${q}: ${a}`).join('\n');
                 }
-                const ownerMsg = `New lead\n\nName: ${full_name}\nEmail: ${email}\nPhone: ${phone}\nMessage: ${message || 'No message'}${questionsStr}\n\nDashboard: ${baseUrl}/dashboard/leads`;
+                const dashLeads = baseUrl ? `${baseUrl}/dashboard/leads` : '(set FRONTEND_URL)';
+                const ownerMsg = `New lead\n\nName: ${full_name}\nEmail: ${email}\nPhone: ${phone}\nMessage: ${message || 'No message'}${questionsStr}\n\nDashboard: ${dashLeads}`;
                 const defaultMsg = `Hello ${full_name || 'there'}, thank you for filling out our form! We've received your inquiry and will be in touch soon.`;
+                const leadLink = baseUrl ? `${baseUrl}/l/${automation_id}` : '';
+                const reviewLink = baseUrl ? `${baseUrl}/r/${automation_id}` : '';
                 const finalCustomerMsg = injectPlaceholders(result.rows[0].auto_response_message || defaultMsg, {
                     name: full_name || 'there',
-                    link: `${baseUrl}/l/${automation_id}`,
-                    reviewUrl: `${baseUrl}/r/${automation_id}`,
+                    link: leadLink,
+                    reviewUrl: reviewLink,
                     googleReviewUrl: result.rows[0].google_review_url,
                     number: whatsappAuth.account_id || ''
                 });

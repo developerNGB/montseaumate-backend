@@ -1,6 +1,7 @@
 import pool from '../db/pool.js';
 import jwt from 'jsonwebtoken';
 import fetch from 'node-fetch';
+import { backendBaseUrl, frontendBaseUrl } from '../utils/publicUrls.js';
 
 // Mock OAuth Credentials
 const MOCK_CLIENT_ID = 'mock_client_id';
@@ -48,9 +49,12 @@ export const connectProvider = async (req, res) => {
         // We append jobId to the state to maintain context
         const state = jobId ? `${token}___${jobId}` : token;
 
-        // Redirect URL logic
-        const backendBaseUrl = process.env.BACKEND_URL || 'https://api.equipoexperto.com';
-        const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
+        const apiBase = backendBaseUrl();
+        if (!apiBase) {
+            console.error('[connectProvider] BACKEND_URL is not set');
+            return res.status(500).send('Server misconfiguration: set BACKEND_URL');
+        }
+        const callbackUrl = `${apiBase}/api/integrations/${provider}/callback`;
 
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -122,8 +126,11 @@ export const providerCallback = async (req, res) => {
             jobId = parts[1];
         }
 
-        // Redirect to frontend fallback
-        const BASE = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+        const BASE = frontendBaseUrl();
+        if (!BASE) {
+            console.error('[providerCallback] FRONTEND_URL is not set');
+            return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
+        }
         let frontendRedirect = `${BASE}/dashboard/integrations`;
         if (jobId === 'onboarding') {
             frontendRedirect = `${BASE}/dashboard/integrations`;
@@ -154,8 +161,12 @@ export const providerCallback = async (req, res) => {
         let accountId = '';
         let expiresAt = null;
 
-        const backendBaseUrl = process.env.BACKEND_URL || 'https://api.equipoexperto.com';
-        const callbackUrl = `${backendBaseUrl}/api/integrations/${provider}/callback`;
+        const apiBase = backendBaseUrl();
+        if (!apiBase) {
+            console.error('[providerCallback] BACKEND_URL is not set');
+            return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent('BACKEND_URL is not set')}`);
+        }
+        const callbackUrl = `${apiBase}/api/integrations/${provider}/callback`;
 
         let metadata = {};
 
@@ -311,7 +322,10 @@ export const providerCallback = async (req, res) => {
         if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
             jobId = req.query.state.split('___')[1];
         }
-        const baseUrl = process.env.FRONTEND_URL || 'https://equipoexperto.com';
+        const baseUrl = frontendBaseUrl();
+        if (!baseUrl) {
+            return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
+        }
         let frontendRedirect = `${baseUrl}/dashboard/integrations`;
         if (jobId) frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
 

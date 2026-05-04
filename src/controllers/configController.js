@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 import crypto from 'crypto';
 import qrcode from 'qrcode';
 import { countEmployeesAfterPatch, getMaxEmployees, getMaxFollowupSequenceSteps } from '../services/subscriptionPlans.js';
@@ -31,8 +32,14 @@ export const getReviewFunnelConfig = async (req, res) => {
         }
 
         const config = result.rows[0];
-        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-        
+        const baseUrl = frontendBaseUrl();
+        if (!baseUrl) {
+            return res.status(500).json({
+                success: false,
+                message: 'Server misconfiguration: set FRONTEND_URL for public links and QR codes.',
+            });
+        }
+
         // Survey Funnel (New Multi-Rating System)
         const surveyUrl = `${baseUrl}/f/${config.automation_id}`;
         const surveyQrCode = await qrcode.toDataURL(surveyUrl);
@@ -188,7 +195,13 @@ export const saveReviewFunnelConfig = async (req, res) => {
             );
         } catch (_) { /* column not yet migrated — safe to ignore */ }
 
-        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
+        const baseUrl = frontendBaseUrl();
+        if (!baseUrl) {
+            return res.status(500).json({
+                success: false,
+                message: 'Server misconfiguration: set FRONTEND_URL for public links and QR codes.',
+            });
+        }
         const surveyUrl = `${baseUrl}/f/${automationId}`;
         const surveyQrCode = await qrcode.toDataURL(surveyUrl);
         const reviewUrl = `${baseUrl}/r/${automationId}`;

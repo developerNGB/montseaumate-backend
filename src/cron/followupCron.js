@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import * as whatsappService from '../services/whatsappService.js';
@@ -145,8 +146,9 @@ const startFollowupCron = () => {
                         const currentIndex = lead.followup_step_index || 0;
                         const step = sequence[currentIndex];
 
-                        const baseUrl = process.env.FRONTEND_URL || 'https://www.equipoexperto.com';
-                        const link = `${baseUrl}/r/${lead.automation_id || ''}`;
+                        const baseUrl = frontendBaseUrl() || '';
+                        if (!baseUrl) console.error('[followupCron] FRONTEND_URL is not set');
+                        const link = baseUrl ? `${baseUrl}/r/${lead.automation_id || ''}` : '';
                         const msg = injectPlaceholders(step.message || '', {
                             name: lead.full_name,
                             link: link,

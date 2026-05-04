@@ -25,6 +25,7 @@ import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
 import pool from './db/pool.js';
+import { getCorsWhitelist } from './utils/corsWhitelist.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../../.env') });
@@ -44,15 +45,8 @@ const PORT = process.env.PORT || 5000;
 // Trust Render's proxy for headers (needed for rate-limiting and reliable CORS)
 app.set('trust proxy', 1);
 
-// CORS Whitelist for production and local environments
-const whitelist = [
-    'https://www.equipoexperto.com',
-    'https://equipoexperto.com',
-    'https://montseaumateii.pages.dev',
-    'https://www.montseaumate.com',
-    'http://localhost:5173',
-    'http://localhost:3000'
-];
+// CORS — set CORS_ORIGINS (comma-separated) in production; see server/src/utils/corsWhitelist.js
+const whitelist = getCorsWhitelist();
 
 // Handle preflight OPTIONS requests BEFORE any other middleware
 app.options('*', (req, res) => {
