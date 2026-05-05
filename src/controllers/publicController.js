@@ -169,7 +169,8 @@ export const getPublicReviewConfig = async (req, res) => {
 export const submitReview = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { rating, feedback, filtering_responses } = req.body;
+        const { rating, feedback, filtering_responses, ui_language } = req.body;
+        const reviewLang = String(ui_language || '').toLowerCase().startsWith('es') ? 'es' : 'en';
 
         console.log(`[submitReview] Incoming review for ${automation_id}:`, { rating, feedback });
 
@@ -233,7 +234,10 @@ export const submitReview = async (req, res) => {
         return res.status(200).json({
             success: true,
             action: 'message',
-            message: "Thank you so much for your honest feedback. The owner has been notified so we can make this right."
+            message:
+                reviewLang === 'es'
+                    ? 'Gracias por contarnos cómo te fue. Lamentamos que no haya sido mejor: nos gustaría entender qué falló — el equipo ya está al tanto y hará seguimiento para solucionarlo.'
+                    : "Thanks for being honest with us. We're sorry this wasn't a better experience — we'd like to understand what went wrong. The team has been notified and will follow up to make it right.",
         });
 
     } catch (err) {
@@ -257,8 +261,15 @@ export const submitFeedback = async (req, res) => {
             contact_requested,
             customer_name,
             customer_email,
-            customer_phone
+            customer_phone,
+            ui_language,
         } = req.body;
+
+        const lang = String(ui_language || '')
+            .toLowerCase()
+            .startsWith('es')
+            ? 'es'
+            : 'en';
 
         console.log(`[submitFeedback] Incoming feedback for ${automation_id}:`, { rating_overall, customer_name, contact_requested });
 
@@ -345,11 +356,30 @@ export const submitFeedback = async (req, res) => {
         });
 
         /** After survey submit only — never reuse auto_response_message (invite copy + funnel link). */
+        const isPromoter = Number(rating_overall) >= 4;
         const POST_SURVEY_THANK_YOU =
-            'Hi {name}! Thank you for your feedback — we have received it and truly appreciate you taking the time.\n\n' +
-            'If you need anything else from us, just reply here and we will be glad to help.';
+            lang === 'es'
+                ? '¡Hola {name}! Gracias por tu opinión — la hemos recibido y valoramos mucho tu tiempo.\n\n' +
+                  'Si necesitas algo más de nosotros, responde aquí y encantados de ayudarte.'
+                : 'Hi {name}! Thank you for your feedback — we have received it and truly appreciate you taking the time.\n\n' +
+                  'If you need anything else from us, just reply here and we will be glad to help.';
+        const POST_SURVEY_FOLLOW_UP_LOW =
+            lang === 'es'
+                ? '¡Hola {name}! Lamentamos que tu experiencia no haya estado a la altura — nos importa entender qué falló para poder mejorar.\n\n' +
+                  'El equipo ya está al tanto. ¿Podrías responder aquí con los detalles que quieras compartir? Nos ayuda mucho a solucionarlo.'
+                : 'Hi {name}! We are sorry your experience fell short — we genuinely want to know what went wrong so we can fix it.\n\n' +
+                  'The team has been notified. Could you reply here with anything we should know? Your details help us make this right.';
+        const customerOutreachTemplate = isPromoter ? POST_SURVEY_THANK_YOU : POST_SURVEY_FOLLOW_UP_LOW;
+        const customerEmailSubject = isPromoter
+            ? lang === 'es'
+                ? 'Gracias por tu opinión'
+                : 'Thanks for your feedback'
+            : lang === 'es'
+              ? 'Queremos solucionar esto'
+              : "We'd like to make this right";
+
         const thankYouSubstitutions = {
-            name: customer_name || 'there',
+            name: customer_name || (lang === 'es' ? 'cliente' : 'there'),
             link: '',
             googleReviewUrl: '',
             reviewUrl: '',
@@ -357,7 +387,7 @@ export const submitFeedback = async (req, res) => {
         };
 
         if (customer_phone && config.whatsapp_enabled !== false) {
-            const finalMsg = injectPlaceholders(POST_SURVEY_THANK_YOU, thankYouSubstitutions);
+            const finalMsg = injectPlaceholders(customerOutreachTemplate, thankYouSubstitutions);
             setImmediate(() => {
                 sendInternalWhatsApp(config.user_id, customer_phone, finalMsg)
                     .catch(err => console.error('[submitFeedback] customer WhatsApp failed:', err.message));
@@ -365,9 +395,9 @@ export const submitFeedback = async (req, res) => {
         }
 
         if (customer_email && config.email_enabled !== false) {
-            const emailMsg = injectPlaceholders(POST_SURVEY_THANK_YOU, thankYouSubstitutions);
+            const emailMsg = injectPlaceholders(customerOutreachTemplate, thankYouSubstitutions);
             setImmediate(() => {
-                sendInternalEmail(config.user_id, customer_email, 'Thanks for your feedback', emailMsg)
+                sendInternalEmail(config.user_id, customer_email, customerEmailSubject, emailMsg)
                     .catch(err => console.error('[submitFeedback] customer email failed:', err.message));
             });
         }
@@ -385,11 +415,17 @@ export const submitFeedback = async (req, res) => {
 
         if (rating_overall >= 4) {
             finalResponse.action = 'suggest_google';
-            finalResponse.message = "Thank you! Your feedback is invaluable. Would you mind sharing your experience on Google as well?";
+            finalResponse.message =
+                lang === 'es'
+                    ? '¡Gracias! Tu opinión es muy valiosa. ¿Te gustaría compartir tu experiencia en Google también?'
+                    : 'Thank you! Your feedback is invaluable. Would you mind sharing your experience on Google as well?';
             finalResponse.google_url = config.google_review_url;
         } else {
             finalResponse.action = 'message';
-            finalResponse.message = "Thank you for your feedback!";
+            finalResponse.message =
+                lang === 'es'
+                    ? 'Lamentamos que no haya sido una buena experiencia. Nos gustaría entender qué falló: si aún no lo contaste, añade un poco más arriba o te contactaremos desde aquí. Gracias por avisarnos — el equipo ya está al tanto.'
+                    : "We're sorry this wasn't what you hoped for. We'd really like to understand what went wrong — if you haven't already, add a bit more detail above and we'll follow up from here. Thanks for letting us know; the team has been notified.";
         }
 
         return res.status(200).json(finalResponse);

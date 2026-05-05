@@ -82,11 +82,14 @@ export const getMaxEmployees = (plan, trialEndsAt) => {
     }
 };
 
+/**
+ * Billing slot count: Review funnel + Lead capture share one automation row —
+ * anytime either flag is ON, it consumes one employee slot (not two).
+ */
 export const countActiveEmployeesFromRows = (rfRow, lfRow) => {
     let n = 0;
-    if (rfRow?.is_active === true) n++;
-    if (rfRow?.lead_capture_active === true) n++;
-    if (lfRow?.is_active === true) n++;
+    if (rfRow?.is_active === true || rfRow?.lead_capture_active === true) n += 1;
+    if (lfRow?.is_active === true) n += 1;
     return n;
 };
 
@@ -164,19 +167,18 @@ export const countEmployeesAfterPatch = ({
     patch = {},
 }) => {
     const isActive =
-        patch.is_active !== undefined ? patch.is_active : !!rf.is_active;
+        patch.is_active !== undefined ? !!patch.is_active : !!rf.is_active;
     const capActive =
         patch.lead_capture_active !== undefined
-            ? patch.lead_capture_active
+            ? !!patch.lead_capture_active
             : !!rf.lead_capture_active;
     const followActive =
         patch.followup_active !== undefined
-            ? patch.followup_active
+            ? !!patch.followup_active
             : !!lf.is_active;
 
     let n = 0;
-    if (isActive) n++;
-    if (capActive) n++;
-    if (followActive) n++;
+    if (isActive || capActive) n += 1;
+    if (followActive) n += 1;
     return n;
 };
