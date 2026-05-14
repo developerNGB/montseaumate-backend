@@ -128,7 +128,7 @@ export const register = async (req, res) => {
 
         const result = await pool.query(
             `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
-             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '14 days')
+             VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '30 days')
              RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, trial_ends_at`,
             [name.trim(), emailLower, password_hash, company_name.trim()]
         );
@@ -601,7 +601,7 @@ export const googleLogin = async (req, res) => {
             try {
                 await pool.query(
                     `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
-                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '14 days')`,
+                     VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '30 days')`,
                     [name, emailLower, '', '']
                 );
             } catch (insertErr) {

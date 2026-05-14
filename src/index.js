@@ -21,6 +21,8 @@ import translationRoutes from './routes/translationRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import smtpRoutes from './routes/smtpRoutes.js';
 import apolloRoutes from './routes/apolloRoutes.js';
+import stripeRoutes from './routes/stripeRoutes.js';
+import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
@@ -90,6 +92,9 @@ app.use(cors({
     optionsSuccessStatus: 204 // Proper status code for OPTIONS
 }));
 
+// Stripe webhook — raw body required for signature verification (must be before express.json)
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+
 // Parse JSON bodies (limit to 10kb to prevent abuse)
 app.use(express.json({ limit: '10kb' }));
 
@@ -141,6 +146,7 @@ app.use((req, res, next) => {
         '/api/integrations', '/api/whatsapp', '/api/config',
         '/api/apollo', '/api/apify',  // Apollo/Apify uses JWT auth, not CSRF
         '/api/f', '/api/r', '/api/l', '/api/support', // Public feedback/review/lead/support endpoints
+        '/api/stripe', // JWT-authenticated checkout API (no CSRF double-submit cookie)
         '/auth' // All auth routes use JWT/Bearer tokens or are public
     ];
     if (skipPaths.some(path => req.path.startsWith(path))) {
@@ -171,6 +177,8 @@ app.get('/', (req, res) => {
 
 // Auth endpoints
 app.use('/auth', authRoutes);
+
+app.use('/api/stripe', stripeRoutes);
 
 // Protected Dashboard Endpoints
 app.use('/api/reports', reportRoutes);
