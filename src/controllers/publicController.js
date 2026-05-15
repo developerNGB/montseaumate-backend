@@ -78,9 +78,9 @@ export const submitContactForm = async (req, res) => {
             }
         });
 
-        const toEmail = process.env.EMAIL_USER; // jadeatwork123@gmail.com
+        const toEmail = process.env.CONTACT_FORM_TO || 'equipoexpertoia@gmail.com';
         const fromEmail = process.env.EMAIL_USER;
-        const fromName = 'Montseaumate Contact Form';
+        const fromName = 'Equipo Experto — Contact Form';
 
         const mailOptions = {
             from: `"${fromName}" <${fromEmail}>`,
@@ -117,19 +117,28 @@ export const submitContactForm = async (req, res) => {
             text: `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
         };
 
-        // Fire and forget — never block the UI response
-        transporter.sendMail(mailOptions)
-            .then(() => console.log(`[submitContactForm] ✅ Email sent to ${toEmail}`))
-            .catch(err => console.error('[submitContactForm] ❌ Email failed:', err.message));
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            console.error('[submitContactForm] EMAIL_USER/EMAIL_PASS not configured');
+            return res.status(503).json({
+                success: false,
+                message: 'We could not send your message right now. Please email us directly or try again later.',
+            });
+        }
 
-        return res.status(200).json({ 
-            success: true, 
-            message: 'Your message has been received! Our team will get back to you shortly.' 
+        await transporter.sendMail(mailOptions);
+        console.log(`[submitContactForm] ✅ Email sent to ${toEmail}`);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Your message has been received! Our team will get back to you shortly.',
         });
 
     } catch (err) {
         console.error('[submitContactForm] CRITICAL ERR:', err);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+        return res.status(503).json({
+            success: false,
+            message: 'Your message could not be sent. Check your connection and try again.',
+        });
     }
 };
 

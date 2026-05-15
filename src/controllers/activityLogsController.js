@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { retryActivityLogForUser } from '../services/activityLogService.js';
 
 // GET /api/activity-logs
 export const getActivityLogs = async (req, res) => {
@@ -16,5 +17,26 @@ export const getActivityLogs = async (req, res) => {
     } catch (err) {
         console.error('[getActivityLogs] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// POST /api/activity-logs/:id/retry
+export const retryActivityLog = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await retryActivityLogForUser(req.user.id, id);
+        if (!result.ok) {
+            const status =
+                result.code === 'NOT_FOUND' ? 404 : result.code === 'SEND_FAILED' ? 502 : 400;
+            return res.status(status).json({ success: false, message: result.message, code: result.code });
+        }
+        return res.status(200).json({
+            success: true,
+            message: 'Retry sent successfully.',
+            provider: result.provider,
+        });
+    } catch (err) {
+        console.error('[retryActivityLog] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not retry this automation.' });
     }
 };

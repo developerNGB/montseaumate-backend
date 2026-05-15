@@ -1,11 +1,21 @@
 import { Router } from 'express';
-import { getIntegrations, connectProvider, providerCallback, disconnectProvider, renderMockOAuth } from '../controllers/integrationController.js';
+import {
+    getIntegrations,
+    getIntegrationHealth,
+    connectProvider,
+    providerCallback,
+    disconnectProvider,
+    renderMockOAuth,
+} from '../controllers/integrationController.js';
 import authenticate from '../middleware/authenticate.js';
 
 const router = Router();
 
 // GET /api/integrations — List active integrations
 router.get('/', authenticate, getIntegrations);
+
+// GET /api/integrations/health — WhatsApp/Gmail status for dashboard alerts
+router.get('/health', authenticate, getIntegrationHealth);
 
 // GET /api/integrations/mock-oauth — Renders Mock HTML (Public, for demo purposes)
 router.get('/mock-oauth', renderMockOAuth);

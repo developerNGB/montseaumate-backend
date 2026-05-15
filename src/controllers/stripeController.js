@@ -210,6 +210,11 @@ export const handleStripeWebhook = async (req, res) => {
                     })
                     .catch((e) => console.error('[Stripe] payment_failed email:', e.message));
             }
+            const { notifyAdminFireAndForget } = await import('../services/adminAlertService.js');
+            notifyAdminFireAndForget({
+                subject: `[Equipo Experto] Stripe payment failed — ${email || inv.id}`,
+                text: `Invoice payment failed for ${email || 'unknown customer'} (invoice ${inv.id}).`,
+            });
         }
     } catch (err) {
         console.error('[Stripe webhook] handler:', err.message);

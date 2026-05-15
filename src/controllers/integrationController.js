@@ -2,6 +2,8 @@ import pool from '../db/pool.js';
 import jwt from 'jsonwebtoken';
 import fetch from 'node-fetch';
 import { backendBaseUrl, frontendBaseUrl } from '../utils/publicUrls.js';
+import * as whatsappService from '../services/whatsappService.js';
+import { getValidGoogleTokens } from '../utils/googleAuth.js';
 
 // Mock OAuth Credentials
 const MOCK_CLIENT_ID = 'mock_client_id';
@@ -59,14 +61,14 @@ export const connectProvider = async (req, res) => {
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
             if (clientId) {
-                // Real Google OAuth2 — Gmail + profile scopes only
-                // Note: business.manage requires Google Workspace API verification; omit for standard apps
+                // Real Google OAuth2 — least privilege: send mail only (no inbox read / full Gmail)
+                // gmail.send → Gmail API users.messages.send (see emailService.js)
+                // email + profile → oauth2 userinfo for connected account display
+                // Note: automatic "reply detected" inbox scanning (followupCron) needs readonly and is skipped if list returns 403.
                 const scopes = [
                     'email',
                     'profile',
-                    'https://mail.google.com/',
-                    'https://www.googleapis.com/auth/gmail.send',
-                    'https://www.googleapis.com/auth/gmail.readonly'
+                    'https://www.googleapis.com/auth/gmail.send'
                 ].join(' ');
 
                 const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
@@ -330,6 +332,91 @@ export const providerCallback = async (req, res) => {
         if (jobId) frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
 
         return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(errMsg)}`);
+    }
+};
+
+/**
+ * GET /api/integrations/health
+ * Connection health for dashboard alerts (WhatsApp + Gmail).
+ */
+export const getIntegrationHealth = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const issues = [];
+
+        const intRes = await pool.query(
+            `SELECT provider, account_id, metadata FROM integrations WHERE user_id = $1`,
+            [userId]
+        );
+        const byProvider = Object.fromEntries(intRes.rows.map((r) => [r.provider, r]));
+
+        let whatsapp = { linked: false, status: 'disconnected', ok: true };
+        const waRow = byProvider.whatsapp;
+        if (waRow?.access_token === 'whatsapp_native_session') {
+            whatsapp.linked = true;
+            const session = whatsappService.getSessionStatus(userId);
+            whatsapp.status = session.status || 'disconnected';
+            whatsapp.ok = session.status === 'connected';
+            if (!whatsapp.ok) {
+                issues.push({
+                    code: 'whatsapp_disconnected',
+                    severity: 'warning',
+                    integration: 'whatsapp',
+                });
+            }
+        }
+
+        let gmail = { linked: false, email: null, ok: true };
+        const googleRow = byProvider.google;
+        if (googleRow) {
+            gmail.linked = true;
+            let meta = googleRow.metadata;
+            if (typeof meta === 'string') {
+                try {
+                    meta = JSON.parse(meta);
+                } catch {
+                    meta = {};
+                }
+            }
+            gmail.email = meta?.email || googleRow.account_id?.replace(/^gmail:/, '') || null;
+            const { access_token } = await getValidGoogleTokens(userId);
+            gmail.ok = Boolean(access_token);
+            if (!gmail.ok) {
+                issues.push({
+                    code: 'gmail_disconnected',
+                    severity: 'warning',
+                    integration: 'gmail',
+                });
+            }
+        }
+
+        const smtpRes = await pool.query(
+            'SELECT id FROM smtp_settings WHERE user_id = $1 AND is_active = true LIMIT 1',
+            [userId]
+        );
+        const smtpActive = smtpRes.rows.length > 0;
+        const canSendEmail = gmail.ok || smtpActive || Boolean(byProvider.microsoft);
+
+        if (!canSendEmail && (gmail.linked || smtpActive)) {
+            issues.push({
+                code: 'email_send_blocked',
+                severity: 'warning',
+                integration: 'gmail',
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            whatsapp,
+            gmail,
+            smtpActive,
+            canSendEmail,
+            issues,
+            hasIssues: issues.length > 0,
+        });
+    } catch (err) {
+        console.error('[getIntegrationHealth] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not check integrations.' });
     }
 };
 

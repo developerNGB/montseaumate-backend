@@ -7,8 +7,10 @@ const router = Router();
 // Protect endpoints
 router.use(authenticate);
 
-// GET /api/stats
+// GET /api/stats (dashboard payload: recipes, configured, stats, …)
 router.get('/', getDashboardStats);
+// Legacy path — older frontends called /api/stats/dashboard
+router.get('/dashboard', getDashboardStats);
 
 // GET /api/stats/activity?employee=followup|review|capture
 router.get('/activity', getEmployeeActivityStatus);

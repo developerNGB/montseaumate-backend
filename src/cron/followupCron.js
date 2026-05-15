@@ -5,6 +5,9 @@ import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
+import { retryAsync } from '../utils/retryAsync.js';
+import { insertActivityLog } from '../services/activityLogService.js';
+import { notifyAdminFireAndForget } from '../services/adminAlertService.js';
 
 /**
  * Helper to calculate the next scheduled time for a follow-up step.
@@ -76,7 +79,15 @@ const startFollowupCron = () => {
                     }
                 );
 
-                if (!response.ok) continue;
+                if (!response.ok) {
+                    if (response.status === 403) {
+                        // Expected when Gmail is connected with send-only scope (no gmail.readonly / mail.google.com).
+                        console.warn(
+                            `[GmailReplyChecker] user ${userId}: inbox scan skipped (403 — connect with read scope or use send-only; reply auto-detect disabled).`
+                        );
+                    }
+                    continue;
+                }
                 const data = await response.json();
                 if (!data.messages) continue;
 
@@ -176,7 +187,10 @@ const startFollowupCron = () => {
 
                             const session = waSessions.get(lead.user_id);
                             if (lead.whatsapp_enabled !== false && session?.isNative && session?.session?.status === 'connected' && lead.phone) {
-                                await whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg);
+                                await retryAsync(
+                                    () => whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg),
+                                    { attempts: 3, delayMs: 1000 }
+                                );
                                 waSent = true;
                             }
                         } catch (waErr) {
@@ -190,12 +204,16 @@ const startFollowupCron = () => {
                                 const isFirstMessage = currentIndex === 0;
                                 const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
 
-                                await sendDynamicEmail(lead.user_id, {
-                                    to: emailAddr,
-                                    subject: subject,
-                                    text: msg,
-                                    html: createEmailTemplate(msg, lead.full_name, subject)
-                                });
+                                await retryAsync(
+                                    () =>
+                                        sendDynamicEmail(lead.user_id, {
+                                            to: emailAddr,
+                                            subject: subject,
+                                            text: msg,
+                                            html: createEmailTemplate(msg, lead.full_name, subject),
+                                        }),
+                                    { attempts: 3, delayMs: 1000 }
+                                );
                                 emailSent = true;
                             }
                         } catch (mailErr) {
@@ -289,6 +307,31 @@ const startFollowupCron = () => {
                     `UPDATE leads SET followup_status = 'pending', updated_at = NOW() WHERE id = ANY($1::uuid[])`,
                     [failedIds]
                 );
+                for (const r of failed) {
+                    await insertActivityLog({
+                        userId: r.lead.user_id,
+                        automationName: 'Lead Follow-up',
+                        triggerType: `Sequence Step ${(r.stepIndex || 0) + 1}`,
+                        status: 'Failed',
+                        detail: 'Follow-up could not be sent — check WhatsApp and Gmail under Integrations.',
+                        metadata: {
+                            lead_id: r.lead.id,
+                            lead_name: r.lead.full_name,
+                            wa_attempted: r.lead.whatsapp_enabled !== false,
+                            email_attempted: r.lead.email_enabled !== false,
+                        },
+                    });
+                }
+                const byUser = new Map();
+                for (const r of failed) {
+                    byUser.set(r.lead.user_id, (byUser.get(r.lead.user_id) || 0) + 1);
+                }
+                for (const [uid, count] of byUser) {
+                    notifyAdminFireAndForget({
+                        subject: `[Equipo Experto] ${count} follow-up(s) failed (user ${uid})`,
+                        text: `${count} automated follow-up message(s) could not be sent for user ${uid}. Check activity logs and integration health.`,
+                    });
+                }
             } catch (resetFailErr) {
                 console.error('[FollowupCron] Could not reset failed leads:', resetFailErr.message);
             }

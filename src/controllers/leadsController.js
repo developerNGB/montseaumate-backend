@@ -4,6 +4,7 @@ import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { sanitizeLeadRow, sanitizeLeadEmailForPublic, sanitizeLeads } from '../utils/leadPrivacy.js';
+import { retryAsync } from '../utils/retryAsync.js';
 
 /**
  * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
@@ -62,7 +63,10 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
                 [userId]
             );
             if (waInt.rows[0]?.access_token === 'whatsapp_native_session') {
-                await whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg);
+                await retryAsync(
+                    () => whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg),
+                    { attempts: 3, delayMs: 1000 }
+                );
                 console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ WhatsApp sent`);
                 sentChannels.push('whatsapp');
             }
@@ -75,12 +79,16 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
     if (emailEnabled && recipientEmail) {
         try {
             console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${recipientEmail}...`);
-            const result = await sendDynamicEmail(userId, {
-                to: recipientEmail,
-                subject: subject,
-                text: personalisedMsg,
-                html: createEmailTemplate(personalisedMsg, leadName, subject),
-            });
+            const result = await retryAsync(
+                () =>
+                    sendDynamicEmail(userId, {
+                        to: recipientEmail,
+                        subject: subject,
+                        text: personalisedMsg,
+                        html: createEmailTemplate(personalisedMsg, leadName, subject),
+                    }),
+                { attempts: 3, delayMs: 1000 }
+            );
             console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
             sentChannels.push(result.provider || 'email');
         } catch (e) {
@@ -98,6 +106,9 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
     console.warn(`[Followup][${Date.now() - dispatchStart}ms] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
     return 'none';
 };
+
+/** Exported for activity-log retry and internal tooling */
+export const dispatchFollowupForLead = dispatchFollowup;
 
 export const getLeads = async (req, res) => {
     try {
@@ -425,7 +436,25 @@ export const triggerLeadFollowup = async (req, res) => {
 
     } catch (err) {
         console.error(`[triggerLeadFollowup][${Date.now() - startTime}ms] ❌ Error:`, err.message);
-        return res.status(500).json({ success: false, message: 'Failed to send follow-up' });
+        try {
+            const { insertActivityLog } = await import('../services/activityLogService.js');
+            await insertActivityLog({
+                userId: req.user.id,
+                automationName: 'Lead Follow-up',
+                triggerType: 'Manual Trigger',
+                status: 'Failed',
+                detail: err.message || 'Failed to send follow-up',
+                metadata: { lead_id: req.params.id },
+            });
+        } catch {
+            /* noop */
+        }
+        return res.status(502).json({
+            success: false,
+            message: err.message?.includes('reconnect')
+                ? err.message
+                : 'Could not send follow-up. Check WhatsApp and Gmail under Integrations.',
+        });
     }
 };
 
