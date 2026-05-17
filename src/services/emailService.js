@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer';
 import pool from '../db/pool.js';
 import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import { getValidMicrosoftToken } from '../utils/microsoftAuth.js';
+import { buildGmailRawMime, parseReplyToAddress } from '../utils/mimeMessage.js';
 import fetch from 'node-fetch';
 
 /**
@@ -13,14 +14,21 @@ import fetch from 'node-fetch';
  *
  * No shared server Gmail fallback — users must link Google (or Microsoft/SMTP) to send as themselves.
  */
-export const sendDynamicEmail = async (userId, mailOptions) => {
+/**
+ * @param {string} userId
+ * @param {import('nodemailer').SendMailOptions} mailOptions
+ * @param {{ integrationsOnly?: boolean }} [options] — skip per-user SMTP (e.g. contact form uses Gmail API only)
+ */
+export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
     const startTime = Date.now();
     try {
         console.log(`[EmailService][${startTime}] 🚀 Starting dispatch for user ${userId} to ${mailOptions.to}`);
         
         // 1. Fetch All Integration Settings in one go
         const [smtpRes, integrationsRes] = await Promise.all([
-            pool.query('SELECT * FROM smtp_settings WHERE user_id = $1 AND is_active = true', [userId]),
+            options.integrationsOnly
+                ? Promise.resolve({ rows: [] })
+                : pool.query('SELECT * FROM smtp_settings WHERE user_id = $1 AND is_active = true', [userId]),
             pool.query('SELECT provider, metadata FROM integrations WHERE user_id = $1', [userId])
         ]);
 
@@ -30,7 +38,7 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
         }, {});
 
         // 1. Try Custom SMTP
-        if (smtpRes.rows.length > 0) {
+        if (!options.integrationsOnly && smtpRes.rows.length > 0) {
             const config = smtpRes.rows[0];
             console.log(`[EmailService][${Date.now() - startTime}ms] Using Custom SMTP (${config.from_email})`);
             
@@ -61,6 +69,21 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
             if (microsoftToken && integrations.microsoft.email) {
                 console.log(`[EmailService][${Date.now() - startTime}ms] Using Microsoft Graph`);
                 
+                const replyTo = parseReplyToAddress(mailOptions.replyTo);
+                const graphMessage = {
+                    subject: mailOptions.subject,
+                    body: {
+                        contentType: mailOptions.html ? 'HTML' : 'Text',
+                        content: mailOptions.html || mailOptions.text,
+                    },
+                    toRecipients: [{ emailAddress: { address: mailOptions.to } }],
+                };
+                if (replyTo) {
+                    graphMessage.replyTo = [
+                        { emailAddress: { address: replyTo.address, name: replyTo.name } },
+                    ];
+                }
+
                 const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
                     method: 'POST',
                     headers: {
@@ -68,16 +91,7 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        message: {
-                            subject: mailOptions.subject,
-                            body: {
-                                contentType: mailOptions.html ? 'HTML' : 'Text',
-                                content: mailOptions.html || mailOptions.text
-                            },
-                            toRecipients: [{
-                                emailAddress: { address: mailOptions.to }
-                            }]
-                        },
+                        message: graphMessage,
                         saveToSentItems: 'true'
                     })
                 });
@@ -105,26 +119,8 @@ export const sendDynamicEmail = async (userId, mailOptions) => {
             const { access_token: googleAccessToken } = await getValidGoogleTokens(userId);
             if (googleAccessToken && integrations.google.email) {
                 console.log(`[EmailService][${Date.now() - startTime}ms] Using Gmail API (Direct Fetch)`);
-                
-                // Construct a simple MIME message for Gmail API
-                const boundary = 'foo_bar_baz';
-                const subject = mailOptions.subject;
-                const to = mailOptions.to;
-                const from = integrations.google.email;
-                const body = mailOptions.html || mailOptions.text;
-                const contentType = mailOptions.html ? 'text/html' : 'text/plain';
 
-                const str = [
-                    `MIME-Version: 1.0\n`,
-                    `To: ${to}\n`,
-                    `From: ${from}\n`,
-                    `Subject: =?utf-8?B?${Buffer.from(subject).toString('base64')}?=\n`,
-                    `Content-Type: ${contentType}; charset="UTF-8"\n`,
-                    `Content-Transfer-Encoding: 7bit\n\n`,
-                    body
-                ].join('');
-
-                const encodedMail = Buffer.from(str).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+                const encodedMail = buildGmailRawMime(mailOptions, integrations.google.email);
 
                 const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
                     method: 'POST',

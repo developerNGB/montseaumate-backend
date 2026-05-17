@@ -4,8 +4,10 @@ import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
-import { getContactFormInbox, isSupportMailConfigured, sendSupportMail } from '../services/supportMailService.js';
-import { buildContactFormEmail } from '../utils/contactFormEmail.js';
+import {
+    isContactFormMailConfigured,
+    sendContactFormNotification,
+} from '../services/contactFormMailService.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
@@ -70,28 +72,24 @@ export const submitContactForm = async (req, res) => {
 
         console.log(`[submitContactForm] New message from ${name} (${email})`);
 
-        if (!isSupportMailConfigured()) {
-            console.error('[submitContactForm] SMTP not configured (EMAIL_* or SUPPORT_SMTP_*)');
+        if (!(await isContactFormMailConfigured())) {
+            console.error('[submitContactForm] No Gmail/Microsoft integration for contact form sender');
             return res.status(503).json({
                 success: false,
-                code: 'contact_smtp_not_configured',
+                code: 'contact_sender_not_configured',
                 message: 'We could not send your message right now. Please email us directly or try again later.',
             });
         }
 
-        const toEmail = getContactFormInbox();
         const source =
             req.body.source === 'billing'
                 ? 'Billing — Enterprise inquiry'
                 : 'Montseaumate Landing Page';
 
-        const mailOptions = {
-            ...buildContactFormEmail({ name, email, message, source }),
-            to: toEmail,
-        };
-
-        await sendSupportMail(mailOptions);
-        console.log(`[submitContactForm] ✅ Email sent to ${toEmail}`);
+        const result = await sendContactFormNotification({ name, email, message, source });
+        console.log(
+            `[submitContactForm] ✅ Email sent via ${result.provider} to inbox`,
+        );
 
         return res.status(200).json({
             success: true,
@@ -100,12 +98,15 @@ export const submitContactForm = async (req, res) => {
 
     } catch (err) {
         console.error('[submitContactForm] CRITICAL ERR:', err.code || err.message, err.response || '');
-        const code =
-            err.code === 'SMTP_TIMEOUT' || err.code === 'ETIMEDOUT' || err.code === 'ESOCKET'
-                ? 'contact_smtp_timeout'
-                : err.code === 'EAUTH'
-                  ? 'contact_smtp_auth'
-                  : 'contact_smtp_failed';
+        const msg = String(err.message || '');
+        let code = 'contact_send_failed';
+        if (err.code === 'contact_sender_not_configured') {
+            code = 'contact_sender_not_configured';
+        } else if (/expired|reconnect/i.test(msg)) {
+            code = 'contact_integration_expired';
+        } else if (/rate limit/i.test(msg)) {
+            code = 'contact_rate_limited';
+        }
         return res.status(503).json({
             success: false,
             code,
