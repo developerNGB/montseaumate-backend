@@ -417,12 +417,17 @@ const startServer = () => {
         // Restore WhatsApp Sessions
         restoreActiveSessions();
 
-        isContactFormMailConfigured()
-            .then((ok) => {
+        Promise.all([
+            isContactFormMailConfigured(),
+            import('./services/contactFormMailService.js').then((m) => m.resolveContactFormSenderUserId()),
+            import('./services/supportMailService.js').then((m) => m.getContactFormInbox()),
+        ])
+            .then(([ok, senderId, inbox]) => {
+                console.log(`   Contact form inbox : ${inbox}`);
                 console.log(
                     ok
-                        ? '   Contact form : email delivery configured'
-                        : '   Contact form : NOT configured — connect Gmail in Integrations or set EMAIL_USER/EMAIL_PASS',
+                        ? `   Contact form send  : configured (sender user ${senderId || 'n/a'})`
+                        : '   Contact form send  : NOT configured — connect Gmail in Dashboard → Integrations',
                 );
             })
             .catch(() => {});

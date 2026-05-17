@@ -14,6 +14,17 @@ const SMTP_FALLBACK_MS = 12_000;
 /**
  * User whose connected Gmail (API) sends contact notifications — works on Render (HTTPS).
  */
+async function firstEditorWithGoogleToken() {
+    const raw = process.env.TRANSLATION_EDITOR_USER_IDS?.trim();
+    if (!raw) return null;
+
+    for (const id of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
+        const { access_token } = await getValidGoogleTokens(id);
+        if (access_token) return id;
+    }
+    return null;
+}
+
 export async function resolveContactFormSenderUserId() {
     const explicit = process.env.CONTACT_FORM_SENDER_USER_ID?.trim();
     if (explicit) return explicit;
@@ -39,6 +50,9 @@ export async function resolveContactFormSenderUserId() {
         );
         if (byInbox.rows[0]?.user_id) return String(byInbox.rows[0].user_id);
     }
+
+    const editorWithGoogle = await firstEditorWithGoogleToken();
+    if (editorWithGoogle) return editorWithGoogle;
 
     const latestGoogle = await pool.query(
         `SELECT user_id FROM integrations WHERE provider = 'google' ORDER BY updated_at DESC LIMIT 1`,

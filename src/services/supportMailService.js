@@ -64,6 +64,7 @@ export function isSupportMailConfigured() {
 export function getContactFormInbox() {
     return (
         process.env.CONTACT_FORM_TO?.trim() ||
+        process.env.EMAIL_USER?.trim() ||
         process.env.SUPPORT_EMAIL?.trim() ||
         process.env.ADMIN_ALERT_EMAIL?.trim() ||
         'equipoexpertoia@gmail.com'
