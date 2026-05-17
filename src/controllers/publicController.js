@@ -8,6 +8,7 @@ import {
     isContactFormMailConfigured,
     sendContactFormNotification,
 } from '../services/contactFormMailService.js';
+import { getContactFormInbox } from '../services/supportMailService.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
@@ -86,9 +87,10 @@ export const submitContactForm = async (req, res) => {
                 ? 'Billing — Enterprise inquiry'
                 : 'Montseaumate Landing Page';
 
+        const toEmail = getContactFormInbox();
         const result = await sendContactFormNotification({ name, email, message, source });
         console.log(
-            `[submitContactForm] ✅ Email sent via ${result.provider} to inbox`,
+            `[submitContactForm] ✅ Email sent via ${result.provider} → ${toEmail}`,
         );
 
         return res.status(200).json({

@@ -5,6 +5,27 @@ import { getValidMicrosoftToken } from '../utils/microsoftAuth.js';
 import { buildGmailRawMime, parseReplyToAddress } from '../utils/mimeMessage.js';
 import fetch from 'node-fetch';
 
+function parseIntegrationMetadata(raw) {
+    if (!raw) return {};
+    if (typeof raw === 'string') {
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return {};
+        }
+    }
+    return raw;
+}
+
+function integrationEmail(provider, meta, accountId) {
+    if (meta?.email) return meta.email;
+    if (provider === 'google') {
+        const m = /^gmail:(.+)$/i.exec(accountId || '');
+        if (m) return m[1];
+    }
+    return null;
+}
+
 /**
  * Service to handle dynamic email dispatching.
  * Prioritizes:
@@ -29,11 +50,18 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
             options.integrationsOnly
                 ? Promise.resolve({ rows: [] })
                 : pool.query('SELECT * FROM smtp_settings WHERE user_id = $1 AND is_active = true', [userId]),
-            pool.query('SELECT provider, metadata FROM integrations WHERE user_id = $1', [userId])
+            pool.query(
+                'SELECT provider, metadata, account_id FROM integrations WHERE user_id = $1',
+                [userId],
+            ),
         ]);
 
         const integrations = integrationsRes.rows.reduce((acc, curr) => {
-            acc[curr.provider] = curr.metadata || {};
+            const meta = parseIntegrationMetadata(curr.metadata);
+            acc[curr.provider] = {
+                ...meta,
+                email: integrationEmail(curr.provider, meta, curr.account_id),
+            };
             return acc;
         }, {});
 
@@ -63,64 +91,61 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
             return { success: true, messageId: info.messageId, provider: 'smtp' };
         }
 
-        // 2. Try Microsoft Integration
-        if (integrations.microsoft) {
-            const microsoftToken = await getValidMicrosoftToken(userId);
-            if (microsoftToken && integrations.microsoft.email) {
-                console.log(`[EmailService][${Date.now() - startTime}ms] Using Microsoft Graph`);
-                
-                const replyTo = parseReplyToAddress(mailOptions.replyTo);
-                const graphMessage = {
-                    subject: mailOptions.subject,
-                    body: {
-                        contentType: mailOptions.html ? 'HTML' : 'Text',
-                        content: mailOptions.html || mailOptions.text,
-                    },
-                    toRecipients: [{ emailAddress: { address: mailOptions.to } }],
-                };
-                if (replyTo) {
-                    graphMessage.replyTo = [
-                        { emailAddress: { address: replyTo.address, name: replyTo.name } },
-                    ];
-                }
+        // 2. Try Microsoft Integration (fall through to Google on failure)
+        if (integrations.microsoft?.email) {
+            try {
+                const microsoftToken = await getValidMicrosoftToken(userId);
+                if (microsoftToken) {
+                    console.log(`[EmailService][${Date.now() - startTime}ms] Using Microsoft Graph`);
 
-                const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${microsoftToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: graphMessage,
-                        saveToSentItems: 'true'
-                    })
-                });
+                    const replyTo = parseReplyToAddress(mailOptions.replyTo);
+                    const graphMessage = {
+                        subject: mailOptions.subject,
+                        body: {
+                            contentType: mailOptions.html ? 'HTML' : 'Text',
+                            content: mailOptions.html || mailOptions.text,
+                        },
+                        toRecipients: [{ emailAddress: { address: mailOptions.to } }],
+                    };
+                    if (replyTo) {
+                        graphMessage.replyTo = [
+                            { emailAddress: { address: replyTo.address, name: replyTo.name } },
+                        ];
+                    }
 
-                if (response.ok) {
-                    console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Microsoft Graph sent`);
-                    return { success: true, provider: 'microsoft' };
-                } else {
-                    const errData = await response.json();
-                    console.error('[EmailService] ❌ Microsoft Graph Failed:', errData);
-                    
-                    if (errData.error?.code === 'InvalidAuthenticationToken') {
-                        throw new Error('Microsoft access expired. Please reconnect in Integrations.');
+                    const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${microsoftToken}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            message: graphMessage,
+                            saveToSentItems: 'true',
+                        }),
+                    });
+
+                    if (response.ok) {
+                        console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Microsoft Graph sent`);
+                        return { success: true, provider: 'microsoft' };
                     }
-                    if (errData.error?.code === 'ErrorInvalidRecipients') {
-                        throw new Error('Invalid recipient email address.');
-                    }
-                    throw new Error(`Microsoft Error: ${errData.error?.message || 'Unknown error'}`);
+
+                    const errData = await response.json().catch(() => ({}));
+                    console.warn('[EmailService] Microsoft Graph failed, trying Gmail:', errData);
                 }
+            } catch (msErr) {
+                console.warn('[EmailService] Microsoft send error, trying Gmail:', msErr.message);
             }
         }
 
         // 3. Try Google Integration (Gmail API via Fetch for speed)
         if (integrations.google) {
             const { access_token: googleAccessToken } = await getValidGoogleTokens(userId);
-            if (googleAccessToken && integrations.google.email) {
+            const googleFrom = integrations.google.email;
+            if (googleAccessToken && googleFrom) {
                 console.log(`[EmailService][${Date.now() - startTime}ms] Using Gmail API (Direct Fetch)`);
 
-                const encodedMail = buildGmailRawMime(mailOptions, integrations.google.email);
+                const encodedMail = buildGmailRawMime(mailOptions, googleFrom);
 
                 const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
                     method: 'POST',

@@ -109,6 +109,21 @@ async function sendWithTransporter(bundle, mailOptions) {
     }
 }
 
+/** Gmail app password only — never CDMON / SUPPORT_SMTP (for contact form fallback). */
+export function isPlatformGmailConfigured() {
+    return Boolean(gmailConfig());
+}
+
+export async function sendPlatformGmail(mailOptions) {
+    const cfg = gmailConfig();
+    if (!cfg) {
+        const err = new Error('PLATFORM_GMAIL_NOT_CONFIGURED');
+        err.code = 'PLATFORM_GMAIL_NOT_CONFIGURED';
+        throw err;
+    }
+    return sendWithTransporter(getTransporter(cfg), mailOptions);
+}
+
 export async function sendSupportMail(mailOptions) {
     const primary = buildSmtpConfig();
     if (!primary) {
