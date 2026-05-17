@@ -30,6 +30,9 @@ export function getPlatformGmailTransporter() {
         cachedTransporter = nodemailer.createTransport({
             service: 'gmail',
             auth: { user, pass },
+            connectionTimeout: 10_000,
+            greetingTimeout: 10_000,
+            socketTimeout: 12_000,
         });
     }
     return cachedTransporter;

@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
 import csrf from 'csurf';
@@ -29,8 +28,14 @@ import { restoreActiveSessions } from './services/whatsappService.js';
 import pool from './db/pool.js';
 import { getCorsWhitelist } from './utils/corsWhitelist.js';
 
+import { loadProjectEnv } from './utils/loadEnv.js';
+import { isContactFormMailConfigured } from './services/contactFormMailService.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+const loadedEnvPath = loadProjectEnv();
+if (loadedEnvPath) {
+    console.log(`[env] Loaded ${loadedEnvPath}`);
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -411,6 +416,16 @@ const startServer = () => {
         
         // Restore WhatsApp Sessions
         restoreActiveSessions();
+
+        isContactFormMailConfigured()
+            .then((ok) => {
+                console.log(
+                    ok
+                        ? '   Contact form : email delivery configured'
+                        : '   Contact form : NOT configured — connect Gmail in Integrations or set EMAIL_USER/EMAIL_PASS',
+                );
+            })
+            .catch(() => {});
     });
 };
 
