@@ -39,6 +39,9 @@ const PORT = process.env.PORT || 5000;
 ['JWT_SECRET', 'DATABASE_URL'].forEach(key => {
     if (!process.env[key]) console.error(`❌ Missing env var: ${key} — server will not function correctly`);
 });
+if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error('❌ Missing EMAIL_USER / EMAIL_PASS — contact form and OTP emails will not send');
+}
 
 // ────────────────────────────────────────────────────────────
 // MIDDLEWARE

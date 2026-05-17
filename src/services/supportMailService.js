@@ -17,11 +17,22 @@ function gmailConfig() {
     };
 }
 
+function isPlaceholderSmtpPass(pass) {
+    if (!pass) return true;
+    const lower = pass.toLowerCase();
+    return (
+        lower.includes('your_') ||
+        lower.includes('your-') ||
+        lower.includes('changeme') ||
+        lower.includes('placeholder')
+    );
+}
+
 function supportSmtpConfig() {
     const supportHost = process.env.SUPPORT_SMTP_HOST?.trim();
     const supportUser = process.env.SUPPORT_SMTP_USER?.trim();
     const supportPass = process.env.SUPPORT_SMTP_PASS?.trim();
-    if (!supportHost || !supportUser || !supportPass) return null;
+    if (!supportHost || !supportUser || !supportPass || isPlaceholderSmtpPass(supportPass)) return null;
 
     const port = Number.parseInt(process.env.SUPPORT_SMTP_PORT || '465', 10);
     const secure = process.env.SUPPORT_SMTP_SECURE !== 'false';
@@ -107,21 +118,6 @@ async function sendWithTransporter(bundle, mailOptions) {
     } finally {
         clearTimeout(timer);
     }
-}
-
-/** Gmail app password only — never CDMON / SUPPORT_SMTP (for contact form fallback). */
-export function isPlatformGmailConfigured() {
-    return Boolean(gmailConfig());
-}
-
-export async function sendPlatformGmail(mailOptions) {
-    const cfg = gmailConfig();
-    if (!cfg) {
-        const err = new Error('PLATFORM_GMAIL_NOT_CONFIGURED');
-        err.code = 'PLATFORM_GMAIL_NOT_CONFIGURED';
-        throw err;
-    }
-    return sendWithTransporter(getTransporter(cfg), mailOptions);
 }
 
 export async function sendSupportMail(mailOptions) {

@@ -74,7 +74,7 @@ export const submitContactForm = async (req, res) => {
         console.log(`[submitContactForm] New message from ${name} (${email})`);
 
         if (!(await isContactFormMailConfigured())) {
-            console.error('[submitContactForm] No Gmail/Microsoft integration for contact form sender');
+            console.error('[submitContactForm] Platform Gmail not configured (EMAIL_USER / EMAIL_PASS on API server)');
             return res.status(503).json({
                 success: false,
                 code: 'contact_sender_not_configured',
@@ -108,6 +108,10 @@ export const submitContactForm = async (req, res) => {
             code = 'contact_integration_expired';
         } else if (/rate limit/i.test(msg)) {
             code = 'contact_rate_limited';
+        } else if (err.code === 'EAUTH' || /invalid login|authentication/i.test(msg)) {
+            code = 'contact_smtp_auth';
+        } else if (err.code === 'SMTP_TIMEOUT' || err.code === 'ETIMEDOUT') {
+            code = 'contact_smtp_timeout';
         }
         return res.status(503).json({
             success: false,
