@@ -8,6 +8,12 @@ import { sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
 import { retryAsync } from '../utils/retryAsync.js';
 import { insertActivityLog } from '../services/activityLogService.js';
 import { notifyAdminFireAndForget } from '../services/adminAlertService.js';
+import {
+    assessLeadFollowup,
+    FOLLOWUP_RETRY_COOLDOWN_MIN,
+    loadUserSendCapabilities,
+    shouldSendFollowupFailureAlert,
+} from '../services/followupDispatch.js';
 
 /**
  * Helper to calculate the next scheduled time for a follow-up step.
@@ -126,11 +132,66 @@ const startFollowupCron = () => {
     const processBatch = async (leads) => {
         if (leads.length === 0) return;
 
-        console.log(`[FollowupCron] 📦 Processing batch of ${leads.length} leads simultaneously`);
+        const userCaps = await loadUserSendCapabilities(leads.map((l) => l.user_id));
+
+        const toSend = [];
+        const toComplete = [];
+        const toSkip = [];
+
+        for (const lead of leads) {
+            lead._parsedSequence = parseFollowupSequence(lead.followup_sequence);
+            const caps = userCaps.get(String(lead.user_id)) || { email: false, whatsapp: false };
+            const assessment = assessLeadFollowup(lead, caps);
+            if (assessment.kind === 'complete') {
+                toComplete.push({ lead, reason: assessment.reason });
+            } else if (assessment.kind === 'skip') {
+                toSkip.push({ lead, reason: assessment.reason });
+            } else {
+                toSend.push({ lead, assessment });
+            }
+        }
+
+        if (toComplete.length > 0) {
+            const completeIds = toComplete.map((x) => x.lead.id);
+            await pool.query(
+                `UPDATE leads l
+                 SET followup_status = 'pending',
+                     followup_step_index = jsonb_array_length(s.followup_sequence),
+                     updated_at = NOW()
+                 FROM lead_followup_settings s
+                 WHERE l.id = ANY($1::uuid[])
+                   AND s.user_id = l.user_id`,
+                [completeIds],
+            );
+            console.log(`[FollowupCron] Marked ${completeIds.length} lead(s) follow-up complete (no send needed)`);
+        }
+
+        if (toSkip.length > 0) {
+            const skipIds = toSkip.map((x) => x.lead.id);
+            await pool.query(
+                `UPDATE leads
+                 SET followup_status = 'pending',
+                     last_followup_at = NOW(),
+                     updated_at = NOW()
+                 WHERE id = ANY($1::uuid[])`,
+                [skipIds],
+            );
+            const byReason = toSkip.reduce((acc, x) => {
+                acc[x.reason] = (acc[x.reason] || 0) + 1;
+                return acc;
+            }, {});
+            console.warn(`[FollowupCron] Skipped ${skipIds.length} lead(s) (cooldown ${FOLLOWUP_RETRY_COOLDOWN_MIN}m):`, byReason);
+        }
+
+        if (toSend.length === 0) {
+            console.log('[FollowupCron] No sendable leads in batch after preflight');
+            return;
+        }
+
+        console.log(`[FollowupCron] 📦 Sending ${toSend.length} lead(s) (${toComplete.length} complete, ${toSkip.length} skipped)`);
 
         const waSessions = new Map();
-
-        const leadIds = leads.map((l) => l.id);
+        const leadIds = toSend.map((x) => x.lead.id);
 
         await pool.query(
             `UPDATE leads SET followup_status = 'processing', updated_at = NOW()
@@ -141,19 +202,9 @@ const startFollowupCron = () => {
         let results = [];
         try {
             results = await Promise.all(
-                leads.map(async (lead) => {
+                toSend.map(async ({ lead, assessment }) => {
                     try {
-                        const sequence = parseFollowupSequence(lead.followup_sequence);
-
-                        if (sequence.length === 0) {
-                            return {
-                                lead,
-                                waSent: false,
-                                emailSent: false,
-                                stepIndex: lead.followup_step_index || 0,
-                            };
-                        }
-
+                        const sequence = lead._parsedSequence;
                         const currentIndex = lead.followup_step_index || 0;
                         const step = sequence[currentIndex];
 
@@ -171,7 +222,7 @@ const startFollowupCron = () => {
 
                         // ── TRY WhatsApp ─────────────────────────────────────────────────────
                         try {
-                            if (lead.whatsapp_enabled !== false && !waSessions.has(lead.user_id)) {
+                            if (assessment.canWa && !waSessions.has(lead.user_id)) {
                                 const intRes = await pool.query(
                                     `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
                                     [lead.user_id]
@@ -186,7 +237,7 @@ const startFollowupCron = () => {
                             }
 
                             const session = waSessions.get(lead.user_id);
-                            if (lead.whatsapp_enabled !== false && session?.isNative && session?.session?.status === 'connected' && lead.phone) {
+                            if (assessment.canWa && session?.isNative && session?.session?.status === 'connected' && lead.phone) {
                                 await retryAsync(
                                     () => whatsappService.sendWhatsAppMessage(lead.user_id, lead.phone, msg),
                                     { attempts: 3, delayMs: 1000 }
@@ -200,7 +251,7 @@ const startFollowupCron = () => {
                         // ── TRY Email ────────────────────────────────────────────────────────
                         try {
                             const emailAddr = sanitizeLeadEmailForPublic(lead.email);
-                            if (lead.email_enabled !== false && emailAddr) {
+                            if (assessment.canEmail && emailAddr) {
                                 const isFirstMessage = currentIndex === 0;
                                 const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
 
@@ -304,8 +355,12 @@ const startFollowupCron = () => {
             try {
                 const failedIds = failed.map((r) => r.lead.id);
                 await pool.query(
-                    `UPDATE leads SET followup_status = 'pending', updated_at = NOW() WHERE id = ANY($1::uuid[])`,
-                    [failedIds]
+                    `UPDATE leads
+                     SET followup_status = 'pending',
+                         last_followup_at = NOW(),
+                         updated_at = NOW()
+                     WHERE id = ANY($1::uuid[])`,
+                    [failedIds],
                 );
                 for (const r of failed) {
                     await insertActivityLog({
@@ -327,9 +382,19 @@ const startFollowupCron = () => {
                     byUser.set(r.lead.user_id, (byUser.get(r.lead.user_id) || 0) + 1);
                 }
                 for (const [uid, count] of byUser) {
+                    if (!shouldSendFollowupFailureAlert(uid)) {
+                        console.log(
+                            `[FollowupCron] Suppressed duplicate admin alert for user ${uid} (${count} failure(s))`,
+                        );
+                        continue;
+                    }
                     notifyAdminFireAndForget({
                         subject: `[Equipo Experto] ${count} follow-up(s) failed (user ${uid})`,
-                        text: `${count} automated follow-up message(s) could not be sent for user ${uid}. Check activity logs and integration health.`,
+                        text:
+                            `${count} automated follow-up message(s) could not be sent for user ${uid}. ` +
+                            `The workspace likely needs WhatsApp and/or Gmail connected under Integrations. ` +
+                            `Retries are spaced at least ${FOLLOWUP_RETRY_COOLDOWN_MIN} minutes apart. ` +
+                            `Check Dashboard → Activity and Integrations.`,
                     });
                 }
             } catch (resetFailErr) {
@@ -382,16 +447,22 @@ const startFollowupCron = () => {
             // Filter to only leads whose scheduled time has passed
             const dueLeads = result.rows.filter((lead) => {
                 const sequence = parseFollowupSequence(lead.followup_sequence);
-                if (sequence.length === 0) return false;
+                if (sequence.length === 0) return true;
 
                 const currentIndex = lead.followup_step_index || 0;
                 if (currentIndex >= sequence.length) return false;
 
                 const nextStep = sequence[currentIndex];
                 const lastAt = lead.last_followup_at || lead.created_at;
+                const lastMs = new Date(lastAt).getTime();
+
+                const retryReadyAt = lastMs + FOLLOWUP_RETRY_COOLDOWN_MIN * 60 * 1000;
+                if (Date.now() < retryReadyAt) {
+                    return false;
+                }
 
                 // If last_followup_at is far in the past (like our -1 year hack), it's due IMMEDIATELY
-                if (new Date(lastAt) < new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) {
+                if (lastMs < Date.now() - 30 * 24 * 60 * 60 * 1000) {
                     return true;
                 }
 

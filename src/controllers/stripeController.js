@@ -36,20 +36,20 @@ export const createCheckoutSession = async (req, res) => {
         if (!stripe) {
             return res.status(503).json({
                 success: false,
-                message: 'Stripe no está configurado. Añade STRIPE_SECRET_KEY y los price IDs en el servidor.',
+                code: 'stripe_not_configured',
             });
         }
 
-        const { priceKey } = req.body || {};
+        const { priceKey, cancelContext } = req.body || {};
         if (!['starter', 'growth', 'pro'].includes(priceKey)) {
-            return res.status(400).json({ success: false, message: 'Plan no válido.' });
+            return res.status(400).json({ success: false, code: 'stripe_invalid_plan' });
         }
 
         const priceId = priceIdForKey(priceKey);
         if (!priceId) {
             return res.status(503).json({
                 success: false,
-                message: 'Falta configurar STRIPE_PRICE_STARTER, STRIPE_PRICE_GROWTH o STRIPE_PRICE_PRO.',
+                code: 'stripe_price_ids_missing',
             });
         }
 
@@ -61,7 +61,7 @@ export const createCheckoutSession = async (req, res) => {
             mode: 'subscription',
             line_items: [{ price: priceId, quantity: 1 }],
             success_url: `${frontend}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${frontend}/dashboard/settings?tab=billing&checkout=cancelled`,
+            cancel_url: `${frontend}/checkout/${priceKey}?cancelled=1${cancelContext === 'settings' ? '&from=settings' : ''}`,
             client_reference_id: String(userId),
             customer_email: req.user.email || undefined,
             metadata: {
@@ -82,7 +82,7 @@ export const createCheckoutSession = async (req, res) => {
         console.error('[createCheckoutSession]', err.message);
         return res.status(500).json({
             success: false,
-            message: 'No se pudo iniciar el pago. Inténtalo de nuevo más tarde.',
+            code: 'stripe_checkout_failed',
         });
     }
 };
@@ -96,13 +96,13 @@ export const verifyCheckoutSession = async (req, res) => {
         const stripe = getStripe();
         const sessionId = req.query.session_id;
         if (!stripe || !sessionId) {
-            return res.status(400).json({ success: false, message: 'Sesión no válida.' });
+            return res.status(400).json({ success: false, code: 'stripe_session_invalid' });
         }
 
         const session = await stripe.checkout.sessions.retrieve(String(sessionId));
         const uid = String(req.user.id);
         if (String(session.client_reference_id) !== uid && String(session.metadata?.user_id) !== uid) {
-            return res.status(403).json({ success: false, message: 'Esta sesión no pertenece a tu cuenta.' });
+            return res.status(403).json({ success: false, code: 'stripe_session_forbidden' });
         }
 
         const paid =
@@ -127,7 +127,7 @@ export const verifyCheckoutSession = async (req, res) => {
         );
         const user = userRes.rows[0];
         if (!user) {
-            return res.status(404).json({ success: false, message: 'Usuario no encontrado.' });
+            return res.status(404).json({ success: false, code: 'stripe_user_not_found' });
         }
 
         const token = signAccessToken(user);
@@ -141,7 +141,7 @@ export const verifyCheckoutSession = async (req, res) => {
         });
     } catch (err) {
         console.error('[verifyCheckoutSession]', err.message);
-        return res.status(500).json({ success: false, message: 'No se pudo verificar el pago.' });
+        return res.status(500).json({ success: false, code: 'stripe_verify_failed' });
     }
 };
 

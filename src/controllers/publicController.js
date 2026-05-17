@@ -3,8 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
-import nodemailer from 'nodemailer';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
+import { getContactFormInbox, isSupportMailConfigured, sendSupportMail } from '../services/supportMailService.js';
+import { buildContactFormEmail } from '../utils/contactFormEmail.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 
@@ -69,63 +70,27 @@ export const submitContactForm = async (req, res) => {
 
         console.log(`[submitContactForm] New message from ${name} (${email})`);
 
-        // Use Gmail SMTP to send contact form notification
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
-        });
-
-        const toEmail = process.env.CONTACT_FORM_TO || 'equipoexpertoia@gmail.com';
-        const fromEmail = process.env.EMAIL_USER;
-        const fromName = 'Equipo Experto — Contact Form';
-
-        const mailOptions = {
-            from: `"${fromName}" <${fromEmail}>`,
-            to: toEmail,
-            replyTo: `"${name}" <${email}>`,
-            subject: `📩 New Message from ${name} — Landing Page`,
-            html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f9f9f9; border-radius: 8px; overflow: hidden;">
-                    <div style="background: #1a1a2e; padding: 24px 32px;">
-                        <h2 style="color: #ffffff; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 1px;">NEW CONTACT MESSAGE</h2>
-                        <p style="color: rgba(255,255,255,0.5); margin: 4px 0 0; font-size: 12px;">Montseaumate Landing Page</p>
-                    </div>
-                    <div style="padding: 32px; background: #ffffff;">
-                        <table style="width: 100%; border-collapse: collapse;">
-                            <tr>
-                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; width: 120px;">Name</td>
-                                <td style="padding: 10px 0; font-size: 14px; color: #111;">${name}</td>
-                            </tr>
-                            <tr style="border-top: 1px solid #f0f0f0;">
-                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888;">Email</td>
-                                <td style="padding: 10px 0; font-size: 14px; color: #111;"><a href="mailto:${email}" style="color: #4f46e5;">${email}</a></td>
-                            </tr>
-                            <tr style="border-top: 1px solid #f0f0f0;">
-                                <td style="padding: 10px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; vertical-align: top;">Message</td>
-                                <td style="padding: 10px 0; font-size: 14px; color: #111; line-height: 1.7;">${message.replace(/\n/g, '<br>')}</td>
-                            </tr>
-                        </table>
-                    </div>
-                    <div style="padding: 16px 32px; background: #f4f4f8; text-align: center;">
-                        <p style="margin: 0; font-size: 11px; color: #aaa;">Reply directly to this email to respond to ${name}</p>
-                    </div>
-                </div>
-            `,
-            text: `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
-        };
-
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-            console.error('[submitContactForm] EMAIL_USER/EMAIL_PASS not configured');
+        if (!isSupportMailConfigured()) {
+            console.error('[submitContactForm] SMTP not configured (EMAIL_* or SUPPORT_SMTP_*)');
             return res.status(503).json({
                 success: false,
+                code: 'contact_smtp_not_configured',
                 message: 'We could not send your message right now. Please email us directly or try again later.',
             });
         }
 
-        await transporter.sendMail(mailOptions);
+        const toEmail = getContactFormInbox();
+        const source =
+            req.body.source === 'billing'
+                ? 'Billing — Enterprise inquiry'
+                : 'Montseaumate Landing Page';
+
+        const mailOptions = {
+            ...buildContactFormEmail({ name, email, message, source }),
+            to: toEmail,
+        };
+
+        await sendSupportMail(mailOptions);
         console.log(`[submitContactForm] ✅ Email sent to ${toEmail}`);
 
         return res.status(200).json({
@@ -134,9 +99,16 @@ export const submitContactForm = async (req, res) => {
         });
 
     } catch (err) {
-        console.error('[submitContactForm] CRITICAL ERR:', err);
+        console.error('[submitContactForm] CRITICAL ERR:', err.code || err.message, err.response || '');
+        const code =
+            err.code === 'SMTP_TIMEOUT' || err.code === 'ETIMEDOUT' || err.code === 'ESOCKET'
+                ? 'contact_smtp_timeout'
+                : err.code === 'EAUTH'
+                  ? 'contact_smtp_auth'
+                  : 'contact_smtp_failed';
         return res.status(503).json({
             success: false,
+            code,
             message: 'Your message could not be sent. Check your connection and try again.',
         });
     }

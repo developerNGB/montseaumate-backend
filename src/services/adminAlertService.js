@@ -1,47 +1,46 @@
-import nodemailer from 'nodemailer';
+import crypto from 'crypto';
+import { getContactFormInbox, isSupportMailConfigured, sendSupportMail } from './supportMailService.js';
 
-const adminInbox = () =>
-    process.env.ADMIN_ALERT_EMAIL ||
-    process.env.CONTACT_FORM_TO ||
-    'equipoexpertoia@gmail.com';
+const adminInbox = () => getContactFormInbox();
 
-let transporter;
-
-function getTransporter() {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return null;
-    if (!transporter) {
-        transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS,
-            },
-        });
-    }
-    return transporter;
+function alertMailMeta(subject) {
+    const token = crypto.randomBytes(4).toString('hex');
+    const ts = Date.now();
+    return {
+        messageId: `<admin-alert.${ts}.${token}@equipoexperto.com>`,
+        headers: {
+            'X-Entity-Ref-ID': crypto.randomUUID(),
+            'X-Admin-Alert': 'true',
+            'X-Auto-Response-Suppress': 'All',
+        },
+        subject: subject?.includes(`#${token}`) ? subject : `${subject} [#${token}]`,
+    };
 }
 
 /**
  * Fire-and-forget alert to the operations inbox (contact form destination by default).
  */
 export async function notifyAdmin({ subject, text, html }) {
-    const transport = getTransporter();
     const to = adminInbox();
-    if (!transport || !to) {
+    if (!isSupportMailConfigured() || !to) {
         console.warn('[AdminAlert] Skipped (no SMTP or inbox):', subject);
         return false;
     }
     try {
-        await transport.sendMail({
-            from: `"Equipo Experto Alerts" <${process.env.EMAIL_USER}>`,
+        const baseSubject = subject || 'Equipo Experto — system alert';
+        const meta = alertMailMeta(baseSubject);
+        await sendSupportMail({
+            from: 'Equipo Experto Alerts',
             to,
-            subject: subject || 'Equipo Experto — system alert',
+            subject: meta.subject,
             text: text || '',
             html: html || undefined,
+            messageId: meta.messageId,
+            headers: meta.headers,
         });
         return true;
     } catch (err) {
-        console.error('[AdminAlert] send failed:', err.message);
+        console.error('[AdminAlert] send failed:', err.code || err.message);
         return false;
     }
 }
