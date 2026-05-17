@@ -84,8 +84,8 @@ export const submitContactForm = async (req, res) => {
 
         const source =
             req.body.source === 'billing'
-                ? 'Billing — Enterprise inquiry'
-                : 'Montseaumate Landing Page';
+                ? 'Equipo Experto billing inquiry'
+                : 'Equipo Experto contact form';
 
         const toEmail = getContactFormInbox();
         const result = await sendContactFormNotification({ name, email, message, source });

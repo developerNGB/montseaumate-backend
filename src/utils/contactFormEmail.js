@@ -13,7 +13,7 @@ function escapeHtml(value) {
  * @param {{ name: string, email: string, message: string, source?: string }} params
  * @returns {import('nodemailer').SendMailOptions}
  */
-export function buildContactFormEmail({ name, email, message, source = 'Montseaumate Landing Page' }) {
+export function buildContactFormEmail({ name, email, message, source = 'Equipo Experto contact form' }) {
     const safeName = escapeHtml(name);
     const safeEmail = escapeHtml(email);
     const safeMessage = escapeHtml(message).replace(/\n/g, '<br>');
@@ -28,11 +28,11 @@ export function buildContactFormEmail({ name, email, message, source = 'Montseau
     const token = crypto.randomBytes(4).toString('hex');
 
     const subjectLabel =
-        source === 'Billing — Enterprise inquiry' ? 'Billing' : 'Landing Page';
-    const subject = `New Message from ${name} — ${subjectLabel} — ${stamp}`;
+        source === 'Equipo Experto billing inquiry' ? 'billing' : 'contact form';
+    const subject = `New Message from ${name} - ${subjectLabel} - ${stamp}`;
 
     return {
-        from: 'Equipo Experto — Contact Form',
+        from: 'Equipo Experto - Contact Form',
         replyTo: `"${name}" <${email}>`,
         subject,
         html: `
