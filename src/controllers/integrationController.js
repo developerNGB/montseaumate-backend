@@ -61,17 +61,11 @@ export const connectProvider = async (req, res) => {
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
             if (clientId) {
-                // Real Google OAuth2 — least privilege: send mail only (no inbox read / full Gmail)
-                // gmail.send → Gmail API users.messages.send (see emailService.js)
-                // email + profile → oauth2 userinfo for connected account display
+                // Real Google OAuth2 â€” least privilege: send mail only (no inbox read / full Gmail)
+                // gmail.send â†’ Gmail API users.messages.send (see emailService.js)
+                // email + profile â†’ oauth2 userinfo for connected account display
                 // Note: automatic "reply detected" inbox scanning (followupCron) needs readonly and is skipped if list returns 403.
-                const scopes = [
-                    'email',
-                    'profile',
-                    'https://www.googleapis.com/auth/gmail.send'
-                ].join(' ');
-
-                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
+                const scopes = [ 'openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/gmail.send' ].join(' ');const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
                 return res.redirect(authUrl);
             } else {
                 // Mock OAuth Redirect
@@ -198,7 +192,7 @@ export const providerCallback = async (req, res) => {
             console.log('[Google Token Response]:', JSON.stringify(tokenData, null, 2));
 
             if (tokenData.error) {
-                throw new Error(`Google token error: ${tokenData.error} — ${tokenData.error_description || 'No description'}`);
+                throw new Error(`Google token error: ${tokenData.error} â€” ${tokenData.error_description || 'No description'}`);
             }
 
             if (!tokenData.access_token) {
@@ -482,3 +476,6 @@ export const renderMockOAuth = (req, res) => {
     `;
     res.send(html);
 };
+
+
+
