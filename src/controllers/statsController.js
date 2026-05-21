@@ -45,7 +45,10 @@ export const getDashboardStats = async (req, res) => {
             ),
             // 5. Recipe Config
             pool.query(
-                "SELECT is_active, lead_capture_active, COALESCE(review_next_step_done, FALSE) AS review_next_step_done, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done FROM review_funnel_settings WHERE user_id = $1",
+                `SELECT is_active, lead_capture_active, google_review_url,
+                    COALESCE(review_next_step_done, FALSE) AS review_next_step_done,
+                    COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done
+                 FROM review_funnel_settings WHERE user_id = $1`,
                 [userId]
             ),
             // 6. Follow-up Config
@@ -116,9 +119,22 @@ export const getDashboardStats = async (req, res) => {
         const totalFeedback = parseInt(feedbackRes.rows[0].count, 10);
         const avgRating = parseFloat(feedbackRes.rows[0].avg_rating || 0).toFixed(1);
 
-        const reviewFunnelActive = !!recipesRes.rows[0]?.is_active;
-        const leadCaptureActive = !!recipesRes.rows[0]?.lead_capture_active;
+        const rfRow = recipesRes.rows[0];
+        const reviewFunnelActive = !!rfRow?.is_active;
+        const leadCaptureActive = !!rfRow?.lead_capture_active;
         const leadFollowUpActive = !!followUpConfigRes.rows[0]?.is_active;
+
+        const reviewGoogleUrl = String(rfRow?.google_review_url || '').trim();
+        const reviewFunnelConfigured = !!rfRow && (
+            reviewFunnelActive ||
+            reviewGoogleUrl.length > 0 ||
+            rfRow.review_next_step_done === true
+        );
+        const leadCaptureConfigured = !!rfRow && (
+            leadCaptureActive ||
+            rfRow.capture_next_step_done === true
+        );
+        const leadFollowUpConfigured = followUpConfigRes.rows.length > 0;
 
         // Build 7-day sparkline arrays. Fill missing days with 0.
         // r.day is already a 'YYYY-MM-DD' string via TO_CHAR
@@ -190,10 +206,9 @@ export const getDashboardStats = async (req, res) => {
                 leadFollowUp: !!(followUpConfigRes.rows[0]?.followup_next_step_done),
             },
             configured: {
-                // More precise configuration checks
-                reviewFunnel: !!recipesRes.rows[0]?.is_active,
-                leadCapture: !!recipesRes.rows[0]?.lead_capture_active,
-                leadFollowUp: !!followUpConfigRes.rows[0]
+                reviewFunnel: reviewFunnelConfigured,
+                leadCapture: leadCaptureConfigured,
+                leadFollowUp: leadFollowUpConfigured,
             },
             lastTriggers: {
                 reviewFunnel: revTriggerRes.rows[0]?.last_active || null,

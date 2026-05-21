@@ -10,6 +10,14 @@ const getStripe = () => {
     return new Stripe(key);
 };
 
+const isStripeConfigured = () =>
+    !!(
+        process.env.STRIPE_SECRET_KEY &&
+        process.env.STRIPE_PRICE_STARTER &&
+        process.env.STRIPE_PRICE_GROWTH &&
+        process.env.STRIPE_PRICE_PRO
+    );
+
 const planIdFromPriceKey = (priceKey) => {
     if (priceKey === 'starter') return 'free';
     if (priceKey === 'growth') return 'Growth';
@@ -24,6 +32,96 @@ const priceIdForKey = (priceKey) => {
         pro: process.env.STRIPE_PRICE_PRO,
     };
     return map[priceKey] || null;
+};
+
+const planFromStripePriceId = (priceId) => {
+    if (!priceId) return null;
+    if (priceId === process.env.STRIPE_PRICE_STARTER) return 'free';
+    if (priceId === process.env.STRIPE_PRICE_GROWTH) return 'Growth';
+    if (priceId === process.env.STRIPE_PRICE_PRO) return 'Pro';
+    return null;
+};
+
+const frontendBaseUrl = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+
+async function persistStripeBilling(userId, { customerId, subscriptionId, appPlan }) {
+    const sets = [];
+    const vals = [];
+    let i = 1;
+
+    if (appPlan) {
+        sets.push(`plan = $${i++}`);
+        vals.push(appPlan);
+        sets.push('trial_ends_at = NULL');
+    }
+    if (customerId) {
+        sets.push(`stripe_customer_id = COALESCE(stripe_customer_id, $${i++})`);
+        vals.push(String(customerId));
+    }
+    if (subscriptionId !== undefined) {
+        sets.push(`stripe_subscription_id = $${i++}`);
+        vals.push(subscriptionId ? String(subscriptionId) : null);
+    }
+    sets.push('updated_at = NOW()');
+    vals.push(userId);
+
+    await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = $${i}`, vals);
+}
+
+/**
+ * GET /api/stripe/billing-status
+ */
+export const getBillingStatus = async (req, res) => {
+    try {
+        const configured = isStripeConfigured();
+        const row = await pool.query(
+            `SELECT plan, stripe_customer_id, stripe_subscription_id
+             FROM users WHERE id = $1`,
+            [req.user.id]
+        );
+        const u = row.rows[0];
+        return res.json({
+            success: true,
+            configured,
+            plan: u?.plan ?? 'free',
+            canManagePortal: configured && !!u?.stripe_customer_id,
+            hasStripeSubscription: !!u?.stripe_subscription_id,
+        });
+    } catch (err) {
+        console.error('[getBillingStatus]', err.message);
+        return res.status(500).json({ success: false, code: 'stripe_billing_status_failed' });
+    }
+};
+
+/**
+ * POST /api/stripe/create-portal-session
+ */
+export const createPortalSession = async (req, res) => {
+    try {
+        const stripe = getStripe();
+        if (!stripe) {
+            return res.status(503).json({ success: false, code: 'stripe_not_configured' });
+        }
+
+        const row = await pool.query(
+            'SELECT stripe_customer_id FROM users WHERE id = $1',
+            [req.user.id]
+        );
+        const customerId = row.rows[0]?.stripe_customer_id;
+        if (!customerId) {
+            return res.status(400).json({ success: false, code: 'stripe_no_customer' });
+        }
+
+        const session = await stripe.billingPortal.sessions.create({
+            customer: customerId,
+            return_url: `${frontendBaseUrl()}/dashboard/settings?tab=billing`,
+        });
+
+        return res.json({ success: true, url: session.url });
+    } catch (err) {
+        console.error('[createPortalSession]', err.message);
+        return res.status(500).json({ success: false, code: 'stripe_portal_failed' });
+    }
 };
 
 /**
@@ -55,15 +153,20 @@ export const createCheckoutSession = async (req, res) => {
 
         const appPlan = planIdFromPriceKey(priceKey);
         const userId = req.user.id;
-        const frontend = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+        const frontend = frontendBaseUrl();
 
-        const session = await stripe.checkout.sessions.create({
+        const userRow = await pool.query(
+            'SELECT email, stripe_customer_id FROM users WHERE id = $1',
+            [userId]
+        );
+        const existingCustomerId = userRow.rows[0]?.stripe_customer_id;
+
+        const sessionParams = {
             mode: 'subscription',
             line_items: [{ price: priceId, quantity: 1 }],
             success_url: `${frontend}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${frontend}/checkout/${priceKey}?cancelled=1${cancelContext === 'settings' ? '&from=settings' : ''}`,
             client_reference_id: String(userId),
-            customer_email: req.user.email || undefined,
             metadata: {
                 user_id: String(userId),
                 app_plan: appPlan,
@@ -73,9 +176,18 @@ export const createCheckoutSession = async (req, res) => {
                 metadata: {
                     user_id: String(userId),
                     app_plan: appPlan,
+                    price_key: priceKey,
                 },
             },
-        });
+        };
+
+        if (existingCustomerId) {
+            sessionParams.customer = existingCustomerId;
+        } else {
+            sessionParams.customer_email = req.user.email || userRow.rows[0]?.email || undefined;
+        }
+
+        const session = await stripe.checkout.sessions.create(sessionParams);
 
         return res.json({ success: true, url: session.url });
     } catch (err) {
@@ -99,7 +211,9 @@ export const verifyCheckoutSession = async (req, res) => {
             return res.status(400).json({ success: false, code: 'stripe_session_invalid' });
         }
 
-        const session = await stripe.checkout.sessions.retrieve(String(sessionId));
+        const session = await stripe.checkout.sessions.retrieve(String(sessionId), {
+            expand: ['subscription'],
+        });
         const uid = String(req.user.id);
         if (String(session.client_reference_id) !== uid && String(session.metadata?.user_id) !== uid) {
             return res.status(403).json({ success: false, code: 'stripe_session_forbidden' });
@@ -111,10 +225,15 @@ export const verifyCheckoutSession = async (req, res) => {
 
         const appPlan = session.metadata?.app_plan;
         if (paid && appPlan) {
-            await pool.query(
-                `UPDATE users SET plan = $1, trial_ends_at = NULL, updated_at = NOW() WHERE id = $2`,
-                [appPlan, req.user.id]
-            );
+            const subscriptionId =
+                typeof session.subscription === 'string'
+                    ? session.subscription
+                    : session.subscription?.id ?? null;
+            await persistStripeBilling(req.user.id, {
+                appPlan,
+                customerId: session.customer,
+                subscriptionId,
+            });
         }
 
         const userRes = await pool.query(
@@ -155,6 +274,39 @@ const buildSupportTransporter = () => {
     });
 };
 
+async function handleSubscriptionLifecycle(subscription, eventType) {
+    const userId = subscription.metadata?.user_id;
+    if (!userId) return;
+
+    const canceled =
+        eventType === 'customer.subscription.deleted' ||
+        subscription.status === 'canceled' ||
+        subscription.status === 'unpaid';
+
+    if (canceled) {
+        await persistStripeBilling(userId, {
+            appPlan: 'free',
+            subscriptionId: null,
+        });
+        console.log(`[Stripe] subscription ended → user ${userId} plan free`);
+        return;
+    }
+
+    if (['active', 'trialing', 'past_due'].includes(subscription.status)) {
+        const priceId = subscription.items?.data?.[0]?.price?.id;
+        const appPlan =
+            planFromStripePriceId(priceId) || subscription.metadata?.app_plan || null;
+        if (appPlan) {
+            await persistStripeBilling(userId, {
+                appPlan,
+                customerId: subscription.customer,
+                subscriptionId: subscription.id,
+            });
+            console.log(`[Stripe] subscription ${subscription.status} → user ${userId} plan ${appPlan}`);
+        }
+    }
+}
+
 /**
  * POST /api/webhooks/stripe (raw body)
  */
@@ -180,12 +332,20 @@ export const handleStripeWebhook = async (req, res) => {
             const userId = session.client_reference_id || session.metadata?.user_id;
             const appPlan = session.metadata?.app_plan;
             if (userId && appPlan) {
-                await pool.query(
-                    `UPDATE users SET plan = $1, trial_ends_at = NULL, updated_at = NOW() WHERE id = $2`,
-                    [appPlan, userId]
-                );
+                await persistStripeBilling(userId, {
+                    appPlan,
+                    customerId: session.customer,
+                    subscriptionId: session.subscription,
+                });
                 console.log(`[Stripe] checkout.session.completed → user ${userId} plan ${appPlan}`);
             }
+        }
+
+        if (
+            event.type === 'customer.subscription.updated' ||
+            event.type === 'customer.subscription.deleted'
+        ) {
+            await handleSubscriptionLifecycle(event.data.object, event.type);
         }
 
         if (event.type === 'invoice.payment_failed') {
