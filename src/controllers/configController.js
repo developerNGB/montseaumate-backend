@@ -472,79 +472,94 @@ export const toggleRecipe = async (req, res) => {
     }
 };
 
+/** Whether lead capture still counts as "hired" on the shared review_funnel_settings row. */
+function isLeadCaptureHiredRow(row) {
+    if (!row) return false;
+    return !!(row.lead_capture_active || row.capture_next_step_done);
+}
+
+/** Whether review funnel still counts as "hired" on the shared review_funnel_settings row. */
+function isReviewFunnelHiredRow(row) {
+    if (!row) return false;
+    const url = String(row.google_review_url || '').trim();
+    return !!(row.is_active || row.review_next_step_done || url.length > 0);
+}
+
 export const deleteAutomation = async (req, res) => {
     try {
         const { recipe, deleteRelatedData, deleteLogs } = req.body;
         const userId = req.user.id;
 
         if (recipe === 'reviewFunnel') {
-            // Fast delete: parallelize if multiple deletions needed
             const queries = [];
-            
-            const current = await pool.query('SELECT lead_capture_active FROM review_funnel_settings WHERE user_id = $1', [userId]);
-            const isLeadCaptureActive = current.rows.length > 0 ? current.rows[0].lead_capture_active : false;
 
-            if (isLeadCaptureActive) {
-                // Reset review funnel to setup state while keeping lead capture
+            const current = await pool.query(
+                `SELECT lead_capture_active, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done
+                 FROM review_funnel_settings WHERE user_id = $1`,
+                [userId]
+            );
+            const row = current.rows[0];
+            const captureStillHired = isLeadCaptureHiredRow(row);
+
+            if (captureStillHired) {
                 queries.push(pool.query(
-                    `UPDATE review_funnel_settings SET 
-                        is_active = false, 
-                        google_review_url = '', 
-                        notification_email = '', 
-                        auto_response_message = '',
-                        filtering_questions = '[]',
-                        updated_at = NOW() 
+                    `UPDATE review_funnel_settings SET
+                        is_active = FALSE,
+                        google_review_url = '',
+                        review_next_step_done = FALSE,
+                        updated_at = NOW()
                      WHERE user_id = $1`,
                     [userId]
                 ));
             } else {
-                // Both are inactive, delete entire record to reset to setup state
                 queries.push(pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]));
             }
 
             if (deleteRelatedData) {
                 queries.push(pool.query('DELETE FROM feedback WHERE user_id = $1', [userId]));
             }
-            
+
             await Promise.all(queries);
-        } 
+        }
         else if (recipe === 'leadCapture') {
             const queries = [];
-            const current = await pool.query('SELECT is_active FROM review_funnel_settings WHERE user_id = $1', [userId]);
-            const isReviewFunnelActive = current.rows.length > 0 ? current.rows[0].is_active : false;
 
-            if (isReviewFunnelActive) {
-                // Reset lead capture to setup state while keeping review funnel
+            const current = await pool.query(
+                `SELECT is_active, google_review_url,
+                        COALESCE(review_next_step_done, FALSE) AS review_next_step_done
+                 FROM review_funnel_settings WHERE user_id = $1`,
+                [userId]
+            );
+            const row = current.rows[0];
+            const reviewStillHired = isReviewFunnelHiredRow(row);
+
+            if (reviewStillHired) {
                 queries.push(pool.query(
-                    `UPDATE review_funnel_settings SET 
-                        lead_capture_active = false,
-                        notification_email = '',
-                        auto_response_message = '',
-                        filtering_questions = '[]',
+                    `UPDATE review_funnel_settings SET
+                        lead_capture_active = FALSE,
+                        capture_next_step_done = FALSE,
                         whatsapp_number_fallback = '',
-                        updated_at = NOW() 
+                        updated_at = NOW()
                      WHERE user_id = $1`,
                     [userId]
                 ));
             } else {
-                // Both are inactive, delete entire record to reset to setup state
                 queries.push(pool.query('DELETE FROM review_funnel_settings WHERE user_id = $1', [userId]));
             }
 
             if (deleteRelatedData) {
                 queries.push(pool.query("DELETE FROM leads WHERE user_id = $1 AND source ILIKE '%Capture%'", [userId]));
             }
-            
+
             await Promise.all(queries);
-        } 
+        }
         else if (recipe === 'leadFollowUp') {
-            // Delete entire record to reset to setup state
             const queries = [pool.query('DELETE FROM lead_followup_settings WHERE user_id = $1', [userId])];
-            
+
             if (deleteRelatedData) {
                 queries.push(pool.query('DELETE FROM leads WHERE user_id = $1', [userId]));
             }
-            
+
             await Promise.all(queries);
         } else {
             return res.status(400).json({ success: false, message: 'Unknown automation type.' });
