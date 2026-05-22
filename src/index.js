@@ -311,6 +311,25 @@ const runMigrations = async () => {
         await safeQuery('users.stripe_customer_id', `ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255)`);
         await safeQuery('users.stripe_subscription_id', `ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255)`);
 
+        await safeQuery('error_events_table', `
+            CREATE TABLE IF NOT EXISTS error_events (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                level VARCHAR(10) DEFAULT 'error',
+                code VARCHAR(100),
+                message TEXT,
+                stack TEXT,
+                context JSONB DEFAULT '{}',
+                user_id UUID,
+                route TEXT,
+                method VARCHAR(10),
+                ip VARCHAR(100),
+                resolved BOOLEAN DEFAULT FALSE,
+                resolved_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        await safeQuery('idx_error_events_created', `CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events (created_at DESC)`);
+
         await safeQuery('users.phone',                  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
         await safeQuery('idx_leads_user_id',            `CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)`);
         await safeQuery('idx_activity_logs_user_id',    `CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)`);
