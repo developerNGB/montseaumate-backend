@@ -3,6 +3,7 @@ import nodemailer from 'nodemailer';
 import pool from '../db/pool.js';
 import { signAccessToken } from '../utils/accessToken.js';
 import { setJwtCookie } from '../utils/cookieHelpers.js';
+import { enrichUserForClient } from '../utils/billingAccess.js';
 
 const getStripe = () => {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -306,7 +307,7 @@ export const verifyCheckoutSession = async (req, res) => {
             `SELECT id, name, email, company_name, phone, plan, role, status, created_at,
                     COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
                     COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
-                    trial_ends_at
+                    trial_ends_at, stripe_subscription_id, stripe_customer_id
              FROM users WHERE id = $1`,
             [req.user.id]
         );
@@ -321,7 +322,7 @@ export const verifyCheckoutSession = async (req, res) => {
         return res.json({
             success: true,
             paid,
-            user,
+            user: enrichUserForClient(user),
             token,
         });
     } catch (err) {

@@ -5,7 +5,7 @@ import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 import { signAccessToken } from '../utils/accessToken.js';
-import { withAdminFlag } from '../utils/adminAccess.js';
+import { enrichUserForClient } from '../utils/billingAccess.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -130,7 +130,8 @@ export const register = async (req, res) => {
         const result = await pool.query(
             `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
              VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '30 days')
-             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, trial_ends_at`,
+             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, trial_ends_at,
+                       stripe_subscription_id, stripe_customer_id`,
             [name.trim(), emailLower, password_hash, company_name.trim()]
         );
 
@@ -155,7 +156,7 @@ export const register = async (req, res) => {
                 'Account verified and created successfully. Connect Google in Dashboard → Integrations ' +
                 'to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
             token, // Keep for backward compatibility during transition
-            user: withAdminFlag(newUser),
+            user: enrichUserForClient(newUser),
         });
     } catch (err) {
         console.error('[register] Error:', err.message);
@@ -183,7 +184,8 @@ export const login = async (req, res) => {
         let result;
         try {
             result = await pool.query(
-                `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled
+                `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled,
+                        trial_ends_at, stripe_subscription_id, stripe_customer_id
                  FROM users WHERE email = $1`,
                 [email.toLowerCase().trim()]
             );
@@ -236,7 +238,7 @@ export const login = async (req, res) => {
             success: true,
             message: 'Login successful.',
             token, // Keep for backward compatibility during transition
-            user: withAdminFlag(safeUser),
+            user: enrichUserForClient(safeUser),
         });
     } catch (err) {
         console.error('Error:', err);
@@ -255,7 +257,8 @@ export const getProfile = async (req, res) => {
     try {
         console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed
+            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
+                    trial_ends_at, stripe_subscription_id, stripe_customer_id
              FROM users
              WHERE id = $1`,
             [req.user.id]
@@ -270,7 +273,7 @@ export const getProfile = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            user: withAdminFlag(result.rows[0]),
+            user: enrichUserForClient(result.rows[0]),
         });
     } catch (err) {
         console.error('[getProfile] CRITICAL:', err.message, err.stack);
@@ -308,7 +311,8 @@ export const updateProfile = async (req, res) => {
             `UPDATE users
              SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, onboarding_completed = COALESCE($5, onboarding_completed), updated_at = NOW()
              WHERE id = $6
-             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed`,
+             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
+                       trial_ends_at, stripe_subscription_id, stripe_customer_id`,
             [
                 company_name ? company_name.trim() : null,
                 email.toLowerCase().trim(),
@@ -322,7 +326,7 @@ export const updateProfile = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Profile updated successfully.',
-            user: withAdminFlag(result.rows[0]),
+            user: enrichUserForClient(result.rows[0]),
         });
     } catch (err) {
         console.error('[updateProfile] Error:', err.message);
@@ -626,7 +630,7 @@ export const googleLogin = async (req, res) => {
             result = await pool.query(
                 `SELECT id, name, email, company_name, phone, plan, role, status,
                         COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
-                        trial_ends_at
+                        trial_ends_at, stripe_subscription_id, stripe_customer_id
                  FROM users WHERE lower(email) = $1
                  LIMIT 1`,
                 [emailLower]
@@ -634,7 +638,8 @@ export const googleLogin = async (req, res) => {
         } catch (e) {
             if (e.code !== '42703') throw e; // undefined_column — column not yet migrated
             result = await pool.query(
-                `SELECT id, name, email, company_name, phone, plan, role, status
+                `SELECT id, name, email, company_name, phone, plan, role, status,
+                        trial_ends_at, stripe_subscription_id, stripe_customer_id
                  FROM users WHERE lower(email) = $1
                  LIMIT 1`,
                 [emailLower]
@@ -666,7 +671,7 @@ export const googleLogin = async (req, res) => {
                 ? 'Google sign-in successful. Connect Gmail once under Dashboard → Integrations if you still need it for sending outbound mail.'
                 : 'Google sign-in successful.',
             token,
-            user: withAdminFlag(user),
+            user: enrichUserForClient(user),
             isNewUser,
         });
     } catch (err) {
@@ -708,7 +713,8 @@ export const updatePlan = async (req, res) => {
         const result = await pool.query(
             `UPDATE users SET plan = $1, trial_ends_at = NULL, updated_at = NOW()
              WHERE id = $2
-             RETURNING id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled, trial_ends_at`,
+             RETURNING id, name, email, company_name, phone, plan, role, status, weekly_reports_enabled, trial_ends_at,
+                       stripe_subscription_id, stripe_customer_id`,
             [plan, req.user.id]
         );
 
@@ -723,7 +729,7 @@ export const updatePlan = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: `Plan upgraded to ${plan} successfully!`,
-            user: withAdminFlag(updatedUser),
+            user: enrichUserForClient(updatedUser),
             token
         });
     } catch (err) {

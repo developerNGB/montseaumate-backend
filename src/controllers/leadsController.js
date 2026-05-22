@@ -6,6 +6,7 @@ import { sendDynamicEmail } from '../services/emailService.js';
 import { sanitizeLeadRow, sanitizeLeadEmailForPublic, sanitizeLeads } from '../utils/leadPrivacy.js';
 import { retryAsync } from '../utils/retryAsync.js';
 import { normalizeLeadGroup, DEFAULT_LEAD_GROUP } from '../utils/leadGroups.js';
+import { upsertLeadFolder, getFolderMessage } from '../utils/leadFolders.js';
 
 /**
  * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
@@ -111,6 +112,78 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
 /** Exported for activity-log retry and internal tooling */
 export const dispatchFollowupForLead = dispatchFollowup;
 
+/**
+ * GET /api/leads/folders — folder cards with contact counts + per-folder message
+ */
+export const getLeadFolders = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await pool.query(
+            `SELECT
+                COALESCE(NULLIF(TRIM(l.lead_group), ''), $2) AS name,
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE l.lead_status = 'New')::int AS new_count,
+                COUNT(*) FILTER (WHERE l.lead_status = 'Contacted')::int AS contacted_count,
+                MAX(l.created_at) AS last_lead_at,
+                f.followup_message,
+                f.source_hint,
+                f.created_at AS folder_created_at
+             FROM leads l
+             LEFT JOIN lead_folders f
+               ON f.user_id = l.user_id
+              AND f.name = COALESCE(NULLIF(TRIM(l.lead_group), ''), $2)
+             WHERE l.user_id = $1
+             GROUP BY 1, f.followup_message, f.source_hint, f.created_at
+             ORDER BY MAX(l.created_at) DESC`,
+            [userId, DEFAULT_LEAD_GROUP]
+        );
+
+        const orphanFolders = await pool.query(
+            `SELECT f.name, f.followup_message, f.source_hint, f.created_at AS folder_created_at,
+                    0::int AS total, 0::int AS new_count, 0::int AS contacted_count, f.updated_at AS last_lead_at
+             FROM lead_folders f
+             WHERE f.user_id = $1
+               AND NOT EXISTS (
+                 SELECT 1 FROM leads l
+                 WHERE l.user_id = $1
+                   AND COALESCE(NULLIF(TRIM(l.lead_group), ''), $2) = f.name
+               )`,
+            [userId, DEFAULT_LEAD_GROUP]
+        );
+
+        const folders = [...result.rows, ...orphanFolders.rows].sort(
+            (a, b) => new Date(b.last_lead_at || 0) - new Date(a.last_lead_at || 0)
+        );
+
+        return res.status(200).json({ success: true, folders });
+    } catch (err) {
+        console.error('[getLeadFolders] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+/**
+ * PUT /api/leads/folders/message — save follow-up copy for one folder
+ */
+export const updateFolderMessage = async (req, res) => {
+    try {
+        const { name, followup_message: followupMessage } = req.body;
+        if (!name?.trim()) {
+            return res.status(400).json({ success: false, message: 'Folder name is required.' });
+        }
+        const folderName = await upsertLeadFolder(req.user.id, name, {
+            followupMessage: followupMessage ?? '',
+        });
+        return res.status(200).json({
+            success: true,
+            folder: { name: folderName, followup_message: followupMessage?.trim() || null },
+        });
+    } catch (err) {
+        console.error('[updateFolderMessage] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 export const getLeads = async (req, res) => {
     try {
         const { search, source, status, group, startDate, endDate } = req.query;
@@ -208,8 +281,18 @@ export const updateLeadStatus = async (req, res) => {
 
 export const importLeads = async (req, res) => {
     try {
-        const { leads, skipCapture, leadGroup: importDefaultGroup } = req.body;
-        const defaultGroup = normalizeLeadGroup(importDefaultGroup, DEFAULT_LEAD_GROUP);
+        const {
+            leads,
+            skipCapture,
+            leadGroup: importDefaultGroup,
+            folderName,
+            followupMessage,
+            sourceHint,
+        } = req.body;
+        const defaultGroup = normalizeLeadGroup(
+            folderName || importDefaultGroup,
+            DEFAULT_LEAD_GROUP
+        );
         if (!Array.isArray(leads) || leads.length === 0) {
             return res.status(400).json({ success: false, message: 'No leads provided' });
         }
@@ -344,6 +427,13 @@ export const importLeads = async (req, res) => {
 
         const savedLeads = insertRes.rows;
 
+        if (savedLeads.length > 0) {
+            await upsertLeadFolder(userId, defaultGroup, {
+                followupMessage,
+                sourceHint: sourceHint || savedLeads[0]?.source || 'import',
+            });
+        }
+
         // Respond immediately — messaging is fire-and-forget
         res.status(200).json({
             success: true,
@@ -352,6 +442,8 @@ export const importLeads = async (req, res) => {
             fileDups,
             dbDups,
             total: leads.length,
+            folderName: defaultGroup,
+            followupMessage: followupMessage?.trim() || null,
         });
 
         if (savedLeads.length === 0) return;
@@ -386,6 +478,7 @@ export const triggerLeadFollowup = async (req, res) => {
     const startTime = Date.now();
     try {
         const { id } = req.params;
+        const { message: messageOverride } = req.body || {};
         
         // Fetch lead and ALL relevant user configs
         const query = `
@@ -427,6 +520,16 @@ export const triggerLeadFollowup = async (req, res) => {
 
         if (!messageToSend) {
             messageToSend = 'Hi {name}! Thanks for reaching out.';
+        }
+
+        if (messageOverride?.trim()) {
+            messageToSend = messageOverride.trim();
+        } else {
+            const folderMsg = await getFolderMessage(
+                req.user.id,
+                lead.lead_group || DEFAULT_LEAD_GROUP
+            );
+            if (folderMsg) messageToSend = folderMsg;
         }
 
         // Determine subject: First message vs follow-up
@@ -486,19 +589,47 @@ export const triggerLeadFollowup = async (req, res) => {
 
 export const triggerBulkFollowup = async (req, res) => {
     try {
-        const { ids } = req.body;
-        
+        const { ids, message: messageOverride, group: groupFilter } = req.body;
+
+        const resolveMessageForLead = async (lead, cfg) => {
+            if (messageOverride?.trim()) return messageOverride.trim();
+            const folderMsg = await getFolderMessage(
+                req.user.id,
+                lead.lead_group || DEFAULT_LEAD_GROUP
+            );
+            if (folderMsg) return folderMsg;
+            const sequence =
+                typeof cfg?.followup_sequence === 'string'
+                    ? JSON.parse(cfg.followup_sequence)
+                    : cfg?.followup_sequence || [];
+            if (sequence.length > 0) {
+                const idx = lead.followup_step_index || 0;
+                if (sequence[idx]?.message) return sequence[idx].message;
+            }
+            return cfg?.message || 'Hi {name}! Thanks for reaching out.';
+        };
+
         // If IDs are provided, trigger for those specific leads
         if (Array.isArray(ids) && ids.length > 0) {
             const cfgRes = await pool.query(
-                `SELECT message, followup_sequence, is_active FROM lead_followup_settings WHERE user_id = $1`,
+                `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
+                        lfs.whatsapp_enabled, lfs.email_enabled,
+                        u.company_name,
+                        rfs.google_review_url, rfs.automation_id
+                 FROM lead_followup_settings lfs
+                 JOIN users u ON u.id = lfs.user_id
+                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+                 WHERE lfs.user_id = $1`,
                 [req.user.id]
             );
             const cfg = cfgRes.rows[0];
-            
-            // Get leads
+
             const leadsRes = await pool.query(
-                `SELECT * FROM leads WHERE user_id = $1 AND id = ANY($2)`,
+                `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
+                 FROM leads l
+                 JOIN users u ON u.id = l.user_id
+                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+                 WHERE l.user_id = $1 AND l.id = ANY($2)`,
                 [req.user.id, ids]
             );
 
@@ -507,7 +638,16 @@ export const triggerBulkFollowup = async (req, res) => {
                 return res.status(200).json({ success: true, message: 'No leads found', triggered: 0 });
             }
 
-            // Update them to 'Contacted' and set last_followup_at
+            let sent = 0;
+            for (const lead of leads) {
+                const msg = await resolveMessageForLead(lead, cfg);
+                const channel = await dispatchFollowup(req.user.id, lead, msg, 'Message from Our Team', {
+                    whatsappEnabled: cfg?.whatsapp_enabled,
+                    emailEnabled: cfg?.email_enabled,
+                });
+                if (channel !== 'none') sent++;
+            }
+
             await pool.query(
                 `UPDATE leads SET 
                     lead_status = 'Contacted',
@@ -515,21 +655,61 @@ export const triggerBulkFollowup = async (req, res) => {
                     last_followup_at = NOW(),
                     updated_at = NOW() 
                  WHERE id = ANY($1) AND user_id = $2`,
-                [leads.map(l => l.id), req.user.id]
+                [leads.map((l) => l.id), req.user.id]
             );
 
-            // Log activity
             await pool.query(
                 `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
                  VALUES ($1, $2, $3, 'Success', $4, NOW())`,
-                [req.user.id, 'Lead Follow-up', 'Bulk Trigger', `${leads.length} follow-up messages sent`]
+                [req.user.id, 'Lead Follow-up', 'Bulk Trigger', `${sent}/${leads.length} follow-up messages sent`]
             );
 
-            return res.status(200).json({ 
-                success: true, 
-                message: `${leads.length} follow-ups sent`,
-                triggered: leads.length 
+            return res.status(200).json({
+                success: true,
+                message: `${sent} follow-ups sent`,
+                triggered: sent,
             });
+        }
+
+        if (groupFilter?.trim()) {
+            const cfgRes = await pool.query(
+                `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
+                        lfs.whatsapp_enabled, lfs.email_enabled
+                 FROM lead_followup_settings lfs WHERE user_id = $1`,
+                [req.user.id]
+            );
+            const cfg = cfgRes.rows[0];
+            const folderName = normalizeLeadGroup(groupFilter);
+            const leadsRes = await pool.query(
+                `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
+                 FROM leads l
+                 JOIN users u ON u.id = l.user_id
+                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+                 WHERE l.user_id = $1
+                   AND COALESCE(NULLIF(TRIM(l.lead_group), ''), $2) = $3
+                   AND l.lead_status != 'Contacted'`,
+                [req.user.id, DEFAULT_LEAD_GROUP, folderName]
+            );
+            const leads = leadsRes.rows;
+            if (!leads.length) {
+                return res.status(200).json({ success: true, message: 'No leads to message in this folder', triggered: 0 });
+            }
+            let sent = 0;
+            for (const lead of leads) {
+                const msg = await resolveMessageForLead(lead, cfg);
+                const channel = await dispatchFollowup(req.user.id, lead, msg, 'Message from Our Team', {
+                    whatsappEnabled: cfg?.whatsapp_enabled,
+                    emailEnabled: cfg?.email_enabled,
+                });
+                if (channel !== 'none') sent++;
+            }
+            await pool.query(
+                `UPDATE leads SET lead_status = 'Contacted', followup_step_index = followup_step_index + 1,
+                 last_followup_at = NOW(), updated_at = NOW()
+                 WHERE id = ANY($1) AND user_id = $2`,
+                [leads.map((l) => l.id), req.user.id]
+            );
+            return res.status(200).json({ success: true, message: `${sent} messages sent`, triggered: sent });
         }
 
         // Fallback to original logic (recent imports)

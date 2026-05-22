@@ -13,7 +13,7 @@ export function isAdminUser(user) {
     return allowList.includes(String(user.email || '').toLowerCase());
 }
 
-/** Attach is_admin for API responses consumed by the dashboard. */
+/** @deprecated Use enrichUserForClient from billingAccess.js */
 export function withAdminFlag(user) {
     if (!user || typeof user !== 'object') return user;
     return { ...user, is_admin: isAdminUser(user) };

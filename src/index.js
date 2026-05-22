@@ -23,6 +23,8 @@ import smtpRoutes from './routes/smtpRoutes.js';
 import apolloRoutes from './routes/apolloRoutes.js';
 import stripeRoutes from './routes/stripeRoutes.js';
 import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
+import authenticate from './middleware/authenticate.js';
+import requireActiveSubscription from './middleware/requireActiveSubscription.js';
 import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
@@ -206,21 +208,24 @@ app.use('/auth', authRoutes);
 
 app.use('/api/stripe', stripeRoutes);
 
-// Protected Dashboard Endpoints
-app.use('/api/reports', reportRoutes);
-app.use('/api/integrations', integrationRoutes);
-app.use('/api/config', configRoutes);
-app.use('/api/activity-logs', activityLogsRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/leads', leadsRoutes);
-app.use('/api/marketplace', marketplaceRoutes);
-app.use('/api/stats', statsRoutes);
-app.use('/api/feedback', feedbackRoutes);
-app.use('/api/whatsapp', whatsappRoutes);
-app.use('/api/translations', translationRoutes);
-app.use('/api/smtp', smtpRoutes);
-app.use('/api/apollo', apolloRoutes);
-app.use('/api/apify', apolloRoutes);  // Apify scrape routes (same controller)
+// Protected dashboard APIs — require Stripe subscription (admins exempt)
+const dashboardApi = express.Router();
+dashboardApi.use(authenticate, requireActiveSubscription);
+dashboardApi.use('/reports', reportRoutes);
+dashboardApi.use('/integrations', integrationRoutes);
+dashboardApi.use('/config', configRoutes);
+dashboardApi.use('/activity-logs', activityLogsRoutes);
+dashboardApi.use('/admin', adminRoutes);
+dashboardApi.use('/leads', leadsRoutes);
+dashboardApi.use('/marketplace', marketplaceRoutes);
+dashboardApi.use('/stats', statsRoutes);
+dashboardApi.use('/feedback', feedbackRoutes);
+dashboardApi.use('/whatsapp', whatsappRoutes);
+dashboardApi.use('/translations', translationRoutes);
+dashboardApi.use('/smtp', smtpRoutes);
+dashboardApi.use('/apollo', apolloRoutes);
+dashboardApi.use('/apify', apolloRoutes);
+app.use('/api', dashboardApi);
 
 // Public Facing Funnels (No Auth)
 app.use('/api', publicRoutes);
@@ -438,6 +443,20 @@ const runMigrations = async () => {
         await safeQuery('leads.last_followup_at',    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
         await safeQuery('leads.lead_group',          `ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_group VARCHAR(100) DEFAULT 'General'`);
         await safeQuery('leads.lead_group_index',    `CREATE INDEX IF NOT EXISTS idx_leads_user_group ON leads(user_id, lead_group)`);
+
+        await safeQuery('lead_folders.table', `
+            CREATE TABLE IF NOT EXISTS lead_folders (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name VARCHAR(100) NOT NULL,
+                followup_message TEXT,
+                source_hint VARCHAR(80),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(user_id, name)
+            )
+        `);
+        await safeQuery('lead_folders.user_index', `CREATE INDEX IF NOT EXISTS idx_lead_folders_user ON lead_folders(user_id)`);
 
         // lead_followup_settings column expansion
         await safeQuery('lead_followup.whatsapp_enabled',    `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
