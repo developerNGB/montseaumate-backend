@@ -566,6 +566,14 @@ export const verifyResetToken = async (req, res) => {
  */
 export const googleLogin = async (req, res) => {
     try {
+        if (!process.env.JWT_SECRET?.trim()) {
+            console.error('[googleLogin] JWT_SECRET is not set on the server');
+            return res.status(503).json({
+                success: false,
+                message: 'Server authentication is not configured. Set JWT_SECRET in Render environment variables.',
+            });
+        }
+
         const { access_token } = req.body;
 
         if (!access_token) {
@@ -662,6 +670,20 @@ export const googleLogin = async (req, res) => {
         });
     } catch (err) {
         console.error('[googleLogin] Unexpected error:', err.message, err.code, err.stack?.split('\n').slice(0, 4).join(' | '));
+
+        if (err.code === '42P01') {
+            return res.status(503).json({
+                success: false,
+                message: 'Database is not initialized. Redeploy the latest API or run npm run db:init against production DATABASE_URL.',
+            });
+        }
+        if (err.message?.includes('JWT_SECRET')) {
+            return res.status(503).json({
+                success: false,
+                message: 'Server authentication is not configured. Set JWT_SECRET in Render environment variables.',
+            });
+        }
+
         return res.status(500).json({
             success: false,
             message: 'An unexpected error occurred during Google sign-in. Please try again.',

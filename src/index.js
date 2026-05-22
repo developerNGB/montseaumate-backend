@@ -181,7 +181,25 @@ app.get('/', (req, res) => {
         version: '1.0.0',
         status: 'running',
         timestamp: new Date().toISOString(),
+    });
 });
+
+/** Public readiness — helps verify Render env + DB after account migration */
+app.get('/api/health', async (_req, res) => {
+    const checks = {
+        jwtSecret: Boolean(process.env.JWT_SECRET?.trim()),
+        databaseUrl: Boolean(process.env.DATABASE_URL?.trim()),
+        usersTable: false,
+        dbError: null,
+    };
+    try {
+        await pool.query('SELECT 1 FROM users LIMIT 1');
+        checks.usersTable = true;
+    } catch (err) {
+        checks.dbError = err.code === '42P01' ? 'users_table_missing' : err.message;
+    }
+    const ok = checks.jwtSecret && checks.databaseUrl && checks.usersTable;
+    res.status(ok ? 200 : 503).json({ success: ok, checks });
 });
 // Auth endpoints
 app.use('/auth', authRoutes);
@@ -279,14 +297,17 @@ const runMigrations = async () => {
                 plan            VARCHAR(50) DEFAULT 'free',
                 role            VARCHAR(50) DEFAULT 'owner',
                 status          VARCHAR(50) DEFAULT 'active',
+                trial_ends_at   TIMESTAMPTZ,
+                weekly_reports_enabled BOOLEAN DEFAULT TRUE,
                 created_at      TIMESTAMPTZ DEFAULT NOW(),
                 updated_at      TIMESTAMPTZ DEFAULT NOW()
             )
         `);
         await safeQuery('core.users_email_idx', `CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`);
+        await safeQuery('users.trial_ends_at', `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ`);
+        await safeQuery('users.weekly_reports_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
 
         await safeQuery('users.phone',                  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
-        await safeQuery('users.weekly_reports_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('idx_leads_user_id',            `CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)`);
         await safeQuery('idx_activity_logs_user_id',    `CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs(user_id)`);
         await safeQuery('idx_feedback_user_id',         `CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id)`);
