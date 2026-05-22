@@ -299,6 +299,8 @@ const runMigrations = async () => {
                 status          VARCHAR(50) DEFAULT 'active',
                 trial_ends_at   TIMESTAMPTZ,
                 weekly_reports_enabled BOOLEAN DEFAULT TRUE,
+                stripe_customer_id VARCHAR(255),
+                stripe_subscription_id VARCHAR(255),
                 created_at      TIMESTAMPTZ DEFAULT NOW(),
                 updated_at      TIMESTAMPTZ DEFAULT NOW()
             )
@@ -306,6 +308,8 @@ const runMigrations = async () => {
         await safeQuery('core.users_email_idx', `CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`);
         await safeQuery('users.trial_ends_at', `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ`);
         await safeQuery('users.weekly_reports_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('users.stripe_customer_id', `ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255)`);
+        await safeQuery('users.stripe_subscription_id', `ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_subscription_id VARCHAR(255)`);
 
         await safeQuery('users.phone',                  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
         await safeQuery('idx_leads_user_id',            `CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)`);

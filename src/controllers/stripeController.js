@@ -44,6 +44,13 @@ const planFromStripePriceId = (priceId) => {
 
 const frontendBaseUrl = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
+/** Free trial days on Stripe Checkout (card collected today, first charge after trial). Default 30. Set 0 to disable. */
+const stripeTrialDays = () => {
+    const n = parseInt(process.env.STRIPE_TRIAL_DAYS ?? '30', 10);
+    if (!Number.isFinite(n) || n < 0) return 30;
+    return Math.min(Math.max(n, 0), 90);
+};
+
 async function persistStripeBilling(userId, { customerId, subscriptionId, appPlan }) {
     const sets = [];
     const vals = [];
@@ -155,10 +162,23 @@ export const createCheckoutSession = async (req, res) => {
         const userId = req.user.id;
         const frontend = frontendBaseUrl();
 
-        const userRow = await pool.query(
-            'SELECT email, stripe_customer_id FROM users WHERE id = $1',
-            [userId]
-        );
+        let userRow;
+        try {
+            userRow = await pool.query(
+                'SELECT email, stripe_customer_id FROM users WHERE id = $1',
+                [userId]
+            );
+        } catch (dbErr) {
+            if (dbErr.code === '42703') {
+                console.error('[createCheckoutSession] users.stripe_customer_id column missing — redeploy latest API');
+                return res.status(503).json({
+                    success: false,
+                    code: 'stripe_db_schema',
+                    message: 'Billing database columns are missing. Redeploy the API or run db:init.',
+                });
+            }
+            throw dbErr;
+        }
         const existingCustomerId = userRow.rows[0]?.stripe_customer_id;
 
         const sessionParams = {
@@ -178,6 +198,9 @@ export const createCheckoutSession = async (req, res) => {
                     app_plan: appPlan,
                     price_key: priceKey,
                 },
+                ...(stripeTrialDays() > 0
+                    ? { trial_period_days: stripeTrialDays() }
+                    : {}),
             },
         };
 
@@ -187,14 +210,56 @@ export const createCheckoutSession = async (req, res) => {
             sessionParams.customer_email = req.user.email || userRow.rows[0]?.email || undefined;
         }
 
-        const session = await stripe.checkout.sessions.create(sessionParams);
+        let session;
+        try {
+            session = await stripe.checkout.sessions.create(sessionParams);
+        } catch (stripeErr) {
+            const msg = stripeErr?.raw?.message || stripeErr?.message || 'Stripe error';
+            console.error('[createCheckoutSession] Stripe:', msg, stripeErr?.code);
+
+            // Stale customer from old Stripe account — retry without customer id
+            if (
+                existingCustomerId &&
+                (stripeErr?.code === 'resource_missing' ||
+                    /no such customer/i.test(msg))
+            ) {
+                delete sessionParams.customer;
+                sessionParams.customer_email =
+                    req.user.email || userRow.rows[0]?.email || undefined;
+                session = await stripe.checkout.sessions.create(sessionParams);
+                await pool.query(
+                    'UPDATE users SET stripe_customer_id = NULL, stripe_subscription_id = NULL WHERE id = $1',
+                    [userId]
+                );
+            } else {
+                const hint =
+                    /no such price/i.test(msg) || stripeErr?.code === 'resource_missing'
+                        ? 'stripe_price_invalid'
+                        : /api key/i.test(msg)
+                          ? 'stripe_key_invalid'
+                          : 'stripe_checkout_failed';
+                return res.status(400).json({
+                    success: false,
+                    code: hint,
+                    message:
+                        hint === 'stripe_price_invalid'
+                            ? 'Stripe price ID does not match this API key (test vs live, or wrong price_ id in Render).'
+                            : hint === 'stripe_key_invalid'
+                              ? 'Invalid STRIPE_SECRET_KEY on the server.'
+                              : 'Could not start checkout. Check Stripe keys and price IDs on Render.',
+                });
+            }
+        }
 
         return res.json({ success: true, url: session.url });
     } catch (err) {
-        console.error('[createCheckoutSession]', err.message);
+        console.error('[createCheckoutSession]', err.message, err.code);
         return res.status(500).json({
             success: false,
             code: 'stripe_checkout_failed',
+            message: err.code === '42703'
+                ? 'Billing database columns are missing. Redeploy the API.'
+                : 'Could not start checkout. Please try again.',
         });
     }
 };
@@ -221,6 +286,7 @@ export const verifyCheckoutSession = async (req, res) => {
 
         const paid =
             session.payment_status === 'paid' ||
+            session.payment_status === 'no_payment_required' ||
             session.status === 'complete';
 
         const appPlan = session.metadata?.app_plan;
