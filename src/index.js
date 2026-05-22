@@ -436,6 +436,8 @@ const runMigrations = async () => {
         // leads table expansion
         await safeQuery('leads.followup_step_index', `ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
         await safeQuery('leads.last_followup_at',    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
+        await safeQuery('leads.lead_group',          `ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_group VARCHAR(100) DEFAULT 'General'`);
+        await safeQuery('leads.lead_group_index',    `CREATE INDEX IF NOT EXISTS idx_leads_user_group ON leads(user_id, lead_group)`);
 
         // lead_followup_settings column expansion
         await safeQuery('lead_followup.whatsapp_enabled',    `ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);

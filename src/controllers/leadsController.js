@@ -5,6 +5,7 @@ import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { sanitizeLeadRow, sanitizeLeadEmailForPublic, sanitizeLeads } from '../utils/leadPrivacy.js';
 import { retryAsync } from '../utils/retryAsync.js';
+import { normalizeLeadGroup, DEFAULT_LEAD_GROUP } from '../utils/leadGroups.js';
 
 /**
  * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
@@ -112,7 +113,7 @@ export const dispatchFollowupForLead = dispatchFollowup;
 
 export const getLeads = async (req, res) => {
     try {
-        const { search, source, status, startDate, endDate } = req.query;
+        const { search, source, status, group, startDate, endDate } = req.query;
         let query = `SELECT * FROM leads WHERE user_id = $1`;
         const params = [req.user.id];
         let paramIndex = 2;
@@ -135,6 +136,12 @@ export const getLeads = async (req, res) => {
             paramIndex++;
         }
 
+        if (group) {
+            query += ` AND lead_group = $${paramIndex}`;
+            params.push(group);
+            paramIndex++;
+        }
+
         if (startDate) {
             query += ` AND created_at >= $${paramIndex}`;
             params.push(startDate);
@@ -150,7 +157,18 @@ export const getLeads = async (req, res) => {
         query += ` ORDER BY created_at DESC`;
 
         const result = await pool.query(query, params);
-        return res.status(200).json({ success: true, leads: sanitizeLeads(result.rows) });
+
+        const groupsRes = await pool.query(
+            `SELECT DISTINCT COALESCE(NULLIF(TRIM(lead_group), ''), $2) AS lead_group
+             FROM leads WHERE user_id = $1 ORDER BY 1`,
+            [req.user.id, DEFAULT_LEAD_GROUP]
+        );
+
+        return res.status(200).json({
+            success: true,
+            leads: sanitizeLeads(result.rows),
+            groups: groupsRes.rows.map((r) => r.lead_group),
+        });
     } catch (err) {
         console.error('[getLeads] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });
@@ -160,16 +178,21 @@ export const getLeads = async (req, res) => {
 export const updateLeadStatus = async (req, res) => {
     try {
         const { id } = req.params;
-        const { lead_status, notes } = req.body;
+        const { lead_status, notes, lead_group } = req.body;
+        const normalizedGroup =
+            lead_group !== undefined && lead_group !== null
+                ? normalizeLeadGroup(lead_group)
+                : undefined;
 
         const result = await pool.query(
             `UPDATE leads 
              SET lead_status = COALESCE($1, lead_status), 
                  notes = COALESCE($2, notes),
+                 lead_group = COALESCE($3, lead_group),
                  updated_at = NOW()
-             WHERE id = $3 AND user_id = $4
+             WHERE id = $4 AND user_id = $5
              RETURNING *`,
-            [lead_status, notes, id, req.user.id]
+            [lead_status, notes, normalizedGroup ?? null, id, req.user.id]
         );
 
         if (result.rows.length === 0) {
@@ -185,7 +208,8 @@ export const updateLeadStatus = async (req, res) => {
 
 export const importLeads = async (req, res) => {
     try {
-        const { leads, skipCapture } = req.body;
+        const { leads, skipCapture, leadGroup: importDefaultGroup } = req.body;
+        const defaultGroup = normalizeLeadGroup(importDefaultGroup, DEFAULT_LEAD_GROUP);
         if (!Array.isArray(leads) || leads.length === 0) {
             return res.status(400).json({ success: false, message: 'No leads provided' });
         }
@@ -300,20 +324,22 @@ export const importLeads = async (req, res) => {
         const phones   = newLeads.map(l => (l.phone || '').trim());
         const notesArr = newLeads.map(l => l.notes || '');
         const sources  = newLeads.map(l => l.source || 'Imported');
+        const groups   = newLeads.map(l => normalizeLeadGroup(l.lead_group || l.group, defaultGroup));
 
         const insertRes = await pool.query(
             `INSERT INTO leads
-                 (user_id, full_name, email, phone, notes, source, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
+                 (user_id, full_name, email, phone, notes, source, lead_group, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
              SELECT $1,
                     unnest($2::text[]),
                     unnest($3::text[]),
                     unnest($4::text[]),
                     unnest($5::text[]),
                     unnest($6::text[]),
-                    'New', true, 0, $7, NOW()
+                    unnest($7::text[]),
+                    'New', true, 0, $8, NOW()
              ON CONFLICT DO NOTHING
              RETURNING *`,
-            [userId, names, emails, phones, notesArr, sources, lastFollowupAt]
+            [userId, names, emails, phones, notesArr, sources, groups, lastFollowupAt]
         );
 
         const savedLeads = insertRes.rows;

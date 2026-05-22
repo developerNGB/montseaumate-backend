@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool from '../db/pool.js';
+import { normalizeLeadGroup } from '../utils/leadGroups.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import {
@@ -295,9 +296,10 @@ export const submitFeedback = async (req, res) => {
 
         // 2. If contact requested, also save as a Lead
         if (contact_requested && (customer_email || customer_phone)) {
+            const feedbackGroup = normalizeLeadGroup(req.body.lead_group, 'Reviews');
             await pool.query(
-                `INSERT INTO leads (user_id, full_name, email, phone, message, source, consent_given, marketing_consent)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                `INSERT INTO leads (user_id, full_name, email, phone, message, source, lead_group, consent_given, marketing_consent)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
                 [
                     config.user_id,
                     customer_name || 'Anonymous Feedback',
@@ -305,6 +307,7 @@ export const submitFeedback = async (req, res) => {
                     customer_phone || '',
                     `Feedback Comment: ${comment}`,
                     `Feedback Funnel: ${automation_id}`,
+                    feedbackGroup,
                     true,
                     !!contact_requested
                 ]
@@ -430,7 +433,8 @@ export const submitFeedback = async (req, res) => {
 export const submitLead = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { full_name, email, phone, message, filtering_responses, consent_given, marketing_consent } = req.body;
+        const { full_name, email, phone, message, filtering_responses, consent_given, marketing_consent, lead_group } = req.body;
+        const captureGroup = normalizeLeadGroup(lead_group, 'Captured');
         console.log(`[submitLead] Incoming lead for ${automation_id}:`, { full_name, email, marketing_consent });
 
         if (!full_name || !email || !phone) {
@@ -466,9 +470,9 @@ export const submitLead = async (req, res) => {
 
         // 1. Save Lead to DB
         const leadInsert = await pool.query(
-            `INSERT INTO leads (user_id, full_name, email, phone, message, filtering_responses, source, consent_given, marketing_consent, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'Public Link', $7, $8, $9) RETURNING id`,
-            [user_id, full_name, email, phone, message || '', JSON.stringify(filtering_responses || {}), !!consent_given, !!marketing_consent, current_date]
+            `INSERT INTO leads (user_id, full_name, email, phone, message, filtering_responses, source, lead_group, consent_given, marketing_consent, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'Public Link', $7, $8, $9, $10) RETURNING id`,
+            [user_id, full_name, email, phone, message || '', JSON.stringify(filtering_responses || {}), captureGroup, !!consent_given, !!marketing_consent, current_date]
         );
         const lead_id = leadInsert.rows[0].id;
 
