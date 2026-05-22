@@ -266,6 +266,25 @@ const safeQuery = async (label, sql) => {
 
 const runMigrations = async () => {
     try {
+        // Fresh Render Postgres has no schema — create core auth tables before ALTERs
+        await safeQuery('core.pgcrypto', `CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+        await safeQuery('core.users_table', `
+            CREATE TABLE IF NOT EXISTS users (
+                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name            VARCHAR(255) NOT NULL,
+                email           VARCHAR(255) UNIQUE NOT NULL,
+                password_hash   VARCHAR(255) NOT NULL DEFAULT '',
+                company_name    VARCHAR(255) DEFAULT '',
+                phone           VARCHAR(50),
+                plan            VARCHAR(50) DEFAULT 'free',
+                role            VARCHAR(50) DEFAULT 'owner',
+                status          VARCHAR(50) DEFAULT 'active',
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                updated_at      TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        await safeQuery('core.users_email_idx', `CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`);
+
         await safeQuery('users.phone',                  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50)`);
         await safeQuery('users.weekly_reports_enabled', `ALTER TABLE users ADD COLUMN IF NOT EXISTS weekly_reports_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('idx_leads_user_id',            `CREATE INDEX IF NOT EXISTS idx_leads_user_id ON leads(user_id)`);
