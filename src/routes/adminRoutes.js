@@ -10,5 +10,7 @@ router.use(authenticate, requireAdmin);
 router.get('/errors', getErrors);
 router.patch('/errors/:id', express.json(), resolveError);
 
-router.get('/errors/test', (req, res) => { throw new Error('Test error capture'); });\n\nexport default router;
+router.get('/errors/test', (req, res) => { throw new Error('Test error capture'); });
+
+export default router;
 
