@@ -5,6 +5,7 @@ import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 import { signAccessToken } from '../utils/accessToken.js';
+import { withAdminFlag } from '../utils/adminAccess.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -154,7 +155,7 @@ export const register = async (req, res) => {
                 'Account verified and created successfully. Connect Google in Dashboard → Integrations ' +
                 'to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
             token, // Keep for backward compatibility during transition
-            user: newUser,
+            user: withAdminFlag(newUser),
         });
     } catch (err) {
         console.error('[register] Error:', err.message);
@@ -235,7 +236,7 @@ export const login = async (req, res) => {
             success: true,
             message: 'Login successful.',
             token, // Keep for backward compatibility during transition
-            user: safeUser,
+            user: withAdminFlag(safeUser),
         });
     } catch (err) {
         console.error('Error:', err);
@@ -269,7 +270,7 @@ export const getProfile = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            user: result.rows[0],
+            user: withAdminFlag(result.rows[0]),
         });
     } catch (err) {
         console.error('[getProfile] CRITICAL:', err.message, err.stack);
@@ -321,7 +322,7 @@ export const updateProfile = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Profile updated successfully.',
-            user: result.rows[0],
+            user: withAdminFlag(result.rows[0]),
         });
     } catch (err) {
         console.error('[updateProfile] Error:', err.message);
@@ -665,7 +666,7 @@ export const googleLogin = async (req, res) => {
                 ? 'Google sign-in successful. Connect Gmail once under Dashboard → Integrations if you still need it for sending outbound mail.'
                 : 'Google sign-in successful.',
             token,
-            user,
+            user: withAdminFlag(user),
             isNewUser,
         });
     } catch (err) {
@@ -722,7 +723,7 @@ export const updatePlan = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: `Plan upgraded to ${plan} successfully!`,
-            user: updatedUser,
+            user: withAdminFlag(updatedUser),
             token
         });
     } catch (err) {
