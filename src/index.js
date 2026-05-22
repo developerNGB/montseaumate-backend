@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
@@ -10,7 +10,7 @@ import authRoutes from './routes/authRoutes.js';
 import integrationRoutes from './routes/integrationRoutes.js';
 import configRoutes from './routes/configRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
-import activityLogsRoutes from './routes/activityLogsRoutes.js';
+import activityLogsRoutes from './routes/activityLogsRoutes.js';import adminRoutes from './routes/adminRoutes.js';
 import leadsRoutes from './routes/leadsRoutes.js';
 import marketplaceRoutes from './routes/marketplaceRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
@@ -25,7 +25,7 @@ import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
 import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
-import pool from './db/pool.js';
+import pool from './db/pool.js';import { insertErrorEvent } from './services/errorLogService.js';
 import { getCorsWhitelist } from './utils/corsWhitelist.js';
 
 import { loadProjectEnv } from './utils/loadEnv.js';
@@ -42,20 +42,20 @@ const PORT = process.env.PORT || 5000;
 
 // Warn on startup if critical env vars are missing
 ['JWT_SECRET', 'DATABASE_URL'].forEach(key => {
-    if (!process.env[key]) console.error(`❌ Missing env var: ${key} — server will not function correctly`);
+    if (!process.env[key]) console.error(`âŒ Missing env var: ${key} â€” server will not function correctly`);
 });
 if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error('❌ Missing EMAIL_USER / EMAIL_PASS — contact form and OTP emails will not send');
+    console.error('âŒ Missing EMAIL_USER / EMAIL_PASS â€” contact form and OTP emails will not send');
 }
 
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // MIDDLEWARE
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Trust Render's proxy for headers (needed for rate-limiting and reliable CORS)
 app.set('trust proxy', 1);
 
-// CORS — set CORS_ORIGINS (comma-separated) in production; see server/src/utils/corsWhitelist.js
+// CORS â€” set CORS_ORIGINS (comma-separated) in production; see server/src/utils/corsWhitelist.js
 const whitelist = getCorsWhitelist();
 
 // Handle preflight OPTIONS requests BEFORE any other middleware
@@ -100,7 +100,7 @@ app.use(cors({
     optionsSuccessStatus: 204 // Proper status code for OPTIONS
 }));
 
-// Stripe webhook — raw body required for signature verification (must be before express.json)
+// Stripe webhook â€” raw body required for signature verification (must be before express.json)
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
 // Parse JSON bodies (limit to 10kb to prevent abuse)
@@ -109,9 +109,9 @@ app.use(express.json({ limit: '10kb' }));
 // Remove fingerprinting header
 app.disable('x-powered-by');
 
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // RATE LIMITING
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // General API rate limit - 100 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
@@ -168,9 +168,9 @@ app.get('/csrf-token', (req, res) => {
     res.json({ csrfToken: req.csrfToken() });
 });
 
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // ROUTES
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Health check
 app.get('/', (req, res) => {
@@ -180,9 +180,8 @@ app.get('/', (req, res) => {
         version: '1.0.0',
         status: 'running',
         timestamp: new Date().toISOString(),
-    });
 });
-
+});
 // Auth endpoints
 app.use('/auth', authRoutes);
 
@@ -193,6 +192,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/integrations', integrationRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/activity-logs', activityLogsRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/leads', leadsRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/stats', statsRoutes);
@@ -206,22 +206,36 @@ app.use('/api/apify', apolloRoutes);  // Apify scrape routes (same controller)
 // Public Facing Funnels (No Auth)
 app.use('/api', publicRoutes);
 
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 404 handler
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((req, res) => {
     res.status(404).json({
         success: false,
+
         message: `Route ${req.method} ${req.originalUrl} not found.`,
     });
 });
-
-// ────────────────────────────────────────────────────────────
 // Global error handler
-// ────────────────────────────────────────────────────────────
-app.use((err, req, res, next) => {
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+app.use(async (err, req, res, next) => {
     console.error('[UnhandledError]', err);
-    
+    try {
+        await insertErrorEvent({
+            level: 'error',
+            code: err?.code || null,
+            message: err?.message || 'Unhandled server error',
+            stack: err?.stack?.slice(0, 20000) || null,
+            context: { url: req.originalUrl, headers: { 'user-agent': req.headers['user-agent'] } },
+            userId: req?.user?.id || null,
+            route: req.originalUrl,
+            method: req.method,
+            ip: req.ip,
+        });
+    } catch (e) {
+        console.error('[ErrorPersist]', e.message);
+    }
+
     // Ensure CORS headers are attached on errors too
     const origin = req.headers.origin;
     if (whitelist.includes(origin) || !origin) {
@@ -235,17 +249,17 @@ app.use((err, req, res, next) => {
         success: false,
         message: err.message || 'An unexpected server error occurred.',
         debug: process.env.NODE_ENV === 'production' ? undefined : err.stack
-    });
+});
 });
 
-// ────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Startup Migrations: Ensure schema and indices are optimized
-// Run each migration independently — a single failure must never block the rest
+// Run each migration independently â€” a single failure must never block the rest
 const safeQuery = async (label, sql) => {
     try {
         await pool.query(sql);
     } catch (err) {
-        console.error(`⚠️  Migration skipped [${label}]: ${err.message}`);
+        console.error(`âš ï¸  Migration skipped [${label}]: ${err.message}`);
     }
 };
 
@@ -393,12 +407,12 @@ const runMigrations = async () => {
         await safeQuery('lead_capture.whatsapp_enabled',      `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('lead_capture.email_enabled',         `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
 
-        console.log('✅ Startup migrations & performance indices verified.');
+        console.log('âœ… Startup migrations & performance indices verified.');
         
         // Finalize Startup
         startServer();
     } catch (err) {
-        console.error('❌ Startup migration failed:', err.message);
+        console.error('âŒ Startup migration failed:', err.message);
         // Start server anyway to allow debugging/logs
         startServer();
     }
@@ -406,7 +420,7 @@ const runMigrations = async () => {
 
 const startServer = () => {
     app.listen(PORT, () => {
-        console.log(`\n🚀 Equipo Experto API running on http://localhost:${PORT}`);
+        console.log(`\nðŸš€ Equipo Experto API running on http://localhost:${PORT}`);
         console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
         console.log(`   CORS origin : ${process.env.FRONTEND_URL || 'http://localhost:5173'}\n`);
 
@@ -427,7 +441,7 @@ const startServer = () => {
                 console.log(
                     ok
                         ? `   Contact form send  : configured (sender user ${senderId || 'n/a'})`
-                        : '   Contact form send  : NOT configured — connect Gmail in Dashboard → Integrations',
+                        : '   Contact form send  : NOT configured â€” connect Gmail in Dashboard â†’ Integrations',
                 );
             })
             .catch(() => {});
@@ -435,3 +449,6 @@ const startServer = () => {
 };
 
 runMigrations();
+
+
+

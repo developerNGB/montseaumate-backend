@@ -1,4 +1,4 @@
-import pool from './pool.js';
+﻿import pool from './pool.js';
 
 /**
  * Initialize database tables.
@@ -8,7 +8,7 @@ const initDB = async () => {
     const client = await pool.connect();
 
     try {
-        console.log('🔧 Initializing database tables (Consolidated Schema)...\n');
+        console.log('ðŸ”§ Initializing database tables (Consolidated Schema)...\n');
 
         await client.query('BEGIN');
 
@@ -38,7 +38,7 @@ const initDB = async () => {
         await client.query(
             `CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL`
         );
-        console.log('  ✅ users table ready');
+        console.log('  âœ… users table ready');
 
         // 2. OTP VERIFICATIONS
         await client.query(`
@@ -50,7 +50,7 @@ const initDB = async () => {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
-        console.log('  ✅ otp_verifications table ready');
+        console.log('  âœ… otp_verifications table ready');
 
         // 3. INTEGRATIONS
         await client.query(`
@@ -70,7 +70,7 @@ const initDB = async () => {
         `);
         await client.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`);
         await client.query(`ALTER TABLE integrations ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'`);
-        console.log('  ✅ integrations table ready');
+        console.log('  âœ… integrations table ready');
 
         await client.query(`
             CREATE TABLE IF NOT EXISTS whatsapp_sessions (
@@ -82,7 +82,7 @@ const initDB = async () => {
             );
         `);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_whatsapp_sessions_user_id ON whatsapp_sessions(user_id)`);
-        console.log('  ✅ whatsapp_sessions table ready');
+        console.log('  âœ… whatsapp_sessions table ready');
 
         // 4. REVIEW FUNNEL SETTINGS
         await client.query(`
@@ -105,7 +105,7 @@ const initDB = async () => {
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS auto_response_message TEXT`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS filtering_questions JSONB DEFAULT '[]'`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_number_fallback VARCHAR(50)`);
-        console.log('  ✅ review_funnel_settings table ready');
+        console.log('  âœ… review_funnel_settings table ready');
 
         // 5. FEEDBACK TABLE
         await client.query(`
@@ -125,7 +125,7 @@ const initDB = async () => {
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
-        console.log('  ✅ feedback table ready');
+        console.log('  âœ… feedback table ready');
 
         // 6. LEADS TABLE
         await client.query(`
@@ -157,10 +157,10 @@ const initDB = async () => {
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS filtering_responses JSONB DEFAULT '{}'`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
-        // Unique indices for fast dedup — partial so empty strings don't conflict
+        // Unique indices for fast dedup â€” partial so empty strings don't conflict
         await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_email ON leads (user_id, lower(email)) WHERE email IS NOT NULL AND email != ''`);
         await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_phone ON leads (user_id, regexp_replace(phone, '[^0-9]', '', 'g')) WHERE phone IS NOT NULL AND phone != ''`);
-        console.log('  ✅ leads table ready');
+        console.log('  âœ… leads table ready');
 
         // 7. LEAD FOLLOWUP SETTINGS
         await client.query(`
@@ -181,7 +181,7 @@ const initDB = async () => {
             );
         `);
         await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_active BOOLEAN DEFAULT false`);
-        console.log('  ✅ lead_followup_settings table ready');
+        console.log('  âœ… lead_followup_settings table ready');
 
         // 8. SMTP SETTINGS (Custom Domain Email)
         await client.query(`
@@ -200,7 +200,7 @@ const initDB = async () => {
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
-        console.log('  ✅ smtp_settings table ready');
+        console.log('  âœ… smtp_settings table ready');
 
         // 9. HELPERS (Resets, Logs, History)
         await client.query(`
@@ -233,13 +233,32 @@ const initDB = async () => {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
-        console.log('  ✅ helper tables ready');
-
+        console.log('  âœ… helper tables ready');\n        // 10. ERROR EVENTS (Admin-only Control Panel)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS error_events (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                level VARCHAR(10) DEFAULT 'error',
+                code VARCHAR(100),
+                message TEXT,
+                stack TEXT,
+                context JSONB DEFAULT '{}',
+                user_id UUID,
+                route TEXT,
+                method VARCHAR(10),
+                ip VARCHAR(100),
+                resolved BOOLEAN DEFAULT FALSE,
+                resolved_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events (created_at DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_level ON error_events (level)`);
+        console.log('  ✅ error_events table ready');
         await client.query('COMMIT');
-        console.log('\n🎉 Database consolidated initialization complete!');
+        console.log('\nðŸŽ‰ Database consolidated initialization complete!');
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('❌ Database initialization failed:', err);
+        console.error('âŒ Database initialization failed:', err);
         throw err;
     } finally {
         client.release();
@@ -251,3 +270,5 @@ initDB().catch((err) => {
     console.error('Unhandled initialization error:', err);
     process.exit(1);
 });
+
+
