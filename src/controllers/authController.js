@@ -5,7 +5,7 @@ import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 import { signAccessToken } from '../utils/accessToken.js';
-import { enrichUserForClient } from '../utils/billingAccess.js';
+import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAccess.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -156,7 +156,7 @@ export const register = async (req, res) => {
                 'Account verified and created successfully. Connect Google in Dashboard → Integrations ' +
                 'to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
             token, // Keep for backward compatibility during transition
-            user: enrichUserForClient(newUser),
+            user: enrichUserForNewSignup(newUser),
         });
     } catch (err) {
         console.error('[register] Error:', err.message);
@@ -671,7 +671,7 @@ export const googleLogin = async (req, res) => {
                 ? 'Google sign-in successful. Connect Gmail once under Dashboard → Integrations if you still need it for sending outbound mail.'
                 : 'Google sign-in successful.',
             token,
-            user: enrichUserForClient(user),
+            user: isNewUser ? enrichUserForNewSignup(user) : enrichUserForClient(user),
             isNewUser,
         });
     } catch (err) {
