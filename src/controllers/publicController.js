@@ -251,6 +251,7 @@ export const submitFeedback = async (req, res) => {
             customer_name,
             customer_email,
             customer_phone,
+            filtering_responses,
             ui_language,
         } = req.body;
 
@@ -332,7 +333,8 @@ export const submitFeedback = async (req, res) => {
                     contact_requested,
                     customer_name,
                     customer_email,
-                    customer_phone
+                    customer_phone,
+                    filtering_responses: filtering_responses || {},
                 })
             ]
         );
