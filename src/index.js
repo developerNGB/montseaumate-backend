@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 
 import authRoutes from './routes/authRoutes.js';
 import integrationRoutes from './routes/integrationRoutes.js';
+import integrationOAuthRoutes from './routes/integrationOAuthRoutes.js';
 import configRoutes from './routes/configRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
 import activityLogsRoutes from './routes/activityLogsRoutes.js';
@@ -207,6 +208,9 @@ app.get('/api/health', async (_req, res) => {
 app.use('/auth', authRoutes);
 
 app.use('/api/stripe', stripeRoutes);
+
+// OAuth redirects (public — must run before dashboard auth; cross-site callbacks omit session cookies)
+app.use('/api/integrations', integrationOAuthRoutes);
 
 // Protected dashboard APIs — require Stripe subscription (admins exempt)
 const dashboardApi = express.Router();
