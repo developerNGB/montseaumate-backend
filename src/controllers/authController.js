@@ -130,8 +130,8 @@ export const register = async (req, res) => {
         const result = await pool.query(
             `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
              VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '30 days')
-             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, trial_ends_at,
-                       stripe_subscription_id, stripe_customer_id`,
+             RETURNING id, name, email, company_name, plan, role, created_at, weekly_reports_enabled, onboarding_completed,
+                       trial_ends_at, stripe_subscription_id, stripe_customer_id`,
             [name.trim(), emailLower, password_hash, company_name.trim()]
         );
 
@@ -630,6 +630,7 @@ export const googleLogin = async (req, res) => {
             result = await pool.query(
                 `SELECT id, name, email, company_name, phone, plan, role, status,
                         COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+                        COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
                         trial_ends_at, stripe_subscription_id, stripe_customer_id
                  FROM users WHERE lower(email) = $1
                  LIMIT 1`,
