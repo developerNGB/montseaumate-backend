@@ -428,10 +428,14 @@ export const importLeads = async (req, res) => {
         const savedLeads = insertRes.rows;
 
         if (savedLeads.length > 0) {
-            await upsertLeadFolder(userId, defaultGroup, {
-                followupMessage,
-                sourceHint: sourceHint || savedLeads[0]?.source || 'import',
-            });
+            try {
+                await upsertLeadFolder(userId, defaultGroup, {
+                    followupMessage,
+                    sourceHint: sourceHint || savedLeads[0]?.source || 'import',
+                });
+            } catch (folderErr) {
+                console.error('[importLeads] lead_folders upsert failed:', folderErr.message);
+            }
         }
 
         // Respond immediately — messaging is fire-and-forget
@@ -467,9 +471,18 @@ export const importLeads = async (req, res) => {
             console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up cron`);
         }
     } catch (err) {
-        console.error('[importLeads] Error:', err.message);
+        console.error('[importLeads] Error:', err.message, err.code || '', err.detail || '');
         if (!res.headersSent) {
-            res.status(500).json({ success: false, message: 'Import failed. Please try again.' });
+            const hint =
+                err.code === '42703'
+                    ? 'Database schema is out of date — redeploy the API to run migrations.'
+                    : err.message?.includes('lead_folders')
+                      ? 'Lead folders table issue — redeploy the API.'
+                      : null;
+            res.status(500).json({
+                success: false,
+                message: hint || 'Import failed. Please try again.',
+            });
         }
     }
 };

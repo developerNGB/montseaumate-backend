@@ -444,10 +444,24 @@ const runMigrations = async () => {
         await safeQuery('leads.lead_group',          `ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_group VARCHAR(100) DEFAULT 'General'`);
         await safeQuery('leads.lead_group_index',    `CREATE INDEX IF NOT EXISTS idx_leads_user_group ON leads(user_id, lead_group)`);
 
+        // lead_folders — user_id must be UUID (matches users.id). Drop legacy table if wrong type.
+        await safeQuery('lead_folders.drop_wrong_user_id', `
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'lead_folders'
+                      AND column_name = 'user_id'
+                      AND data_type IN ('integer', 'bigint')
+                ) THEN
+                    DROP TABLE lead_folders;
+                END IF;
+            END $$;
+        `);
         await safeQuery('lead_folders.table', `
             CREATE TABLE IF NOT EXISTS lead_folders (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 name VARCHAR(100) NOT NULL,
                 followup_message TEXT,
                 source_hint VARCHAR(80),
