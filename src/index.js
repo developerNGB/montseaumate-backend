@@ -212,6 +212,9 @@ app.use('/api/stripe', stripeRoutes);
 // OAuth redirects (public — must run before dashboard auth; cross-site callbacks omit session cookies)
 app.use('/api/integrations', integrationOAuthRoutes);
 
+// Public i18n overrides (SPA loads before / with login; POST /update stays authenticated on the route)
+app.use('/api/translations', translationRoutes);
+
 // Protected dashboard APIs — require Stripe subscription (admins exempt)
 const dashboardApi = express.Router();
 dashboardApi.use(authenticate, requireActiveSubscription);
@@ -225,7 +228,6 @@ dashboardApi.use('/marketplace', marketplaceRoutes);
 dashboardApi.use('/stats', statsRoutes);
 dashboardApi.use('/feedback', feedbackRoutes);
 dashboardApi.use('/whatsapp', whatsappRoutes);
-dashboardApi.use('/translations', translationRoutes);
 dashboardApi.use('/smtp', smtpRoutes);
 dashboardApi.use('/apollo', apolloRoutes);
 dashboardApi.use('/apify', apolloRoutes);

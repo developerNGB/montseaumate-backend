@@ -245,30 +245,66 @@ export const saveReviewFunnelConfig = async (req, res) => {
     }
 };
 
+async function queryLeadFollowupSettings(userId) {
+    try {
+        return await pool.query(
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
+            [userId]
+        );
+    } catch (e) {
+        if (e.code !== '42703') throw e;
+        return pool.query(
+            'SELECT is_active, delay_value, delay_unit, message, lead_source FROM lead_followup_settings WHERE user_id = $1',
+            [userId]
+        );
+    }
+}
+
+function normalizeLeadFollowupRow(row) {
+    if (!row) return null;
+    let followup_sequence = row.followup_sequence ?? [];
+    if (typeof followup_sequence === 'string') {
+        try {
+            followup_sequence = JSON.parse(followup_sequence);
+        } catch {
+            followup_sequence = [];
+        }
+    }
+    if (!Array.isArray(followup_sequence)) followup_sequence = [];
+
+    return {
+        is_active: !!row.is_active,
+        delay_value: row.delay_value ?? 24,
+        delay_unit: row.delay_unit ?? 'hours',
+        message: row.message ?? '',
+        reminder_active: row.reminder_active ?? false,
+        reminder_delay_value: row.reminder_delay_value ?? 48,
+        reminder_delay_unit: row.reminder_delay_unit ?? 'hours',
+        reminder_message: row.reminder_message ?? '',
+        lead_source: row.lead_source ?? 'excel',
+        whatsapp_enabled: row.whatsapp_enabled ?? true,
+        email_enabled: row.email_enabled ?? true,
+        followup_sequence,
+        followup_next_step_done: !!row.followup_next_step_done,
+    };
+}
+
 // GET /api/config/lead-followup
 export const getLeadFollowupConfig = async (req, res) => {
     try {
-        const result = await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
-            [req.user.id]
-        );
+        const result = await queryLeadFollowupSettings(req.user.id);
 
         if (result.rows.length === 0) {
             return res.status(200).json({ success: true, config: null });
         }
 
-        const config = result.rows[0];
-        return res.status(200).json({ 
-            success: true, 
-            config: {
-                ...config,
-                followup_sequence: typeof config.followup_sequence === 'string' ? JSON.parse(config.followup_sequence) : (config.followup_sequence || []),
-                followup_next_step_done: !!config.followup_next_step_done,
-            } 
+        return res.status(200).json({
+            success: true,
+            config: normalizeLeadFollowupRow(result.rows[0]),
         });
     } catch (err) {
-        console.error('[getLeadFollowupConfig] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        console.error('[getLeadFollowupConfig] Error:', err.code, err.message, err.detail || '');
+        return res.status(500).json({ success: false, message: 'Server error', code: err.code });
     }
 };
 
@@ -277,24 +313,11 @@ export const saveLeadFollowupConfig = async (req, res) => {
     try {
         const passed = req.body;
 
-        // Fetch existing config first — try full column list, fall back if columns missing
-        let existingRes;
-        try {
-            existingRes = await pool.query(
-                'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
-                [req.user.id]
-            );
-        } catch (e) {
-            if (e.code !== '42703') throw e;
-            existingRes = await pool.query(
-                'SELECT is_active, delay_value, delay_unit, message, lead_source FROM lead_followup_settings WHERE user_id = $1',
-                [req.user.id]
-            );
-        }
+        const existingRes = await queryLeadFollowupSettings(req.user.id);
         const existing = existingRes.rows.length > 0 ? existingRes.rows[0] : {};
 
         // Merge inputs with existing (or defaults if new)
-        const is_active = passed.is_active !== undefined ? passed.is_active : (existing.is_active ?? false);
+        let is_active = passed.is_active !== undefined ? passed.is_active : (existing.is_active ?? false);
         const delay_value = passed.delay_value !== undefined ? passed.delay_value : (existing.delay_value ?? 24);
         const delay_unit = passed.delay_unit !== undefined ? passed.delay_unit : (existing.delay_unit ?? 'hours');
         const message =
