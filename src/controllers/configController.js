@@ -156,10 +156,18 @@ export const saveReviewFunnelConfig = async (req, res) => {
             finalCaptureActive = existingConfig.lead_capture_active ?? false;
         }
 
-        // Try to fetch google_review_url from integrations if not provided
+        // Only pull GMB review link when configuring the review employee — not lead capture
         let finalGoogleReviewUrl = google_review_url;
-        if (!finalGoogleReviewUrl || finalGoogleReviewUrl.trim() === '') {
-            const googleIntRes = await pool.query('SELECT account_id FROM integrations WHERE user_id = $1 AND provider = $2', [req.user.id, 'google']);
+        if (req.body.goal === 'capture') {
+            finalGoogleReviewUrl =
+                google_review_url !== undefined
+                    ? google_review_url
+                    : (existingConfig.google_review_url || '');
+        } else if (!finalGoogleReviewUrl || finalGoogleReviewUrl.trim() === '') {
+            const googleIntRes = await pool.query(
+                'SELECT account_id FROM integrations WHERE user_id = $1 AND provider = $2',
+                [req.user.id, 'google']
+            );
             if (googleIntRes.rows.length > 0 && googleIntRes.rows[0].account_id.startsWith('http')) {
                 finalGoogleReviewUrl = googleIntRes.rows[0].account_id;
             }
@@ -596,8 +604,7 @@ function isLeadCaptureHiredRow(row) {
 /** Whether review funnel still counts as "hired" on the shared review_funnel_settings row. */
 function isReviewFunnelHiredRow(row) {
     if (!row) return false;
-    const url = String(row.google_review_url || '').trim();
-    return !!(row.is_active || row.review_next_step_done || url.length > 0);
+    return !!(row.is_active || row.review_next_step_done);
 }
 
 export const deleteAutomation = async (req, res) => {

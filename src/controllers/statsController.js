@@ -124,17 +124,16 @@ export const getDashboardStats = async (req, res) => {
         const leadCaptureActive = !!rfRow?.lead_capture_active;
         const leadFollowUpActive = !!followUpConfigRes.rows[0]?.is_active;
 
-        const reviewGoogleUrl = String(rfRow?.google_review_url || '').trim();
         const reviewFunnelConfigured = !!rfRow && (
-            reviewFunnelActive ||
-            reviewGoogleUrl.length > 0 ||
-            rfRow.review_next_step_done === true
+            rfRow.review_next_step_done === true || reviewFunnelActive
         );
         const leadCaptureConfigured = !!rfRow && (
-            leadCaptureActive ||
-            rfRow.capture_next_step_done === true
+            rfRow.capture_next_step_done === true || leadCaptureActive
         );
-        const leadFollowUpConfigured = followUpConfigRes.rows.length > 0;
+        const lfRow = followUpConfigRes.rows[0];
+        const leadFollowUpConfigured = !!lfRow && (
+            lfRow.followup_next_step_done === true || leadFollowUpActive
+        );
 
         // Build 7-day sparkline arrays. Fill missing days with 0.
         // r.day is already a 'YYYY-MM-DD' string via TO_CHAR
