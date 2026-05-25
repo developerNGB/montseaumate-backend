@@ -96,15 +96,53 @@ export const saveReviewFunnelConfig = async (req, res) => {
         const result = await pool.query('SELECT automation_id FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
         let automationId = result.rows.length > 0 ? result.rows[0].automation_id : crypto.randomBytes(4).toString('hex');
 
-        const validatedLeadSource = (lead_source === 'qr' || lead_source === 'excel' || lead_source === 'website') ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
-        const validatedCaptureSource = (capture_source === 'qr' || capture_source === 'excel' || capture_source === 'website') ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
+        const isValidSource = (s) => s === 'qr' || s === 'excel' || s === 'website';
+        const parseSourcesArray = (val, fallback) => {
+            if (Array.isArray(val)) {
+                const filtered = val.filter(isValidSource);
+                if (filtered.length) return [...new Set(filtered)];
+            }
+            if (typeof val === 'string') {
+                try {
+                    const parsed = JSON.parse(val);
+                    if (Array.isArray(parsed)) {
+                        const filtered = parsed.filter(isValidSource);
+                        if (filtered.length) return [...new Set(filtered)];
+                    }
+                } catch {
+                    /* single string */
+                }
+                if (isValidSource(val)) return [val];
+            }
+            return [fallback];
+        };
+
+        const validatedLeadSource = isValidSource(lead_source) ? lead_source : (req.body.goal === 'capture' ? undefined : 'qr');
+        const validatedCaptureSource = isValidSource(capture_source) ? capture_source : (req.body.goal === 'review' ? undefined : 'qr');
 
         // Get existing to avoid overwrites if not provided
         const existingConfigRes = await pool.query('SELECT * FROM review_funnel_settings WHERE user_id = $1', [req.user.id]);
         const existingConfig = existingConfigRes.rows[0] || {};
 
-        const finalLeadSource = validatedLeadSource || existingConfig.lead_source || 'qr';
-        const finalCaptureSource = validatedCaptureSource || existingConfig.capture_source || 'qr';
+        let leadSourcesArr = parseSourcesArray(
+            existingConfig.lead_sources,
+            existingConfig.lead_source || 'qr'
+        );
+        let captureSourcesArr = parseSourcesArray(
+            existingConfig.capture_sources,
+            existingConfig.capture_source || 'qr'
+        );
+        if (Array.isArray(req.body.lead_sources) && req.body.lead_sources.length) {
+            leadSourcesArr = req.body.lead_sources.filter(isValidSource);
+            if (!leadSourcesArr.length) leadSourcesArr = ['qr'];
+        }
+        if (Array.isArray(req.body.capture_sources) && req.body.capture_sources.length) {
+            captureSourcesArr = req.body.capture_sources.filter(isValidSource);
+            if (!captureSourcesArr.length) captureSourcesArr = ['qr'];
+        }
+
+        const finalLeadSource = validatedLeadSource || leadSourcesArr[0] || 'qr';
+        const finalCaptureSource = validatedCaptureSource || captureSourcesArr[0] || 'qr';
 
         // CRITICAL: Each goal only controls its own flag — never touch the other engine's flag
         let finalReviewActive, finalCaptureActive;
@@ -186,8 +224,6 @@ export const saveReviewFunnelConfig = async (req, res) => {
         );
 
         // Save multi-source arrays (columns added via migration; fails silently if not yet present)
-        const leadSourcesArr = req.body.lead_sources || [finalLeadSource];
-        const captureSourcesArr = req.body.capture_sources || [finalCaptureSource];
         try {
             await pool.query(
                 `UPDATE review_funnel_settings SET lead_sources = $1, capture_sources = $2 WHERE user_id = $3`,
@@ -248,7 +284,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
 async function queryLeadFollowupSettings(userId) {
     try {
         return await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, lead_sources, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
             [userId]
         );
     } catch (e) {
@@ -282,6 +318,19 @@ function normalizeLeadFollowupRow(row) {
         reminder_delay_unit: row.reminder_delay_unit ?? 'hours',
         reminder_message: row.reminder_message ?? '',
         lead_source: row.lead_source ?? 'excel',
+        lead_sources: (() => {
+            const raw = row.lead_sources ?? row.lead_source ?? 'excel';
+            if (Array.isArray(raw)) return raw.filter((s) => ['qr', 'excel', 'website'].includes(s));
+            if (typeof raw === 'string') {
+                try {
+                    const p = JSON.parse(raw);
+                    if (Array.isArray(p)) return p.filter((s) => ['qr', 'excel', 'website'].includes(s));
+                } catch {
+                    if (['qr', 'excel', 'website'].includes(raw)) return [raw];
+                }
+            }
+            return ['excel'];
+        })(),
         whatsapp_enabled: row.whatsapp_enabled ?? true,
         email_enabled: row.email_enabled ?? true,
         followup_sequence,
@@ -326,7 +375,28 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 : passed.auto_response_message !== undefined
                   ? passed.auto_response_message
                   : (existing.message ?? 'Hey, just following up on your inquiry from yesterday. Are you still looking for help with this? Let me know!');
-        const lead_source = passed.lead_source !== undefined ? passed.lead_source : (existing.lead_source ?? 'excel');
+        const isValidLfSource = (s) => s === 'qr' || s === 'excel' || s === 'website';
+        let leadSourcesLf = (() => {
+            const raw = existing.lead_sources ?? existing.lead_source ?? 'excel';
+            if (Array.isArray(raw)) return raw.filter(isValidLfSource);
+            if (typeof raw === 'string') {
+                try {
+                    const p = JSON.parse(raw);
+                    if (Array.isArray(p)) return p.filter(isValidLfSource);
+                } catch {
+                    if (isValidLfSource(raw)) return [raw];
+                }
+            }
+            return ['excel'];
+        })();
+        if (Array.isArray(passed.lead_sources) && passed.lead_sources.length) {
+            leadSourcesLf = passed.lead_sources.filter(isValidLfSource);
+            if (!leadSourcesLf.length) leadSourcesLf = ['excel'];
+        }
+        const lead_source =
+            passed.lead_source !== undefined && isValidLfSource(passed.lead_source)
+                ? passed.lead_source
+                : (leadSourcesLf[0] || existing.lead_source || 'excel');
         const whatsapp_enabled = passed.whatsapp_enabled !== undefined ? passed.whatsapp_enabled : (existing.whatsapp_enabled ?? true);
         const email_enabled = passed.email_enabled !== undefined ? passed.email_enabled : (existing.email_enabled ?? true);
 
@@ -406,6 +476,14 @@ export const saveLeadFollowupConfig = async (req, res) => {
                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
                     whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence), followIntroDone]
             );
+            try {
+                await pool.query(
+                    'UPDATE lead_followup_settings SET lead_sources = $1 WHERE user_id = $2',
+                    [JSON.stringify(leadSourcesLf), req.user.id]
+                );
+            } catch (_) {
+                /* column optional */
+            }
         } catch (e) {
             if (e.code !== '42703') throw e;
             // Columns not yet migrated — save only guaranteed-present core fields (no updated_at)
@@ -430,7 +508,9 @@ export const saveLeadFollowupConfig = async (req, res) => {
             hired_paused: hiredPaused,
             config: {
                 is_active, delay_value, delay_unit, message,
-                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, followup_sequence,
+                reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
+                lead_sources: leadSourcesLf,
+                followup_sequence,
                 whatsapp_enabled, email_enabled, followup_next_step_done: followIntroDone,
             }
         });
