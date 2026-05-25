@@ -29,7 +29,9 @@ import requireActiveSubscription from './middleware/requireActiveSubscription.js
 import startFollowupCron from './cron/followupCron.js';
 import startWeeklyReportCron from './cron/reportCron.js';
 import { restoreActiveSessions } from './services/whatsappService.js';
-import pool from './db/pool.js';import { insertErrorEvent } from './services/errorLogService.js';
+import pool from './db/pool.js';
+import { insertErrorEvent } from './services/errorLogService.js';
+import { getTokenFromRequest } from './utils/cookieHelpers.js';
 import { getCorsWhitelist } from './utils/corsWhitelist.js';
 
 import { loadProjectEnv } from './utils/loadEnv.js';
@@ -151,17 +153,19 @@ const csrfProtection = csrf({
     }
 });
 
-// Skip CSRF for webhook/public routes and API routes that use JWT auth
+// Skip CSRF for JWT Bearer APIs (SPA is on another origin — strict CSRF cookies do not apply)
 app.use((req, res, next) => {
-    const skipPaths = [
-        '/api/public', '/api/webhooks', '/api/marketplace',
-        '/api/integrations', '/api/whatsapp', '/api/config',
-        '/api/apollo', '/api/apify',  // Apollo/Apify uses JWT auth, not CSRF
-        '/api/f', '/api/r', '/api/l', '/api/support', // Public feedback/review/lead/support endpoints
-        '/api/stripe', // JWT-authenticated checkout API (no CSRF double-submit cookie)
-        '/auth' // All auth routes use JWT/Bearer tokens or are public
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+        return next();
+    }
+    if (getTokenFromRequest(req)) {
+        return next();
+    }
+    const skipPrefixes = [
+        '/api/',
+        '/auth',
     ];
-    if (skipPaths.some(path => req.path.startsWith(path))) {
+    if (skipPrefixes.some((prefix) => req.path.startsWith(prefix))) {
         return next();
     }
     csrfProtection(req, res, next);
@@ -250,6 +254,16 @@ app.use((req, res) => {
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(async (err, req, res, next) => {
     console.error('[UnhandledError]', err);
+
+    // CSRF failures on JWT APIs or bot scans are not production incidents — do not flood the error panel
+    if (err?.code === 'EBADCSRFTOKEN') {
+        return res.status(403).json({
+            success: false,
+            message: 'Invalid or missing CSRF token.',
+            code: 'EBADCSRFTOKEN',
+        });
+    }
+
     try {
         await insertErrorEvent({
             level: 'error',

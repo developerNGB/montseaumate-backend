@@ -43,3 +43,19 @@ export async function listErrorEvents({ q=null, level=null, limit=200, offset=0 
 export async function markErrorResolved(id, resolved=true) {
     await pool.query(`UPDATE error_events SET resolved = $2, resolved_at = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE id = $1`, [id, resolved]);
 }
+
+/** Mark many rows resolved (e.g. clear CSRF noise after a middleware fix). */
+export async function bulkResolveErrors({ code = null, onlyOpen = true } = {}) {
+    const params = [];
+    const where = [];
+    if (onlyOpen) where.push('resolved IS NOT TRUE');
+    if (code) {
+        params.push(code);
+        where.push(`code = $${params.length}`);
+    }
+    const sql = `UPDATE error_events SET resolved = TRUE, resolved_at = NOW()
+                 ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                 RETURNING id`;
+    const r = await pool.query(sql, params);
+    return r.rowCount ?? 0;
+}

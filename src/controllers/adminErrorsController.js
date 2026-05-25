@@ -1,4 +1,4 @@
-﻿import { listErrorEvents, markErrorResolved } from '../services/errorLogService.js';
+﻿import { listErrorEvents, markErrorResolved, bulkResolveErrors } from '../services/errorLogService.js';
 
 export async function getErrors(req, res) {
     try {
@@ -20,5 +20,20 @@ export async function resolveError(req, res) {
     } catch (e) {
         console.error('[AdminErrors] resolve failed:', e.message);
         return res.status(500).json({ success: false, message: 'Could not update error status' });
+    }
+}
+
+/** POST /api/admin/errors/resolve-bulk — clear noise (optional ?code=EBADCSRFTOKEN) */
+export async function resolveErrorsBulk(req, res) {
+    try {
+        const { code, allOpen } = req.body || {};
+        const count = await bulkResolveErrors({
+            code: code || null,
+            onlyOpen: allOpen !== false,
+        });
+        return res.status(200).json({ success: true, resolved: count });
+    } catch (e) {
+        console.error('[AdminErrors] bulk resolve failed:', e.message);
+        return res.status(500).json({ success: false, message: 'Could not bulk-update errors' });
     }
 }
