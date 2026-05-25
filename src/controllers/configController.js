@@ -297,7 +297,12 @@ export const saveLeadFollowupConfig = async (req, res) => {
         const is_active = passed.is_active !== undefined ? passed.is_active : (existing.is_active ?? false);
         const delay_value = passed.delay_value !== undefined ? passed.delay_value : (existing.delay_value ?? 24);
         const delay_unit = passed.delay_unit !== undefined ? passed.delay_unit : (existing.delay_unit ?? 'hours');
-        const message = passed.message !== undefined ? passed.message : (existing.message ?? 'Hey, just following up on your inquiry from yesterday. Are you still looking for help with this? Let me know!');
+        const message =
+            passed.message !== undefined
+                ? passed.message
+                : passed.auto_response_message !== undefined
+                  ? passed.auto_response_message
+                  : (existing.message ?? 'Hey, just following up on your inquiry from yesterday. Are you still looking for help with this? Let me know!');
         const lead_source = passed.lead_source !== undefined ? passed.lead_source : (existing.lead_source ?? 'excel');
         const whatsapp_enabled = passed.whatsapp_enabled !== undefined ? passed.whatsapp_enabled : (existing.whatsapp_enabled ?? true);
         const email_enabled = passed.email_enabled !== undefined ? passed.email_enabled : (existing.email_enabled ?? true);
@@ -338,16 +343,20 @@ export const saveLeadFollowupConfig = async (req, res) => {
             'SELECT is_active, lead_capture_active FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
+        const requestedActive = !!is_active;
+        const maxEmpLf = getMaxEmployees(billingLf.plan, billingLf.trial_ends_at);
         const projectedLfEmp = countEmployeesAfterPatch({
             rf: rfEmp.rows[0] || {},
             lf: existing,
-            patch: { followup_active: is_active },
+            patch: { followup_active: requestedActive },
         });
-        if (projectedLfEmp > getMaxEmployees(billingLf.plan, billingLf.trial_ends_at)) {
-            return respondEmployeeLimit(res, billingLf, projectedLfEmp);
+        let hiredPaused = false;
+        if (projectedLfEmp > maxEmpLf && requestedActive) {
+            is_active = false;
+            hiredPaused = true;
         }
 
-        const followIntroDone = !!existing.followup_next_step_done || !!is_active;
+        const followIntroDone = !!existing.followup_next_step_done || requestedActive;
 
         try {
             await pool.query(
@@ -392,7 +401,10 @@ export const saveLeadFollowupConfig = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'Lead follow-up settings saved successfully!',
+            message: hiredPaused
+                ? 'Follow-up employee saved. Turn off another active employee or upgrade your plan to start this one.'
+                : 'Lead follow-up settings saved successfully!',
+            hired_paused: hiredPaused,
             config: {
                 is_active, delay_value, delay_unit, message,
                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, followup_sequence,
