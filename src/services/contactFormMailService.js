@@ -1,33 +1,39 @@
+import fetch from 'node-fetch';
 import pool from '../db/pool.js';
 import { buildContactFormEmail } from '../utils/contactFormEmail.js';
+import { buildGmailRawMime } from '../utils/mimeMessage.js';
 import { getContactFormInbox } from './supportMailService.js';
 import { sendDynamicEmail } from './emailService.js';
-import { getValidGoogleTokens } from '../utils/googleAuth.js';
-import {
-    getPlatformGmailFromAddress,
-    isPlatformGmailConfigured,
-    sendPlatformGmail,
-} from './platformGmail.js';
 
-const SMTP_FALLBACK_MS = 12_000;
-
-/**
- * User whose connected Gmail (API) sends contact notifications — works on Render (HTTPS).
- */
-async function firstEditorWithGoogleToken() {
-    const raw = process.env.TRANSLATION_EDITOR_USER_IDS?.trim();
-    if (!raw) return null;
-
-    for (const id of raw.split(',').map((s) => s.trim()).filter(Boolean)) {
-        const { access_token } = await getValidGoogleTokens(id);
-        if (access_token) return id;
-    }
-    return null;
+function isGmailScopeError(err) {
+    const msg = String(err?.message || '');
+    return (
+        /permission denied|insufficient authentication scopes|granted "Send"/i.test(msg) ||
+        err?.code === 403
+    );
 }
 
-export async function resolveContactFormSenderUserId() {
-    const explicit = process.env.CONTACT_FORM_SENDER_USER_ID?.trim();
-    if (explicit) return explicit;
+/** Skip to next candidate — do not fail the whole form for one bad account. */
+function isRetryableGmailSenderError(err) {
+    const msg = String(err?.message || '');
+    return (
+        isGmailScopeError(err) ||
+        /expired|reconnect/i.test(msg) ||
+        /No outbound email|not configured for this workspace|Link the Gmail/i.test(msg)
+    );
+}
+
+/**
+ * Ordered list of user IDs to try for Gmail API (contact form only).
+ */
+export async function listContactFormSenderUserIds() {
+    const ids = [];
+    const push = (id) => {
+        const s = id != null ? String(id).trim() : '';
+        if (s && !ids.includes(s)) ids.push(s);
+    };
+
+    push(process.env.CONTACT_FORM_SENDER_USER_ID?.trim());
 
     const inbox =
         process.env.CONTACT_FORM_TO?.trim() ||
@@ -39,37 +45,171 @@ export async function resolveContactFormSenderUserId() {
             `SELECT user_id
              FROM integrations
              WHERE provider = 'google'
+               AND refresh_token IS NOT NULL
                AND (
                  LOWER(COALESCE(metadata->>'email', '')) = LOWER($1)
                  OR LOWER(COALESCE(account_id, '')) = LOWER($1)
                  OR LOWER(COALESCE(account_id, '')) = LOWER($2)
                )
-             ORDER BY updated_at DESC
-             LIMIT 1`,
+             ORDER BY updated_at DESC`,
             [inbox, `gmail:${inbox}`],
         );
-        if (byInbox.rows[0]?.user_id) return String(byInbox.rows[0].user_id);
+        byInbox.rows.forEach((r) => push(r.user_id));
     }
 
-    const editorWithGoogle = await firstEditorWithGoogleToken();
-    if (editorWithGoogle) return editorWithGoogle;
+    const rawEditors = process.env.TRANSLATION_EDITOR_USER_IDS?.trim();
+    if (rawEditors) {
+        const editorIds = rawEditors.split(',').map((s) => s.trim()).filter(Boolean);
+        if (editorIds.length > 0) {
+            const editorsWithGoogle = await pool.query(
+                `SELECT user_id
+                 FROM integrations
+                 WHERE provider = 'google'
+                   AND refresh_token IS NOT NULL
+                   AND user_id::text = ANY($1::text[])
+                 ORDER BY updated_at DESC`,
+                [editorIds],
+            );
+            editorsWithGoogle.rows.forEach((r) => push(r.user_id));
+        }
+    }
 
-    const latestGoogle = await pool.query(
-        `SELECT user_id FROM integrations WHERE provider = 'google' ORDER BY updated_at DESC LIMIT 1`,
+    const allGoogle = await pool.query(
+        `SELECT user_id
+         FROM integrations
+         WHERE provider = 'google' AND refresh_token IS NOT NULL
+         ORDER BY updated_at DESC`,
     );
-    return latestGoogle.rows[0]?.user_id ? String(latestGoogle.rows[0].user_id) : null;
+    allGoogle.rows.forEach((r) => push(r.user_id));
+
+    return ids;
 }
 
-async function canSendViaGmailApi() {
-    const userId = await resolveContactFormSenderUserId();
-    if (!userId) return false;
-    const { access_token } = await getValidGoogleTokens(userId);
-    return Boolean(access_token);
+export async function resolveContactFormSenderUserId() {
+    const ids = await listContactFormSenderUserIds();
+    return ids[0] || null;
 }
 
+function hasEnvGmailSender() {
+    return Boolean(
+        process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN?.trim() &&
+            process.env.GOOGLE_CLIENT_ID?.trim() &&
+            process.env.GOOGLE_CLIENT_SECRET?.trim(),
+    );
+}
+
+async function refreshEnvGmailAccessToken() {
+    const refreshToken = process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN.trim();
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+            client_id: process.env.GOOGLE_CLIENT_ID.trim(),
+            client_secret: process.env.GOOGLE_CLIENT_SECRET.trim(),
+            refresh_token: refreshToken,
+            grant_type: 'refresh_token',
+        }),
+    });
+    const data = await response.json();
+    if (data.error) {
+        throw new Error(
+            data.error_description || data.error || 'CONTACT_FORM_GOOGLE_REFRESH_TOKEN invalid',
+        );
+    }
+    return data.access_token;
+}
+
+async function sendViaEnvGmailApi(mailOptions) {
+    if (!hasEnvGmailSender()) return null;
+
+    const from =
+        process.env.CONTACT_FORM_GOOGLE_FROM?.trim() ||
+        process.env.EMAIL_USER?.trim() ||
+        getContactFormInbox();
+
+    const accessToken = await refreshEnvGmailAccessToken();
+    const encodedMail = buildGmailRawMime(mailOptions, from);
+
+    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ raw: encodedMail }),
+    });
+
+    if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        const code = errData.error?.code;
+        if (code === 403) {
+            throw new Error(
+                'Gmail permission denied. Regenerate CONTACT_FORM_GOOGLE_REFRESH_TOKEN with gmail.send scope.',
+            );
+        }
+        throw new Error(errData.error?.message || `Gmail API HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`[contactForm] Env Gmail API (${from}) → ${mailOptions.to} id=${data.id}`);
+    return { success: true, provider: 'contact_env_gmail', messageId: data.id, to: mailOptions.to };
+}
+
+async function sendViaGmailApiForUser(userId, mailOptions) {
+    const result = await sendDynamicEmail(userId, mailOptions, { integrationsOnly: true });
+    console.log(`[contactForm] Gmail API (${result.provider}, user ${userId}) → ${mailOptions.to}`);
+    return { ...result, to: mailOptions.to };
+}
+
+async function sendViaGmailApi(mailOptions) {
+    const errors = [];
+
+    try {
+        const envResult = await sendViaEnvGmailApi(mailOptions);
+        if (envResult) return envResult;
+    } catch (err) {
+        errors.push(`env_gmail:${err.message}`);
+        console.warn(`[contactForm] Env Gmail API failed: ${err.message}`);
+    }
+
+    const userIds = await listContactFormSenderUserIds();
+    for (const userId of userIds) {
+        try {
+            return await sendViaGmailApiForUser(userId, mailOptions);
+        } catch (err) {
+            errors.push(`gmail_api:${userId}:${err.message}`);
+            if (isRetryableGmailSenderError(err)) {
+                console.warn(
+                    `[contactForm] User ${userId} cannot send (${err.message}); trying next account`,
+                );
+                continue;
+            }
+            throw err;
+        }
+    }
+
+    if (errors.length > 0) {
+        const err = new Error(
+            `Gmail API could not send (${errors.slice(0, 3).join('; ')}${errors.length > 3 ? '…' : ''})`,
+        );
+        if (errors.some((e) => /permission denied|Send/i.test(e))) {
+            err.code = 'contact_gmail_scope';
+        } else {
+            err.code = 'contact_sender_not_configured';
+        }
+        throw err;
+    }
+
+    const err = new Error('No Gmail sender configured for the contact form.');
+    err.code = 'contact_sender_not_configured';
+    throw err;
+}
+
+/** True when env refresh token or at least one Google integration can send via Gmail API. */
 export async function isContactFormMailConfigured() {
-    if (await canSendViaGmailApi()) return true;
-    return isPlatformGmailConfigured();
+    if (hasEnvGmailSender()) return true;
+    const userIds = await listContactFormSenderUserIds();
+    return userIds.length > 0;
 }
 
 function buildMailPayload({ name, email, message, source }) {
@@ -77,7 +217,6 @@ function buildMailPayload({ name, email, message, source }) {
     const built = buildContactFormEmail({ name, email, message, source });
     return {
         to,
-        built,
         mailOptions: {
             to,
             replyTo: built.replyTo,
@@ -91,62 +230,11 @@ function buildMailPayload({ name, email, message, source }) {
     };
 }
 
-async function sendViaGmailApi(mailOptions) {
-    const userId = await resolveContactFormSenderUserId();
-    if (!userId) return null;
-
-    const result = await sendDynamicEmail(userId, mailOptions, { integrationsOnly: true });
-    console.log(`[contactForm] Gmail API (${result.provider}, user ${userId}) → ${mailOptions.to}`);
-    return { ...result, to: mailOptions.to };
-}
-
-async function sendViaPlatformSmtp(mailOptions) {
-    if (!isPlatformGmailConfigured()) return null;
-
-    const sendPromise = sendPlatformGmail(mailOptions);
-    const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => {
-            const err = new Error('SMTP_TIMEOUT');
-            err.code = 'SMTP_TIMEOUT';
-            reject(err);
-        }, SMTP_FALLBACK_MS);
-    });
-
-    const info = await Promise.race([sendPromise, timeoutPromise]);
-    console.log(
-        `[contactForm] Platform SMTP (${getPlatformGmailFromAddress()}) → ${mailOptions.to} id=${info.messageId}`,
-    );
-    return { success: true, provider: 'platform_gmail', messageId: info.messageId, to: mailOptions.to };
-}
-
 /**
- * Production (Render): Gmail API first — outbound SMTP is blocked.
- * Local dev: Gmail API if connected, else app-password SMTP.
+ * Contact form delivery: Gmail API only (env refresh token or connected Google accounts).
+ * Inbox: CONTACT_FORM_TO (default equipoexpertoia@gmail.com).
  */
 export async function sendContactFormNotification({ name, email, message, source }) {
     const { mailOptions } = buildMailPayload({ name, email, message, source });
-
-    try {
-        if (await canSendViaGmailApi()) {
-            return await sendViaGmailApi(mailOptions);
-        }
-    } catch (err) {
-        console.warn(`[contactForm] Gmail API failed (${err.message}); trying SMTP fallback`);
-    }
-
-    try {
-        const smtpResult = await sendViaPlatformSmtp(mailOptions);
-        if (smtpResult) return smtpResult;
-    } catch (err) {
-        if (await canSendViaGmailApi()) {
-            throw err;
-        }
-        console.warn(`[contactForm] Platform SMTP failed (${err.code || err.message})`);
-    }
-
-    const err = new Error(
-        'Contact form email is not configured. Connect Gmail under Dashboard → Integrations, or set EMAIL_USER/EMAIL_PASS on the API server.',
-    );
-    err.code = 'contact_sender_not_configured';
-    throw err;
+    return sendViaGmailApi(mailOptions);
 }

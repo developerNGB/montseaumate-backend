@@ -7,6 +7,7 @@ import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
 import {
     isContactFormMailConfigured,
+    listContactFormSenderUserIds,
     sendContactFormNotification,
 } from '../services/contactFormMailService.js';
 import { getContactFormInbox } from '../services/supportMailService.js';
@@ -61,6 +62,25 @@ const notifyOwnerInternally = async (config, subject, message) => {
 };
 
 /**
+ * GET /api/support/contact/status — public readiness (no secrets)
+ */
+export const getContactFormStatus = async (_req, res) => {
+    try {
+        const senderIds = await listContactFormSenderUserIds();
+        const configured = await isContactFormMailConfigured();
+        return res.json({
+            success: true,
+            transport: 'gmail_api',
+            configured,
+            senderCandidates: senderIds.length,
+            inbox: getContactFormInbox(),
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: err.message });
+    }
+};
+
+/**
  * POST /api/support/contact
  * Handles contact form submissions from the main landing page
  */
@@ -75,11 +95,14 @@ export const submitContactForm = async (req, res) => {
         console.log(`[submitContactForm] New message from ${name} (${email})`);
 
         if (!(await isContactFormMailConfigured())) {
-            console.error('[submitContactForm] Platform Gmail not configured (EMAIL_USER / EMAIL_PASS on API server)');
+            console.error(
+                '[submitContactForm] No Gmail sender: connect Google in Integrations (gmail.send) or set CONTACT_FORM_GOOGLE_REFRESH_TOKEN',
+            );
             return res.status(503).json({
                 success: false,
                 code: 'contact_sender_not_configured',
-                message: 'We could not send your message right now. Please email us directly or try again later.',
+                message:
+                    'We could not send your message right now. Please email equipoexpertoia@gmail.com directly or try again later.',
             });
         }
 
@@ -105,19 +128,27 @@ export const submitContactForm = async (req, res) => {
         let code = 'contact_send_failed';
         if (err.code === 'contact_sender_not_configured') {
             code = 'contact_sender_not_configured';
+        } else if (err.code === 'contact_gmail_scope' || /gmail\.send|Send" permissions/i.test(msg)) {
+            code = 'contact_integration_expired';
         } else if (/expired|reconnect/i.test(msg)) {
             code = 'contact_integration_expired';
         } else if (/rate limit/i.test(msg)) {
             code = 'contact_rate_limited';
-        } else if (err.code === 'EAUTH' || /invalid login|authentication/i.test(msg)) {
-            code = 'contact_smtp_auth';
-        } else if (err.code === 'SMTP_TIMEOUT' || err.code === 'ETIMEDOUT') {
-            code = 'contact_smtp_timeout';
         }
+        const inbox = getContactFormInbox();
+        const userMessage =
+            code === 'contact_sender_not_configured'
+                ? `We could not send your message right now. Please email ${inbox} directly or try again later.`
+                : code === 'contact_integration_expired'
+                  ? 'Our email connection needs to be renewed. Please email us directly or try again in a few minutes.'
+                  : code === 'contact_rate_limited'
+                    ? 'Too many messages sent recently. Please wait a few minutes and try again.'
+                    : `We could not deliver your message. Please email ${inbox} directly or try again later.`;
+
         return res.status(503).json({
             success: false,
             code,
-            message: 'Your message could not be sent. Check your connection and try again.',
+            message: userMessage,
         });
     }
 };

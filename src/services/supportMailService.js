@@ -24,7 +24,9 @@ function isPlaceholderSmtpPass(pass) {
         lower.includes('your_') ||
         lower.includes('your-') ||
         lower.includes('changeme') ||
-        lower.includes('placeholder')
+        lower.includes('placeholder') ||
+        lower.includes('password_here') ||
+        lower === 'your_cdmon_password_here'
     );
 }
 

@@ -1,11 +1,19 @@
 import { Router } from 'express';
-import { getPublicReviewConfig, submitReview, submitLead, submitFeedback, submitContactForm } from '../controllers/publicController.js';
+import {
+    getPublicReviewConfig,
+    submitReview,
+    submitLead,
+    submitFeedback,
+    submitContactForm,
+    getContactFormStatus,
+} from '../controllers/publicController.js';
 
 const router = Router();
 
 // Routes are mounted at /api in index.js
 
 // Landing Page Contact
+router.get('/support/contact/status', getContactFormStatus);
 router.post('/support/contact', submitContactForm);
 
 // GET /api/r/:automation_id — star rating review funnel
