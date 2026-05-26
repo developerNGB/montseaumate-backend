@@ -112,6 +112,15 @@ const dispatchFollowup = async (userId, lead, message, subject = 'Message from O
 /** Exported for activity-log retry and internal tooling */
 export const dispatchFollowupForLead = dispatchFollowup;
 
+async function logActivity(entry) {
+    try {
+        const { insertActivityLog } = await import('../services/activityLogService.js');
+        await insertActivityLog(entry);
+    } catch (err) {
+        console.error('[leadsController] activity log failed:', err.message);
+    }
+}
+
 /**
  * GET /api/leads/folders — folder cards with contact counts + per-folder message
  */
@@ -426,6 +435,7 @@ export const importLeads = async (req, res) => {
         );
 
         const savedLeads = insertRes.rows;
+        const isReviewImport = /review\s*funnel/i.test(String(sourceHint || ''));
 
         if (savedLeads.length > 0) {
             try {
@@ -435,6 +445,23 @@ export const importLeads = async (req, res) => {
                 });
             } catch (folderErr) {
                 console.error('[importLeads] lead_folders upsert failed:', folderErr.message);
+            }
+
+            try {
+                await logActivity({
+                    userId,
+                    automationName: isReviewImport ? 'Review Funnel' : 'Lead Import',
+                    triggerType: isReviewImport ? 'Review request batch' : 'Contact import',
+                    status: 'Success',
+                    detail: `${savedLeads.length} contact${savedLeads.length === 1 ? '' : 's'} added to ${defaultGroup}`,
+                    metadata: {
+                        folder: defaultGroup,
+                        source: sourceHint || 'import',
+                        lead_ids: savedLeads.map((l) => l.id),
+                    },
+                });
+            } catch (logErr) {
+                console.error('[importLeads] activity log failed:', logErr.message);
             }
         }
 
@@ -461,9 +488,21 @@ export const importLeads = async (req, res) => {
                         emailEnabled: captureCfg.email_enabled,
                     })
                 )
-            ).then(results => {
+            ).then(async (results) => {
                 const sent = results.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
                 console.log(`[importLeads] Auto-response: ${sent}/${savedLeads.length} sent`);
+                try {
+                    await logActivity({
+                        userId,
+                        automationName: 'Lead Capture Form',
+                        triggerType: 'Auto-response',
+                        status: sent > 0 ? 'Success' : 'Attention',
+                        detail: `${sent}/${savedLeads.length} capture messages sent`,
+                        metadata: { folder: defaultGroup, sent, total: savedLeads.length },
+                    });
+                } catch (logErr) {
+                    console.error('[importLeads] capture activity log failed:', logErr.message);
+                }
             });
         }
 
@@ -602,10 +641,14 @@ export const triggerLeadFollowup = async (req, res) => {
 
 export const triggerBulkFollowup = async (req, res) => {
     try {
-        const { ids, message: messageOverride, group: groupFilter } = req.body;
+        const { ids, message: messageOverride, group: groupFilter, purpose } = req.body;
+        const isReviewBatch = purpose === 'review';
 
-        const resolveMessageForLead = async (lead, cfg) => {
+        const resolveMessageForLead = async (lead, cfg, reviewCfg) => {
             if (messageOverride?.trim()) return messageOverride.trim();
+            if (isReviewBatch && reviewCfg?.auto_response_message?.trim()) {
+                return reviewCfg.auto_response_message.trim();
+            }
             const folderMsg = await getFolderMessage(
                 req.user.id,
                 lead.lead_group || DEFAULT_LEAD_GROUP
@@ -622,20 +665,57 @@ export const triggerBulkFollowup = async (req, res) => {
             return cfg?.message || 'Hi {name}! Thanks for reaching out.';
         };
 
+        const channelOptions = (cfg, reviewCfg) =>
+            isReviewBatch
+                ? {
+                      whatsappEnabled: reviewCfg?.whatsapp_enabled !== false,
+                      emailEnabled: reviewCfg?.email_enabled !== false,
+                  }
+                : {
+                      whatsappEnabled: cfg?.whatsapp_enabled !== false,
+                      emailEnabled: cfg?.email_enabled !== false,
+                  };
+
+        const logBulkActivity = async (sent, total) => {
+            if (total <= 0) return;
+            const automationName = isReviewBatch ? 'Review Funnel' : 'Lead Follow-up';
+            const triggerType = isReviewBatch ? 'Review request' : 'Bulk Trigger';
+            const detail = isReviewBatch
+                ? `${sent}/${total} review requests sent`
+                : `${sent}/${total} follow-up messages sent`;
+            await logActivity({
+                userId: req.user.id,
+                automationName,
+                triggerType,
+                status: sent > 0 ? 'Success' : 'Attention',
+                detail,
+                metadata: { sent, total, group: groupFilter || null },
+            });
+        };
+
         // If IDs are provided, trigger for those specific leads
         if (Array.isArray(ids) && ids.length > 0) {
             const cfgRes = await pool.query(
                 `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
                         lfs.whatsapp_enabled, lfs.email_enabled,
                         u.company_name,
-                        rfs.google_review_url, rfs.automation_id
-                 FROM lead_followup_settings lfs
-                 JOIN users u ON u.id = lfs.user_id
+                        rfs.auto_response_message, rfs.google_review_url, rfs.automation_id,
+                        rfs.whatsapp_enabled AS review_whatsapp_enabled,
+                        rfs.email_enabled AS review_email_enabled
+                 FROM users u
+                 LEFT JOIN lead_followup_settings lfs ON lfs.user_id = u.id
                  LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
-                 WHERE lfs.user_id = $1`,
+                 WHERE u.id = $1`,
                 [req.user.id]
             );
-            const cfg = cfgRes.rows[0];
+            const cfg = cfgRes.rows[0] || {};
+            const reviewCfg = {
+                auto_response_message: cfg.auto_response_message,
+                google_review_url: cfg.google_review_url,
+                automation_id: cfg.automation_id,
+                whatsapp_enabled: cfg.review_whatsapp_enabled,
+                email_enabled: cfg.review_email_enabled,
+            };
 
             const leadsRes = await pool.query(
                 `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
@@ -652,12 +732,11 @@ export const triggerBulkFollowup = async (req, res) => {
             }
 
             let sent = 0;
+            const channels = channelOptions(cfg, reviewCfg);
+            const emailSubject = isReviewBatch ? 'We would love your feedback' : 'Message from Our Team';
             for (const lead of leads) {
-                const msg = await resolveMessageForLead(lead, cfg);
-                const channel = await dispatchFollowup(req.user.id, lead, msg, 'Message from Our Team', {
-                    whatsappEnabled: cfg?.whatsapp_enabled,
-                    emailEnabled: cfg?.email_enabled,
-                });
+                const msg = await resolveMessageForLead(lead, cfg, reviewCfg);
+                const channel = await dispatchFollowup(req.user.id, lead, msg, emailSubject, channels);
                 if (channel !== 'none') sent++;
             }
 
@@ -671,11 +750,7 @@ export const triggerBulkFollowup = async (req, res) => {
                 [leads.map((l) => l.id), req.user.id]
             );
 
-            await pool.query(
-                `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
-                 VALUES ($1, $2, $3, 'Success', $4, NOW())`,
-                [req.user.id, 'Lead Follow-up', 'Bulk Trigger', `${sent}/${leads.length} follow-up messages sent`]
-            );
+            await logBulkActivity(sent, leads.length);
 
             return res.status(200).json({
                 success: true,
@@ -685,13 +760,22 @@ export const triggerBulkFollowup = async (req, res) => {
         }
 
         if (groupFilter?.trim()) {
-            const cfgRes = await pool.query(
-                `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
-                        lfs.whatsapp_enabled, lfs.email_enabled
-                 FROM lead_followup_settings lfs WHERE user_id = $1`,
-                [req.user.id]
-            );
+            const [cfgRes, reviewRes] = await Promise.all([
+                pool.query(
+                    `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
+                            lfs.whatsapp_enabled, lfs.email_enabled
+                     FROM lead_followup_settings lfs WHERE user_id = $1`,
+                    [req.user.id]
+                ),
+                pool.query(
+                    `SELECT auto_response_message, automation_id, google_review_url,
+                            whatsapp_enabled, email_enabled, is_active
+                     FROM review_funnel_settings WHERE user_id = $1`,
+                    [req.user.id]
+                ),
+            ]);
             const cfg = cfgRes.rows[0];
+            const reviewCfg = reviewRes.rows[0];
             const folderName = normalizeLeadGroup(groupFilter);
             const leadsRes = await pool.query(
                 `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
@@ -708,12 +792,11 @@ export const triggerBulkFollowup = async (req, res) => {
                 return res.status(200).json({ success: true, message: 'No leads to message in this folder', triggered: 0 });
             }
             let sent = 0;
+            const channels = channelOptions(cfg, reviewCfg);
+            const emailSubject = isReviewBatch ? 'We would love your feedback' : 'Message from Our Team';
             for (const lead of leads) {
-                const msg = await resolveMessageForLead(lead, cfg);
-                const channel = await dispatchFollowup(req.user.id, lead, msg, 'Message from Our Team', {
-                    whatsappEnabled: cfg?.whatsapp_enabled,
-                    emailEnabled: cfg?.email_enabled,
-                });
+                const msg = await resolveMessageForLead(lead, cfg, reviewCfg);
+                const channel = await dispatchFollowup(req.user.id, lead, msg, emailSubject, channels);
                 if (channel !== 'none') sent++;
             }
             await pool.query(
@@ -722,6 +805,7 @@ export const triggerBulkFollowup = async (req, res) => {
                  WHERE id = ANY($1) AND user_id = $2`,
                 [leads.map((l) => l.id), req.user.id]
             );
+            await logBulkActivity(sent, leads.length);
             return res.status(200).json({ success: true, message: `${sent} messages sent`, triggered: sent });
         }
 

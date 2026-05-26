@@ -219,6 +219,10 @@ app.use('/api/integrations', integrationOAuthRoutes);
 // Public i18n overrides (SPA loads before / with login; POST /update stays authenticated on the route)
 app.use('/api/translations', translationRoutes);
 
+// Public funnels (review / feedback / lead capture) — MUST be before dashboardApi.
+// dashboardApi applies authenticate to every /api request; mounting it first caused 401 on /api/r/*.
+app.use('/api', publicRoutes);
+
 // Protected dashboard APIs — require Stripe subscription (admins exempt)
 const dashboardApi = express.Router();
 dashboardApi.use(authenticate, requireActiveSubscription);
@@ -236,9 +240,6 @@ dashboardApi.use('/smtp', smtpRoutes);
 dashboardApi.use('/apollo', apolloRoutes);
 dashboardApi.use('/apify', apolloRoutes);
 app.use('/api', dashboardApi);
-
-// Public Facing Funnels (No Auth)
-app.use('/api', publicRoutes);
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // 404 handler

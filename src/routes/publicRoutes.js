@@ -8,10 +8,13 @@ const router = Router();
 // Landing Page Contact
 router.post('/support/contact', submitContactForm);
 
-// GET /api/r/:automation_id
+// GET /api/r/:automation_id — star rating review funnel
 router.get('/r/:automation_id', getPublicReviewConfig);
 
-// GET /api/l/:automation_id
+// GET /api/f/:automation_id — multi-dimension feedback survey (same config payload)
+router.get('/f/:automation_id', getPublicReviewConfig);
+
+// GET /api/l/:automation_id — lead capture form header
 router.get('/l/:automation_id', getPublicReviewConfig);
 
 // POST /api/f/:automation_id/submit
