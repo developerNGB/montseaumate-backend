@@ -79,7 +79,16 @@ export const getReviewFunnelConfig = async (req, res) => {
                 leadQrCode,
                 lead_source: config.lead_source || 'qr',
                 capture_source: config.capture_source || 'qr',
-                lead_sources: config.lead_sources ? (typeof config.lead_sources === 'string' ? JSON.parse(config.lead_sources) : config.lead_sources) : [config.lead_source || 'qr'],
+                lead_sources: (() => {
+                    const raw = config.lead_sources
+                        ? typeof config.lead_sources === 'string'
+                            ? JSON.parse(config.lead_sources)
+                            : config.lead_sources
+                        : [config.lead_source || 'qr'];
+                    const list = Array.isArray(raw) ? raw : [raw];
+                    const filtered = list.filter((s) => s && s !== 'website');
+                    return filtered.length ? filtered : ['qr'];
+                })(),
                 capture_sources: config.capture_sources ? (typeof config.capture_sources === 'string' ? JSON.parse(config.capture_sources) : config.capture_sources) : [config.capture_source || 'qr'],
                 whatsapp_enabled: config.whatsapp_enabled ?? true,
                 email_enabled: config.email_enabled ?? true,
@@ -145,9 +154,12 @@ export const saveReviewFunnelConfig = async (req, res) => {
             existingConfig.capture_source || 'qr'
         );
         if (Array.isArray(req.body.lead_sources) && req.body.lead_sources.length) {
-            leadSourcesArr = req.body.lead_sources.filter(isValidSource);
+            leadSourcesArr = req.body.lead_sources
+                .filter(isValidSource)
+                .filter((s) => s !== 'website');
             if (!leadSourcesArr.length) leadSourcesArr = ['qr'];
         }
+        leadSourcesArr = leadSourcesArr.filter((s) => s !== 'website');
         if (Array.isArray(req.body.capture_sources) && req.body.capture_sources.length) {
             captureSourcesArr = req.body.capture_sources.filter(isValidSource);
             if (!captureSourcesArr.length) captureSourcesArr = ['qr'];
