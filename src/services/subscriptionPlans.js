@@ -1,3 +1,5 @@
+import { isAdminUser } from '../utils/adminAccess.js';
+
 /**
  * Billing / subscription helpers: plan tiers, marketplace run credits, automation slots.
  * Env overrides (optional integers, >= 0):
@@ -19,6 +21,25 @@ export const isTrialing = (trialEndsAt) => {
     const t = trialEndsAt instanceof Date ? trialEndsAt : new Date(trialEndsAt);
     return !Number.isNaN(t.valueOf()) && t > new Date();
 };
+
+/**
+ * Effective plan for limits and entitlements.
+ * Admin accounts (role admin or ADMIN_EMAILS) always get Pro with no trial cap.
+ */
+export function resolveBillingForEntitlements(user, plan, trialEndsAt) {
+    if (isAdminUser(user)) {
+        return { plan: 'pro', trial_ends_at: null };
+    }
+    return {
+        plan: String(plan ?? 'free').trim() || 'free',
+        trial_ends_at: trialEndsAt ?? null,
+    };
+}
+
+export function getPlanEntitlementsForUser(user, plan, trialEndsAt) {
+    const resolved = resolveBillingForEntitlements(user, plan, trialEndsAt);
+    return getPlanEntitlements(resolved.plan, resolved.trial_ends_at);
+}
 
 /** Maps DB plan ids (free, Growth, Pro, …) to internal tier keys */
 export const normalizeBillingPlan = (plan = 'free') => {

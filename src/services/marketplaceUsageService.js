@@ -5,6 +5,7 @@ import {
     normalizeBillingPlan,
     isTrialing,
     getPlanEntitlements,
+    resolveBillingForEntitlements,
 } from './subscriptionPlans.js';
 
 /** @deprecated Prefer getMarketplaceRunsLimit + search_runs; kept for dashboards */
@@ -26,11 +27,15 @@ export const getUsageSnapshot = async (client, userId) => {
     const period = getCurrentUsagePeriod();
 
     const userRes = await client.query(
-        'SELECT plan, trial_ends_at FROM users WHERE id = $1',
+        'SELECT plan, trial_ends_at, email, role FROM users WHERE id = $1',
         [userId]
     );
-    const plan = userRes.rows[0]?.plan ?? 'free';
-    const trialEndsAt = userRes.rows[0]?.trial_ends_at ?? null;
+    const userRow = userRes.rows[0] || {};
+    const { plan, trial_ends_at: trialEndsAt } = resolveBillingForEntitlements(
+        userRow,
+        userRow.plan,
+        userRow.trial_ends_at
+    );
 
     const runsLimit = getMarketplaceRunsLimit(plan, trialEndsAt);
 
@@ -111,13 +116,14 @@ export const tryConsumeMarketplaceRun = async (client, userId) => {
     const period = getCurrentUsagePeriod();
 
     const lockedUser = await client.query(
-        'SELECT plan, trial_ends_at FROM users WHERE id = $1 FOR UPDATE',
+        'SELECT plan, trial_ends_at, email, role FROM users WHERE id = $1 FOR UPDATE',
         [userId]
     );
     const rowU = lockedUser.rows[0];
     if (!rowU) return { ok: false, code: 'USER_NOT_FOUND' };
 
-    const runsLimit = getMarketplaceRunsLimit(rowU.plan, rowU.trial_ends_at);
+    const billing = resolveBillingForEntitlements(rowU, rowU.plan, rowU.trial_ends_at);
+    const runsLimit = getMarketplaceRunsLimit(billing.plan, billing.trial_ends_at);
     if (runsLimit <= 0) {
         return {
             ok: false,
@@ -164,8 +170,11 @@ export const tryConsumeMarketplaceRun = async (client, userId) => {
 };
 
 async function buildMiniSnapshot(client, userId, period, userRow, searchRunsUsed, runsLimitExplicit) {
-    const plan = userRow.plan ?? 'free';
-    const trialEndsAt = userRow.trial_ends_at ?? null;
+    const { plan, trial_ends_at: trialEndsAt } = resolveBillingForEntitlements(
+        userRow,
+        userRow.plan,
+        userRow.trial_ends_at
+    );
     const runsLimit =
         typeof runsLimitExplicit === 'number'
             ? runsLimitExplicit

@@ -4,6 +4,8 @@ import pool from '../db/pool.js';
 import { signAccessToken } from '../utils/accessToken.js';
 import { setJwtCookie } from '../utils/cookieHelpers.js';
 import { enrichUserForClient } from '../utils/billingAccess.js';
+import { resolveBillingForEntitlements } from '../services/subscriptionPlans.js';
+import { isAdminUser } from '../utils/adminAccess.js';
 
 const getStripe = () => {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -83,17 +85,23 @@ export const getBillingStatus = async (req, res) => {
     try {
         const configured = isStripeConfigured();
         const row = await pool.query(
-            `SELECT plan, stripe_customer_id, stripe_subscription_id
+            `SELECT plan, trial_ends_at, email, role, stripe_customer_id, stripe_subscription_id
              FROM users WHERE id = $1`,
             [req.user.id]
         );
         const u = row.rows[0];
+        const billing = resolveBillingForEntitlements(
+            req.user,
+            u?.plan,
+            u?.trial_ends_at
+        );
         return res.json({
             success: true,
             configured,
-            plan: u?.plan ?? 'free',
-            canManagePortal: configured && !!u?.stripe_customer_id,
-            hasStripeSubscription: !!u?.stripe_subscription_id,
+            plan: billing.plan,
+            is_admin: isAdminUser(req.user),
+            canManagePortal: configured && !!u?.stripe_customer_id && !isAdminUser(req.user),
+            hasStripeSubscription: !!u?.stripe_subscription_id || isAdminUser(req.user),
         });
     } catch (err) {
         console.error('[getBillingStatus]', err.message);

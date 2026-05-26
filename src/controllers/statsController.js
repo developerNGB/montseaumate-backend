@@ -1,5 +1,9 @@
 import pool from '../db/pool.js';
-import { getPlanEntitlements, isTrialing } from '../services/subscriptionPlans.js';
+import {
+    getPlanEntitlements,
+    isTrialing,
+    resolveBillingForEntitlements,
+} from '../services/subscriptionPlans.js';
 import { sanitizeLeads } from '../utils/leadPrivacy.js';
 
 export const getDashboardStats = async (req, res) => {
@@ -101,7 +105,12 @@ export const getDashboardStats = async (req, res) => {
         ]);
 
         const billRow = userBillingRes.rows[0] ?? {};
-        const planSlug = String(billRow.plan ?? 'free').trim();
+        const billingResolved = resolveBillingForEntitlements(
+            req.user,
+            billRow.plan,
+            billRow.trial_ends_at
+        );
+        const planSlug = String(billingResolved.plan).trim();
         const onPaidGrowthOrPro = /^pro$/i.test(planSlug) || /^growth$/i.test(planSlug);
 
         const leadsReceived = parseInt(leadsRes.rows[0].count, 10);
@@ -216,12 +225,12 @@ export const getDashboardStats = async (req, res) => {
             },
             pipeline: sanitizeLeads(pipelineRes.rows),
             billing: {
-                plan: billRow.plan ?? 'free',
-                trial_ends_at: billRow.trial_ends_at ?? null,
-                trial_active: !onPaidGrowthOrPro && isTrialing(billRow.trial_ends_at ?? null),
+                plan: billingResolved.plan,
+                trial_ends_at: billingResolved.trial_ends_at,
+                trial_active: !onPaidGrowthOrPro && isTrialing(billingResolved.trial_ends_at),
                 entitlements: getPlanEntitlements(
-                    billRow.plan ?? 'free',
-                    billRow.trial_ends_at ?? null
+                    billingResolved.plan,
+                    billingResolved.trial_ends_at
                 ),
             },
         });

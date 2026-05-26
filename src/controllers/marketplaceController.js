@@ -6,14 +6,21 @@
 
 import pool from '../db/pool.js';
 import { runApifyScraper } from '../services/apifyService.js';
-import { getPlanEntitlements } from '../services/subscriptionPlans.js';
+import { getPlanEntitlementsForUser } from '../services/subscriptionPlans.js';
 import { sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
 
-async function rejectClassifiedIfNotEntitled(userId, res) {
+async function rejectClassifiedIfNotEntitled(user, res) {
     const billing = (
-        await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId])
+        await pool.query(
+            'SELECT plan, trial_ends_at, email, role FROM users WHERE id = $1',
+            [user.id]
+        )
     ).rows[0];
-    const entitlements = getPlanEntitlements(billing?.plan ?? 'free', billing?.trial_ends_at ?? null);
+    const entitlements = getPlanEntitlementsForUser(
+        user,
+        billing?.plan ?? 'free',
+        billing?.trial_ends_at ?? null
+    );
     if (entitlements.classified_marketplace_bulk) return false;
     res.status(403).json({
         success: false,
@@ -51,7 +58,7 @@ const DISPLAY_NAMES = {
 export const fetchMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
 
-    if (await rejectClassifiedIfNotEntitled(userId, res)) return;
+    if (await rejectClassifiedIfNotEntitled(req.user, res)) return;
 
     const { marketplaces } = req.body;
 
@@ -116,7 +123,7 @@ export const fetchMarketplaceLeads = async (req, res) => {
 export const storeMarketplaceLeads = async (req, res) => {
     const userId = req.user.id;
 
-    if (await rejectClassifiedIfNotEntitled(userId, res)) return;
+    if (await rejectClassifiedIfNotEntitled(req.user, res)) return;
 
     const { leads } = req.body;
 

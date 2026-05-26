@@ -171,8 +171,8 @@ app.use((req, res, next) => {
     csrfProtection(req, res, next);
 });
 
-// CSRF token endpoint
-app.get('/csrf-token', (req, res) => {
+// CSRF token endpoint (must run csrf middleware on this route — global skip does not attach req.csrfToken)
+app.get('/csrf-token', csrfProtection, (req, res) => {
     res.json({ csrfToken: req.csrfToken() });
 });
 

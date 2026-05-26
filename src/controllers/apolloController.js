@@ -3,7 +3,7 @@ import apifyNicheService from '../services/apifyNicheService.js';
 import pool from '../db/pool.js';
 import { createHash, randomUUID } from 'crypto';
 import * as whatsappService from '../services/whatsappService.js';
-import { getPlanEntitlements } from '../services/subscriptionPlans.js';
+import { getPlanEntitlementsForUser } from '../services/subscriptionPlans.js';
 import {
     getUsageSnapshot,
     incrementMarketplaceUsage,
@@ -11,11 +11,18 @@ import {
 } from '../services/marketplaceUsageService.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 
-async function loadEntitlements(userId) {
+async function loadEntitlements(authUser) {
     const row = (
-        await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId])
+        await pool.query(
+            'SELECT plan, trial_ends_at, email, role FROM users WHERE id = $1',
+            [authUser.id]
+        )
     ).rows[0];
-    return getPlanEntitlements(row?.plan ?? 'free', row?.trial_ends_at ?? null);
+    return getPlanEntitlementsForUser(
+        authUser,
+        row?.plan ?? 'free',
+        row?.trial_ends_at ?? null
+    );
 }
 
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
@@ -457,7 +464,7 @@ class ApolloController {
      */
     async search(req, res) {
         try {
-            const entitlements = await loadEntitlements(req.user.id);
+            const entitlements = await loadEntitlements(req.user);
             if (!entitlements.apollo_b2b_search) {
                 return res.status(403).json({
                     success: false,
@@ -735,7 +742,7 @@ class ApolloController {
      */
     async enrich(req, res) {
         try {
-            const entitlements = await loadEntitlements(req.user.id);
+            const entitlements = await loadEntitlements(req.user);
             if (!entitlements.apollo_enrich) {
                 return res.status(403).json({
                     success: false,
@@ -816,7 +823,7 @@ class ApolloController {
      */
     async testApify(req, res) {
         try {
-            const entitlements = await loadEntitlements(req.user.id);
+            const entitlements = await loadEntitlements(req.user);
             if (!entitlements.apollo_b2b_search) {
                 return res.status(403).json({
                     success: false,

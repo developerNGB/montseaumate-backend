@@ -2,11 +2,23 @@ import pool from '../db/pool.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import crypto from 'crypto';
 import qrcode from 'qrcode';
-import { countEmployeesAfterPatch, getMaxEmployees, getMaxFollowupSequenceSteps } from '../services/subscriptionPlans.js';
+import {
+    countEmployeesAfterPatch,
+    getMaxEmployees,
+    getMaxFollowupSequenceSteps,
+    resolveBillingForEntitlements,
+} from '../services/subscriptionPlans.js';
 
-async function loadBillingRow(userId) {
-    const u = await pool.query('SELECT plan, trial_ends_at FROM users WHERE id = $1', [userId]);
-    return u.rows[0] || { plan: 'free', trial_ends_at: null };
+async function loadBillingRow(userId, authUser = null) {
+    const u = await pool.query(
+        'SELECT plan, trial_ends_at, email, role FROM users WHERE id = $1',
+        [userId]
+    );
+    const row = u.rows[0] || { plan: 'free', trial_ends_at: null };
+    const actor = authUser?.id
+        ? { email: authUser.email ?? row.email, role: authUser.role ?? row.role }
+        : row;
+    return resolveBillingForEntitlements(actor, row.plan, row.trial_ends_at);
 }
 
 function respondEmployeeLimit(res, billing, wouldTotal) {
@@ -186,7 +198,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 lead_capture_active: finalCaptureActive,
             },
         });
-        const billingRow = await loadBillingRow(req.user.id);
+        const billingRow = await loadBillingRow(req.user.id, req.user);
         const maxEmployeesAllowed = getMaxEmployees(billingRow.plan, billingRow.trial_ends_at);
         if (projectedEmployees > maxEmployeesAllowed) {
             return respondEmployeeLimit(res, billingRow, projectedEmployees);
@@ -428,7 +440,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 : rawFollowupSeq;
         if (!Array.isArray(followup_sequence)) followup_sequence = [];
 
-        const billingLf = await loadBillingRow(req.user.id);
+        const billingLf = await loadBillingRow(req.user.id, req.user);
         const maxFollowSteps = getMaxFollowupSequenceSteps(billingLf.plan, billingLf.trial_ends_at);
         if (maxFollowSteps !== null && followup_sequence.length > maxFollowSteps) {
             return res.status(403).json({
@@ -541,7 +553,7 @@ export const toggleRecipe = async (req, res) => {
                     [userId]
                 ),
                 pool.query('SELECT is_active FROM lead_followup_settings WHERE user_id = $1', [userId]),
-                loadBillingRow(userId),
+                loadBillingRow(userId, req.user),
             ]);
             const patch = {};
             if (recipe === 'reviewFunnel') patch.is_active = true;
