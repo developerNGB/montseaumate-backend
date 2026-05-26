@@ -6,12 +6,12 @@ export const injectPlaceholders = (template, data = {}) => {
     
     let result = template;
     
-    // Replace {name} or {{name}} with data.name, data.full_name, or ''
+    // Replace {name} / {NAME} or {{name}} with data.name, data.full_name, or ''
     const participantName = data.name || data.full_name || '';
     result = result.replace(/{{name}}/gi, participantName);
     result = result.replace(/{name}/gi, participantName);
-    
-    // Replace {link} or {{link}} with data.link, data.publicUrl, or ''
+
+    // Replace {link} / {LINK} or {{link}} with data.link, data.publicUrl, or ''
     const targetLink = resolveMessageLink(template, data);
     result = result.replace(/{{link}}/gi, targetLink);
     result = result.replace(/{link}/gi, targetLink);

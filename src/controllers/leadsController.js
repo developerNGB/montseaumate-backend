@@ -1,116 +1,20 @@
 import pool from '../db/pool.js';
-import { frontendBaseUrl } from '../utils/publicUrls.js';
-import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
-import * as whatsappService from '../services/whatsappService.js';
-import { sendDynamicEmail } from '../services/emailService.js';
-import { sanitizeLeadRow, sanitizeLeadEmailForPublic, sanitizeLeads } from '../utils/leadPrivacy.js';
-import { retryAsync } from '../utils/retryAsync.js';
+import { sanitizeLeadRow, sanitizeLeads } from '../utils/leadPrivacy.js';
 import { normalizeLeadGroup, DEFAULT_LEAD_GROUP } from '../utils/leadGroups.js';
 import { upsertLeadFolder, getFolderMessage } from '../utils/leadFolders.js';
+import { dispatchFollowupForLead } from '../services/leadDispatchService.js';
+import { executeBulkLeadMessaging } from '../services/bulkLeadMessaging.js';
 
-/**
- * Extract a name from email address (e.g., info@company.com → Info, john.smith@email.com → John Smith)
- */
+/** Re-export for activity-log retry and internal tooling */
+export { dispatchFollowupForLead };
+
 const extractNameFromEmail = (email) => {
     if (!email) return null;
     const localPart = email.split('@')[0];
-    // Remove numbers and split by common separators
-    const parts = localPart.replace(/[0-9]/g, '').split(/[._\-]/).filter(p => p.length > 1);
+    const parts = localPart.replace(/[0-9]/g, '').split(/[._\-]/).filter((p) => p.length > 1);
     if (parts.length === 0) return null;
-    // Capitalize each part
-    return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+    return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
 };
-
-/**
- * Dispatch a follow-up message to a single lead.
- * Priority: WhatsApp native → email cascade. No external automation service.
- * Never throws — logs errors and continues.
- * @param {string} subject - Optional custom subject line
- */
-const dispatchFollowup = async (userId, lead, message, subject = 'Message from Our Team', options = {}) => {
-    const dispatchStart = Date.now();
-    const whatsappEnabled = options.whatsappEnabled !== false;
-    const emailEnabled = options.emailEnabled !== false;
-    const recipientEmail = sanitizeLeadEmailForPublic(lead.email);
-    // Name handling: use provided name, or extract from email, or fallback to "there"
-    const leadName = lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
-        ? lead.full_name
-        : extractNameFromEmail(recipientEmail) || 'there';
-    
-    const origin = frontendBaseUrl() || '';
-    if (!origin) {
-        console.error('[dispatchFollowup] FRONTEND_URL is not set; review/funnel links in messages may be wrong');
-    }
-    const link = lead.automation_id ? `${origin}/r/${lead.automation_id}` : origin;
-
-    const personalisedMsg = injectPlaceholders(message || 'Hi {name}! Thanks for reaching out.', {
-        name: leadName,
-        full_name: leadName,
-        link: link,
-        reviewUrl: link,
-        googleReviewUrl: lead.google_review_url,
-        company: lead.company_name || 'Our Team'
-    });
-
-    console.log(`[Followup][${dispatchStart}] Dispatching to ${recipientEmail || lead.phone || 'unknown'} (ID: ${lead.id || 'new'}, Name: ${leadName})`);
-
-    const sentChannels = [];
-
-    // 1. Native WhatsApp
-    if (whatsappEnabled && lead.phone) {
-        try {
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📱 Attempting WhatsApp to ${lead.phone}...`);
-            const waInt = await pool.query(
-                `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
-                [userId]
-            );
-            if (waInt.rows[0]?.access_token === 'whatsapp_native_session') {
-                await retryAsync(
-                    () => whatsappService.sendWhatsAppMessage(userId, lead.phone, personalisedMsg),
-                    { attempts: 3, delayMs: 1000 }
-                );
-                console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ WhatsApp sent`);
-                sentChannels.push('whatsapp');
-            }
-        } catch (e) {
-            console.warn(`[Followup][${Date.now() - dispatchStart}ms] WhatsApp failed:`, e.message);
-        }
-    }
-
-    // 2. Email - via emailService cascade: SMTP → Microsoft → Google → system gmail
-    if (emailEnabled && recipientEmail) {
-        try {
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] 📧 Attempting email to ${recipientEmail}...`);
-            const result = await retryAsync(
-                () =>
-                    sendDynamicEmail(userId, {
-                        to: recipientEmail,
-                        subject: subject,
-                        text: personalisedMsg,
-                        html: createEmailTemplate(personalisedMsg, leadName, subject),
-                    }),
-                { attempts: 3, delayMs: 1000 }
-            );
-            console.log(`[Followup][${Date.now() - dispatchStart}ms] ✅ Email sent via ${result.provider || 'unknown'}`);
-            sentChannels.push(result.provider || 'email');
-        } catch (e) {
-            console.error(`[Followup][${Date.now() - dispatchStart}ms] ❌ Email failed:`, e.message);
-            if (sentChannels.length === 0 && (e.message.includes('expired') || e.message.includes('permission') || e.message.includes('Invalid recipient'))) {
-                throw e;
-            }
-        }
-    }
-
-    if (sentChannels.length > 0) {
-        return sentChannels.join('+');
-    }
-
-    console.warn(`[Followup][${Date.now() - dispatchStart}ms] ❌ No channel available for lead ${lead.id || lead.email || lead.phone}`);
-    return 'none';
-};
-
-/** Exported for activity-log retry and internal tooling */
-export const dispatchFollowupForLead = dispatchFollowup;
 
 async function logActivity(entry) {
     try {
@@ -195,10 +99,22 @@ export const updateFolderMessage = async (req, res) => {
 
 export const getLeads = async (req, res) => {
     try {
-        const { search, source, status, group, startDate, endDate } = req.query;
+        const { search, source, status, group, startDate, endDate, ids } = req.query;
         let query = `SELECT * FROM leads WHERE user_id = $1`;
         const params = [req.user.id];
         let paramIndex = 2;
+
+        if (ids) {
+            const idList = String(ids)
+                .split(',')
+                .map((v) => parseInt(v, 10))
+                .filter((n) => Number.isFinite(n) && n > 0);
+            if (idList.length > 0) {
+                query += ` AND id = ANY($${paramIndex})`;
+                params.push(idList);
+                paramIndex++;
+            }
+        }
 
         if (search) {
             query += ` AND (full_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex} OR phone ILIKE $${paramIndex})`;
@@ -483,7 +399,7 @@ export const importLeads = async (req, res) => {
         if (captureActive) {
             Promise.allSettled(
                 savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowup(userId, { ...lead, automation_id: captureCfg.automation_id, google_review_url: captureCfg.google_review_url }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
+                    dispatchFollowupForLead(userId, { ...lead, automation_id: captureCfg.automation_id, google_review_url: captureCfg.google_review_url }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
                         whatsappEnabled: captureCfg.whatsapp_enabled,
                         emailEnabled: captureCfg.email_enabled,
                     })
@@ -500,6 +416,13 @@ export const importLeads = async (req, res) => {
                         detail: `${sent}/${savedLeads.length} capture messages sent`,
                         metadata: { folder: defaultGroup, sent, total: savedLeads.length },
                     });
+                    const { notifyOwnerBulkSendComplete } = await import('../services/ownerNotifyService.js');
+                    await notifyOwnerBulkSendComplete(userId, {
+                        purpose: 'capture',
+                        sent,
+                        total: savedLeads.length,
+                        folderName: defaultGroup,
+                    });
                 } catch (logErr) {
                     console.error('[importLeads] capture activity log failed:', logErr.message);
                 }
@@ -508,6 +431,22 @@ export const importLeads = async (req, res) => {
 
         if (followupActive) {
             console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up cron`);
+        }
+
+        if (isReviewImport) {
+            executeBulkLeadMessaging(userId, {
+                group: defaultGroup,
+                purpose: 'review',
+                notifyOwner: true,
+            })
+                .then((result) => {
+                    console.log(
+                        `[importLeads] Review bulk: ${result.sent}/${result.total} sent for folder ${defaultGroup}`
+                    );
+                })
+                .catch((err) => {
+                    console.error('[importLeads] Review bulk send failed:', err.message);
+                });
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message, err.code || '', err.detail || '');
@@ -589,7 +528,7 @@ export const triggerLeadFollowup = async (req, res) => {
         const subject = isFirstMessage ? 'Thanks for reaching out!' : `Follow-up from ${lead.company_name || 'Our Team'}`;
 
         // Dispatch via internal cascade only: WhatsApp native → email.
-        const channel = await dispatchFollowup(req.user.id, lead, messageToSend, subject, {
+        const channel = await dispatchFollowupForLead(req.user.id, lead, messageToSend, subject, {
             whatsappEnabled: lead.lfs_whatsapp_enabled,
             emailEnabled: lead.lfs_email_enabled,
         });
@@ -642,171 +581,24 @@ export const triggerLeadFollowup = async (req, res) => {
 export const triggerBulkFollowup = async (req, res) => {
     try {
         const { ids, message: messageOverride, group: groupFilter, purpose } = req.body;
-        const isReviewBatch = purpose === 'review';
 
-        const resolveMessageForLead = async (lead, cfg, reviewCfg) => {
-            if (messageOverride?.trim()) return messageOverride.trim();
-            if (isReviewBatch && reviewCfg?.auto_response_message?.trim()) {
-                return reviewCfg.auto_response_message.trim();
-            }
-            const folderMsg = await getFolderMessage(
-                req.user.id,
-                lead.lead_group || DEFAULT_LEAD_GROUP
-            );
-            if (folderMsg) return folderMsg;
-            const sequence =
-                typeof cfg?.followup_sequence === 'string'
-                    ? JSON.parse(cfg.followup_sequence)
-                    : cfg?.followup_sequence || [];
-            if (sequence.length > 0) {
-                const idx = lead.followup_step_index || 0;
-                if (sequence[idx]?.message) return sequence[idx].message;
-            }
-            return cfg?.message || 'Hi {name}! Thanks for reaching out.';
-        };
-
-        const channelOptions = (cfg, reviewCfg) =>
-            isReviewBatch
-                ? {
-                      whatsappEnabled: reviewCfg?.whatsapp_enabled !== false,
-                      emailEnabled: reviewCfg?.email_enabled !== false,
-                  }
-                : {
-                      whatsappEnabled: cfg?.whatsapp_enabled !== false,
-                      emailEnabled: cfg?.email_enabled !== false,
-                  };
-
-        const logBulkActivity = async (sent, total) => {
-            if (total <= 0) return;
-            const automationName = isReviewBatch ? 'Review Funnel' : 'Lead Follow-up';
-            const triggerType = isReviewBatch ? 'Review request' : 'Bulk Trigger';
-            const detail = isReviewBatch
-                ? `${sent}/${total} review requests sent`
-                : `${sent}/${total} follow-up messages sent`;
-            await logActivity({
-                userId: req.user.id,
-                automationName,
-                triggerType,
-                status: sent > 0 ? 'Success' : 'Attention',
-                detail,
-                metadata: { sent, total, group: groupFilter || null },
+        if ((Array.isArray(ids) && ids.length > 0) || groupFilter?.trim()) {
+            const result = await executeBulkLeadMessaging(req.user.id, {
+                ids,
+                message: messageOverride,
+                group: groupFilter,
+                purpose,
+                notifyOwner: true,
             });
-        };
-
-        // If IDs are provided, trigger for those specific leads
-        if (Array.isArray(ids) && ids.length > 0) {
-            const cfgRes = await pool.query(
-                `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
-                        lfs.whatsapp_enabled, lfs.email_enabled,
-                        u.company_name,
-                        rfs.auto_response_message, rfs.google_review_url, rfs.automation_id,
-                        rfs.whatsapp_enabled AS review_whatsapp_enabled,
-                        rfs.email_enabled AS review_email_enabled
-                 FROM users u
-                 LEFT JOIN lead_followup_settings lfs ON lfs.user_id = u.id
-                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
-                 WHERE u.id = $1`,
-                [req.user.id]
-            );
-            const cfg = cfgRes.rows[0] || {};
-            const reviewCfg = {
-                auto_response_message: cfg.auto_response_message,
-                google_review_url: cfg.google_review_url,
-                automation_id: cfg.automation_id,
-                whatsapp_enabled: cfg.review_whatsapp_enabled,
-                email_enabled: cfg.review_email_enabled,
-            };
-
-            const leadsRes = await pool.query(
-                `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
-                 FROM leads l
-                 JOIN users u ON u.id = l.user_id
-                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
-                 WHERE l.user_id = $1 AND l.id = ANY($2)`,
-                [req.user.id, ids]
-            );
-
-            const leads = leadsRes.rows;
-            if (leads.length === 0) {
-                return res.status(200).json({ success: true, message: 'No leads found', triggered: 0 });
-            }
-
-            let sent = 0;
-            const channels = channelOptions(cfg, reviewCfg);
-            const emailSubject = isReviewBatch ? 'We would love your feedback' : 'Message from Our Team';
-            for (const lead of leads) {
-                const msg = await resolveMessageForLead(lead, cfg, reviewCfg);
-                const channel = await dispatchFollowup(req.user.id, lead, msg, emailSubject, channels);
-                if (channel !== 'none') sent++;
-            }
-
-            await pool.query(
-                `UPDATE leads SET 
-                    lead_status = 'Contacted',
-                    followup_step_index = followup_step_index + 1,
-                    last_followup_at = NOW(),
-                    updated_at = NOW() 
-                 WHERE id = ANY($1) AND user_id = $2`,
-                [leads.map((l) => l.id), req.user.id]
-            );
-
-            await logBulkActivity(sent, leads.length);
-
+            const label = purpose === 'review' ? 'review requests' : 'follow-ups';
             return res.status(200).json({
                 success: true,
-                message: `${sent} follow-ups sent`,
-                triggered: sent,
+                message:
+                    result.total === 0
+                        ? 'No leads to message'
+                        : `${result.sent} ${label} sent`,
+                triggered: result.sent,
             });
-        }
-
-        if (groupFilter?.trim()) {
-            const [cfgRes, reviewRes] = await Promise.all([
-                pool.query(
-                    `SELECT lfs.message, lfs.followup_sequence, lfs.is_active,
-                            lfs.whatsapp_enabled, lfs.email_enabled
-                     FROM lead_followup_settings lfs WHERE user_id = $1`,
-                    [req.user.id]
-                ),
-                pool.query(
-                    `SELECT auto_response_message, automation_id, google_review_url,
-                            whatsapp_enabled, email_enabled, is_active
-                     FROM review_funnel_settings WHERE user_id = $1`,
-                    [req.user.id]
-                ),
-            ]);
-            const cfg = cfgRes.rows[0];
-            const reviewCfg = reviewRes.rows[0];
-            const folderName = normalizeLeadGroup(groupFilter);
-            const leadsRes = await pool.query(
-                `SELECT l.*, u.company_name, rfs.google_review_url, rfs.automation_id
-                 FROM leads l
-                 JOIN users u ON u.id = l.user_id
-                 LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
-                 WHERE l.user_id = $1
-                   AND COALESCE(NULLIF(TRIM(l.lead_group), ''), $2) = $3
-                   AND l.lead_status != 'Contacted'`,
-                [req.user.id, DEFAULT_LEAD_GROUP, folderName]
-            );
-            const leads = leadsRes.rows;
-            if (!leads.length) {
-                return res.status(200).json({ success: true, message: 'No leads to message in this folder', triggered: 0 });
-            }
-            let sent = 0;
-            const channels = channelOptions(cfg, reviewCfg);
-            const emailSubject = isReviewBatch ? 'We would love your feedback' : 'Message from Our Team';
-            for (const lead of leads) {
-                const msg = await resolveMessageForLead(lead, cfg, reviewCfg);
-                const channel = await dispatchFollowup(req.user.id, lead, msg, emailSubject, channels);
-                if (channel !== 'none') sent++;
-            }
-            await pool.query(
-                `UPDATE leads SET lead_status = 'Contacted', followup_step_index = followup_step_index + 1,
-                 last_followup_at = NOW(), updated_at = NOW()
-                 WHERE id = ANY($1) AND user_id = $2`,
-                [leads.map((l) => l.id), req.user.id]
-            );
-            await logBulkActivity(sent, leads.length);
-            return res.status(200).json({ success: true, message: `${sent} messages sent`, triggered: sent });
         }
 
         // Fallback to original logic (recent imports)
