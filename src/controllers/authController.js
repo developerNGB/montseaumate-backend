@@ -68,12 +68,12 @@ export const requestOTP = async (req, res) => {
         );
 
         const mailOptions = {
-            from: `"Growth Engine Support" <${process.env.EMAIL_USER}>`,
+            from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
             to: emailLower,
-            subject: 'Verify your Gmail - Growth Engine',
+            subject: 'Verify your Gmail - Equipo Experto',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
-                    <h2 style="color: #4f46e5; text-align: center;">Welcome to Growth Engine</h2>
+                    <h2 style="color: #4f46e5; text-align: center;">Welcome to Equipo Experto</h2>
                     <p>To ensure you follow the professional standard, please use the following verification code to complete your registration:</p>
                     <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
                         <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #111827;">${otp}</span>
@@ -425,9 +425,9 @@ export const forgotPassword = async (req, res) => {
         const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
         const mailOptions = {
-            from: `"Growth Engine Support" <${process.env.EMAIL_USER}>`,
+            from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
             to: email.toLowerCase().trim(),
-            subject: 'Reset your password - Growth Engine',
+            subject: 'Reset your password - Equipo Experto',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
                     <h2 style="color: #4f46e5; text-align: center;">Password Reset Request</h2>
