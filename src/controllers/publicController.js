@@ -35,14 +35,21 @@ const sendInternalEmail = async (userId, to, subject, message) => {
 };
 
 const sendInternalWhatsApp = async (userId, phone, message) => {
-    if (!phone) return 'none';
     try {
+        const { resolveOwnerWhatsAppPhone } = await import('../services/ownerNotifyService.js');
+        const targetPhone =
+            String(phone || '')
+                .trim()
+                .replace(/\D/g, '') || (await resolveOwnerWhatsAppPhone(userId));
+        if (!targetPhone) return 'none';
+
         const waInt = await pool.query(
             `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
             [userId]
         );
         if (waInt.rows[0]?.access_token !== 'whatsapp_native_session') return 'none';
-        await whatsappService.sendWhatsAppMessage(userId, phone, message);
+        if (whatsappService.getSessionStatus(userId)?.status !== 'connected') return 'none';
+        await whatsappService.sendWhatsAppMessage(userId, targetPhone, message);
         return 'whatsapp';
     } catch (err) {
         console.error('[PublicAutomation][WhatsApp] failed:', err.message);

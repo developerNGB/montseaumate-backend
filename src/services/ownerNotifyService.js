@@ -3,6 +3,39 @@ import { createEmailTemplate } from '../utils/templateUtils.js';
 import { sendDynamicEmail } from './emailService.js';
 import * as whatsappService from './whatsappService.js';
 
+function digitsOnly(phone) {
+    return String(phone || '').trim().replace(/\D/g, '');
+}
+
+/** Owner phone for self-notifications: fallback field, else connected WhatsApp account. */
+export async function resolveOwnerWhatsAppPhone(userId) {
+    const [cfgRes, waRes] = await Promise.all([
+        pool.query(
+            `SELECT whatsapp_number_fallback FROM review_funnel_settings WHERE user_id = $1`,
+            [userId],
+        ),
+        pool.query(
+            `SELECT access_token, account_id FROM integrations
+             WHERE user_id = $1 AND provider = 'whatsapp'`,
+            [userId],
+        ),
+    ]);
+
+    const wa = waRes.rows[0];
+    if (!wa || wa.access_token !== 'whatsapp_native_session') {
+        return null;
+    }
+
+    const fallback = digitsOnly(cfgRes.rows[0]?.whatsapp_number_fallback);
+    const account = digitsOnly(wa.account_id);
+    return fallback || account || null;
+}
+
+function isOwnerWhatsAppReady(userId) {
+    const status = whatsappService.getSessionStatus(userId)?.status;
+    return status === 'connected';
+}
+
 const sendOwnerEmail = async (userId, to, subject, message) => {
     if (!to) return 'none';
     try {
@@ -20,14 +53,29 @@ const sendOwnerEmail = async (userId, to, subject, message) => {
 };
 
 const sendOwnerWhatsApp = async (userId, phone, message) => {
-    if (!phone) return 'none';
+    const targetPhone = digitsOnly(phone) || (await resolveOwnerWhatsAppPhone(userId));
+    if (!targetPhone) {
+        console.warn('[OwnerNotify][WA] No owner phone — set fallback number or connect WhatsApp');
+        return 'none';
+    }
+
     try {
         const waInt = await pool.query(
             `SELECT access_token FROM integrations WHERE user_id = $1 AND provider = 'whatsapp'`,
-            [userId]
+            [userId],
         );
-        if (waInt.rows[0]?.access_token !== 'whatsapp_native_session') return 'none';
-        await whatsappService.sendWhatsAppMessage(userId, phone, message);
+        if (waInt.rows[0]?.access_token !== 'whatsapp_native_session') {
+            return 'none';
+        }
+
+        const status = whatsappService.getSessionStatus(userId)?.status;
+        if (status !== 'connected') {
+            console.warn(`[OwnerNotify][WA] Session not connected (${status || 'unknown'})`);
+            return 'none';
+        }
+
+        await whatsappService.sendWhatsAppMessage(userId, targetPhone, message);
+        console.log(`[OwnerNotify][WA] Delivered to ${targetPhone}`);
         return 'whatsapp';
     } catch (err) {
         console.error('[OwnerNotify][WhatsApp] failed:', err.message);
@@ -41,18 +89,25 @@ export async function loadOwnerNotifyTargets(userId) {
                 rfs.whatsapp_number_fallback,
                 rfs.whatsapp_enabled,
                 rfs.email_enabled,
+                lfs.whatsapp_enabled AS lfs_whatsapp_enabled,
                 u.email AS user_email
          FROM users u
          LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+         LEFT JOIN lead_followup_settings lfs ON lfs.user_id = u.id
          WHERE u.id = $1`,
-        [userId]
+        [userId],
     );
     const row = res.rows[0] || {};
+    const whatsappPhone = await resolveOwnerWhatsAppPhone(userId);
+    const waLinked = Boolean(whatsappPhone);
+    const waSessionOk = waLinked && isOwnerWhatsAppReady(userId);
+
     return {
         emailTo: (row.notification_email || row.user_email || '').trim() || null,
-        whatsappPhone: (row.whatsapp_number_fallback || '').trim() || null,
+        whatsappPhone,
         emailEnabled: row.email_enabled !== false,
-        whatsappEnabled: row.whatsapp_enabled !== false,
+        /** Owner self-alerts use the connected WhatsApp session, not lead-facing channel toggles. */
+        whatsappEnabled: waSessionOk,
     };
 }
 
@@ -64,14 +119,56 @@ export async function notifyOwnerChannels(
     if (emailEnabled !== false && emailTo) {
         tasks.push(sendOwnerEmail(userId, emailTo, subject, message));
     }
-    if (whatsappEnabled !== false && whatsappPhone) {
+    if (whatsappEnabled !== false) {
         tasks.push(sendOwnerWhatsApp(userId, whatsappPhone, message));
     }
     if (!tasks.length) {
-        console.warn('[OwnerNotify] No owner email or WhatsApp number configured');
-        return;
+        console.warn('[OwnerNotify] No owner email or WhatsApp channel available');
+        return { email: 'none', whatsapp: 'none' };
     }
-    await Promise.allSettled(tasks);
+    const results = await Promise.allSettled(tasks);
+    const channels = { email: 'none', whatsapp: 'none' };
+    let i = 0;
+    if (emailEnabled !== false && emailTo) {
+        channels.email = results[i]?.status === 'fulfilled' ? results[i].value : 'none';
+        i += 1;
+    }
+    if (whatsappEnabled !== false) {
+        channels.whatsapp = results[i]?.status === 'fulfilled' ? results[i].value : 'none';
+    }
+    return channels;
+}
+
+/** After CSV/Excel import — "20 leads were captured just now". */
+export async function notifyOwnerLeadImportComplete(
+    userId,
+    { imported = 0, folderName = null, fileDups = 0, dbDups = 0 }
+) {
+    if (!imported || imported < 1) return;
+
+    const targets = await loadOwnerNotifyTargets(userId);
+    const leadWord = imported === 1 ? 'lead' : 'leads';
+    let body = `${imported} ${leadWord} were captured just now`;
+    if (folderName) {
+        body += ` in "${folderName}"`;
+    }
+    body += '.';
+
+    const skipped = fileDups + dbDups;
+    if (skipped > 0) {
+        body += ` (${skipped} duplicate${skipped === 1 ? '' : 's'} skipped.)`;
+    }
+
+    const subject =
+        imported === 1
+            ? '1 new contact imported'
+            : `${imported} new contacts imported`;
+
+    await notifyOwnerChannels(userId, {
+        subject,
+        message: body,
+        ...targets,
+    });
 }
 
 export async function notifyOwnerBulkSendComplete(

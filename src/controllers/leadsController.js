@@ -395,6 +395,19 @@ export const importLeads = async (req, res) => {
 
         if (savedLeads.length === 0) return;
 
+        import('../services/ownerNotifyService.js')
+            .then(({ notifyOwnerLeadImportComplete }) =>
+                notifyOwnerLeadImportComplete(userId, {
+                    imported: savedLeads.length,
+                    folderName: defaultGroup,
+                    fileDups,
+                    dbDups,
+                }),
+            )
+            .catch((err) => {
+                console.error('[importLeads] Owner import WhatsApp notify failed:', err.message);
+            });
+
         // 5. Fire-and-forget capture auto-responses
         if (captureActive) {
             Promise.allSettled(
