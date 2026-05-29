@@ -109,8 +109,11 @@ app.use(cors({
 // Stripe webhook â€” raw body required for signature verification (must be before express.json)
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
-// Parse JSON bodies (limit to 10kb to prevent abuse)
-app.use(express.json({ limit: '10kb' }));
+// Lead import needs a larger body (contact lists can be hundreds of KB)
+app.use('/api/leads/import', express.json({ limit: '10mb' }));
+
+// All other endpoints: keep tight limit to prevent abuse
+app.use(express.json({ limit: '50kb' }));
 
 // Remove fingerprinting header
 app.disable('x-powered-by');

@@ -2,8 +2,32 @@ import fetch from 'node-fetch';
 import pool from '../db/pool.js';
 import { buildContactFormEmail } from '../utils/contactFormEmail.js';
 import { buildGmailRawMime } from '../utils/mimeMessage.js';
-import { getContactFormInbox } from './supportMailService.js';
+import {
+    getContactFormInbox,
+    gmailConfig,
+    sendSupportMail,
+} from './supportMailService.js';
 import { sendDynamicEmail } from './emailService.js';
+
+function normalizeEmail(value) {
+    return value != null ? String(value).trim().toLowerCase() : '';
+}
+
+/** Address contact notifications should be sent from (Gmail API / SMTP). */
+export function getContactFormFromEmail() {
+    return (
+        process.env.CONTACT_FORM_GOOGLE_FROM?.trim() ||
+        process.env.CONTACT_FORM_TO?.trim() ||
+        process.env.EMAIL_USER?.trim() ||
+        getContactFormInbox()
+    );
+}
+
+function emailsMatch(a, b) {
+    const left = normalizeEmail(a);
+    const right = normalizeEmail(b);
+    return Boolean(left && right && left === right);
+}
 
 function isGmailScopeError(err) {
     const msg = String(err?.message || '');
@@ -33,13 +57,14 @@ export async function listContactFormSenderUserIds() {
         if (s && !ids.includes(s)) ids.push(s);
     };
 
-    push(process.env.CONTACT_FORM_SENDER_USER_ID?.trim());
-
+    const fromEmail = getContactFormFromEmail();
     const inbox =
         process.env.CONTACT_FORM_TO?.trim() ||
         process.env.EMAIL_USER?.trim() ||
-        process.env.SUPPORT_EMAIL?.trim();
+        process.env.SUPPORT_EMAIL?.trim() ||
+        fromEmail;
 
+    // Prefer Google integration for the inbox / FROM address (e.g. equipoexpertoia@gmail.com)
     if (inbox) {
         const byInbox = await pool.query(
             `SELECT user_id
@@ -55,6 +80,31 @@ export async function listContactFormSenderUserIds() {
             [inbox, `gmail:${inbox}`],
         );
         byInbox.rows.forEach((r) => push(r.user_id));
+    }
+
+    const explicitSender = process.env.CONTACT_FORM_SENDER_USER_ID?.trim();
+    if (explicitSender) {
+        if (fromEmail) {
+            const match = await pool.query(
+                `SELECT user_id
+                 FROM integrations
+                 WHERE provider = 'google'
+                   AND refresh_token IS NOT NULL
+                   AND user_id::text = $1
+                   AND (
+                     LOWER(COALESCE(metadata->>'email', '')) = LOWER($2)
+                     OR LOWER(COALESCE(account_id, '')) = LOWER($2)
+                     OR LOWER(COALESCE(account_id, '')) = LOWER($3)
+                   )
+                 LIMIT 1`,
+                [explicitSender, fromEmail, `gmail:${fromEmail}`],
+            );
+            if (match.rows.length > 0) {
+                push(explicitSender);
+            }
+        } else {
+            push(explicitSender);
+        }
     }
 
     const rawEditors = process.env.TRANSLATION_EDITOR_USER_IDS?.trim();
@@ -161,6 +211,23 @@ async function sendViaGmailApiForUser(userId, mailOptions) {
     return { ...result, to: mailOptions.to };
 }
 
+async function sendViaEnvSmtp(mailOptions) {
+    const cfg = gmailConfig();
+    const fromEmail = getContactFormFromEmail();
+    if (!cfg || !emailsMatch(cfg.fromAddress, fromEmail)) return null;
+
+    const info = await sendSupportMail(mailOptions);
+    console.log(
+        `[contactForm] Env SMTP (${cfg.fromAddress}) → ${mailOptions.to} id=${info.messageId}`,
+    );
+    return {
+        success: true,
+        provider: 'contact_env_smtp',
+        messageId: info.messageId,
+        to: mailOptions.to,
+    };
+}
+
 async function sendViaGmailApi(mailOptions) {
     const errors = [];
 
@@ -170,6 +237,14 @@ async function sendViaGmailApi(mailOptions) {
     } catch (err) {
         errors.push(`env_gmail:${err.message}`);
         console.warn(`[contactForm] Env Gmail API failed: ${err.message}`);
+    }
+
+    try {
+        const smtpResult = await sendViaEnvSmtp(mailOptions);
+        if (smtpResult) return smtpResult;
+    } catch (err) {
+        errors.push(`env_smtp:${err.message}`);
+        console.warn(`[contactForm] Env SMTP failed: ${err.message}`);
     }
 
     const userIds = await listContactFormSenderUserIds();
@@ -205,9 +280,14 @@ async function sendViaGmailApi(mailOptions) {
     throw err;
 }
 
-/** True when env refresh token or at least one Google integration can send via Gmail API. */
+function hasEnvSmtpSender() {
+    const cfg = gmailConfig();
+    return Boolean(cfg && emailsMatch(cfg.fromAddress, getContactFormFromEmail()));
+}
+
+/** True when env Gmail/SMTP or at least one Google integration can send. */
 export async function isContactFormMailConfigured() {
-    if (hasEnvGmailSender()) return true;
+    if (hasEnvGmailSender() || hasEnvSmtpSender()) return true;
     const userIds = await listContactFormSenderUserIds();
     return userIds.length > 0;
 }
@@ -231,7 +311,7 @@ function buildMailPayload({ name, email, message, source }) {
 }
 
 /**
- * Contact form delivery: Gmail API only (env refresh token or connected Google accounts).
+ * Contact form delivery: env Gmail OAuth, env SMTP (EMAIL_USER), then connected Google accounts.
  * Inbox: CONTACT_FORM_TO (default equipoexpertoia@gmail.com).
  */
 export async function sendContactFormNotification({ name, email, message, source }) {

@@ -77,7 +77,7 @@ export const getContactFormStatus = async (_req, res) => {
         const configured = await isContactFormMailConfigured();
         return res.json({
             success: true,
-            transport: 'gmail_api',
+            transport: 'gmail_api_or_smtp',
             configured,
             senderCandidates: senderIds.length,
             inbox: getContactFormInbox(),

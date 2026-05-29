@@ -3,7 +3,7 @@ import nodemailer from 'nodemailer';
 const SMTP_TIMEOUT_MS = 15_000;
 const SEND_TIMEOUT_MS = 20_000;
 
-function gmailConfig() {
+export function gmailConfig() {
     const user = process.env.EMAIL_USER?.trim();
     const pass = process.env.EMAIL_PASS?.replace(/\s+/g, '');
     if (!user || !pass) return null;
