@@ -648,12 +648,15 @@ export const deleteAutomation = async (req, res) => {
             const captureStillHired = isLeadCaptureHiredRow(row);
 
             if (captureStillHired) {
+                // Wipe ALL review-funnel-specific fields; leave lead-capture fields intact
                 queries.push(pool.query(
                     `UPDATE review_funnel_settings SET
-                        is_active = FALSE,
-                        google_review_url = '',
+                        is_active             = FALSE,
+                        google_review_url     = '',
+                        n8n_webhook_url       = NULL,
+                        auto_response_message = NULL,
                         review_next_step_done = FALSE,
-                        updated_at = NOW()
+                        updated_at            = NOW()
                      WHERE user_id = $1`,
                     [userId]
                 ));
@@ -680,12 +683,15 @@ export const deleteAutomation = async (req, res) => {
             const reviewStillHired = isReviewFunnelHiredRow(row);
 
             if (reviewStillHired) {
+                // Wipe ALL lead-capture-specific fields; leave review-funnel fields intact
                 queries.push(pool.query(
                     `UPDATE review_funnel_settings SET
-                        lead_capture_active = FALSE,
-                        capture_next_step_done = FALSE,
+                        lead_capture_active      = FALSE,
+                        capture_next_step_done   = FALSE,
                         whatsapp_number_fallback = '',
-                        updated_at = NOW()
+                        filtering_questions      = '[]',
+                        notification_email       = '',
+                        updated_at               = NOW()
                      WHERE user_id = $1`,
                     [userId]
                 ));
