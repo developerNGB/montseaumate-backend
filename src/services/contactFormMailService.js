@@ -17,7 +17,7 @@ function normalizeEmail(value) {
 export function getContactFormFromEmail() {
     return (
         process.env.CONTACT_FORM_GOOGLE_FROM?.trim() ||
-        process.env.CONTACT_FORM_TO?.trim() ||
+        process.env.CONTAFORM_TO?.trim() ||
         process.env.EMAIL_USER?.trim() ||
         getContactFormInbox()
     );
