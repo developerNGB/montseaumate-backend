@@ -332,7 +332,8 @@ export const importLeads = async (req, res) => {
         const phones   = newLeads.map(l => (l.phone || '').trim());
         const notesArr = newLeads.map(l => l.notes || '');
         const sources  = newLeads.map(l => l.source || 'Imported');
-        const groups   = newLeads.map(l => normalizeLeadGroup(l.lead_group || l.group, defaultGroup));
+        // Always use the user-chosen list name — ignore industry/category columns in the file.
+        const groups   = newLeads.map(() => defaultGroup);
 
         const insertRes = await pool.query(
             `INSERT INTO leads
