@@ -4,6 +4,7 @@ import { normalizeLeadGroup, DEFAULT_LEAD_GROUP } from '../utils/leadGroups.js';
 import { upsertLeadFolder, getFolderMessage } from '../utils/leadFolders.js';
 import { dispatchFollowupForLead } from '../services/leadDispatchService.js';
 import { executeBulkLeadMessaging } from '../services/bulkLeadMessaging.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 
 /** Re-export for activity-log retry and internal tooling */
 export { dispatchFollowupForLead };
@@ -204,6 +205,127 @@ export const updateLeadStatus = async (req, res) => {
     }
 };
 
+function resolveImportPurpose(body) {
+    const { importPurpose, skipCapture } = body;
+    if (importPurpose === 'capture' || importPurpose === 'followup' || importPurpose === 'review') {
+        return importPurpose;
+    }
+    return skipCapture ? 'followup' : 'capture';
+}
+
+/** After all import chunks: owner alert + lead messages matched to employee type. */
+async function runPostImportMessaging(userId, defaultGroup, {
+    importPurpose,
+    notifyImportedCount,
+    followupMessage,
+    sourceHint,
+    fileDups = 0,
+    dbDups = 0,
+}) {
+    const recentRes = await pool.query(
+        `SELECT l.*, rfs.google_review_url, rfs.automation_id
+         FROM leads l
+         LEFT JOIN review_funnel_settings rfs ON rfs.user_id = l.user_id
+         WHERE l.user_id = $1
+           AND COALESCE(NULLIF(TRIM(l.lead_group), ''), $2) = $3
+           AND l.lead_status = 'New'
+           AND l.created_at > NOW() - INTERVAL '20 minutes'`,
+        [userId, DEFAULT_LEAD_GROUP, defaultGroup]
+    );
+    const batchLeads = recentRes.rows;
+    const imported = notifyImportedCount ?? batchLeads.length;
+    if (imported < 1 && batchLeads.length < 1) return;
+
+    const [captureRes, followupRes] = await Promise.all([
+        pool.query(
+            `SELECT auto_response_message, google_review_url, lead_capture_active, automation_id,
+                    whatsapp_enabled, email_enabled
+             FROM review_funnel_settings WHERE user_id = $1`,
+            [userId],
+        ).catch(() => ({ rows: [] })),
+        pool.query(
+            `SELECT is_active, message, whatsapp_enabled, email_enabled
+             FROM lead_followup_settings WHERE user_id = $1`,
+            [userId],
+        ).catch(() => ({ rows: [] })),
+    ]);
+
+    const captureCfg = captureRes.rows[0];
+    const followupCfg = followupRes.rows[0];
+    const followupActive = !!followupCfg?.is_active;
+
+    const { notifyOwnerLeadImportComplete } = await import('../services/ownerNotifyService.js');
+    await notifyOwnerLeadImportComplete(userId, {
+        imported,
+        folderName: defaultGroup,
+        fileDups,
+        dbDups,
+        importPurpose,
+    }).catch((err) => {
+        console.error('[importLeads] Owner import notify failed:', err.message);
+    });
+
+    if (importPurpose === 'capture') {
+        if (!captureCfg?.lead_capture_active || !captureCfg?.auto_response_message?.trim()) {
+            console.warn('[importLeads] Capture import — capture employee inactive or no message');
+            return;
+        }
+        const targets = batchLeads.filter((l) => l.email || l.phone);
+        const results = await Promise.allSettled(
+            targets.map((lead) =>
+                dispatchFollowupForLead(
+                    userId,
+                    {
+                        ...lead,
+                        automation_id: captureCfg.automation_id,
+                        google_review_url: captureCfg.google_review_url,
+                    },
+                    captureCfg.auto_response_message,
+                    'Thanks for reaching out!',
+                    {
+                        whatsappEnabled: captureCfg.whatsapp_enabled,
+                        emailEnabled: captureCfg.email_enabled,
+                    },
+                ),
+            ),
+        );
+        const sent = results.filter((x) => x.status === 'fulfilled' && x.value !== 'none').length;
+        console.log(`[importLeads] Capture messages: ${sent}/${targets.length}`);
+        const { notifyOwnerBulkSendComplete } = await import('../services/ownerNotifyService.js');
+        await notifyOwnerBulkSendComplete(userId, {
+            purpose: 'capture',
+            sent,
+            total: targets.length,
+            folderName: defaultGroup,
+        }).catch(() => {});
+        return;
+    }
+
+    if (importPurpose === 'followup') {
+        if (!followupActive) {
+            console.warn('[importLeads] Follow-up import — follow-up employee inactive');
+            return;
+        }
+        const result = await executeBulkLeadMessaging(userId, {
+            group: defaultGroup,
+            purpose: 'followup',
+            message: followupMessage?.trim() || undefined,
+            notifyOwner: true,
+        });
+        console.log(`[importLeads] Follow-up bulk: ${result.sent}/${result.total}`);
+        return;
+    }
+
+    if (importPurpose === 'review') {
+        const result = await executeBulkLeadMessaging(userId, {
+            group: defaultGroup,
+            purpose: 'review',
+            notifyOwner: true,
+        });
+        console.log(`[importLeads] Review bulk: ${result.sent}/${result.total}`);
+    }
+}
+
 export const importLeads = async (req, res) => {
     try {
         const {
@@ -213,16 +335,49 @@ export const importLeads = async (req, res) => {
             folderName,
             followupMessage,
             sourceHint,
+            importPurpose: importPurposeBody,
+            runPostImport,
+            notifyImportedCount,
         } = req.body;
         const defaultGroup = normalizeLeadGroup(
             folderName || importDefaultGroup,
             DEFAULT_LEAD_GROUP
         );
+        const userId = req.user.id;
+        const importPurpose = resolveImportPurpose(req.body);
+
+        if (runPostImport && (!Array.isArray(leads) || leads.length === 0)) {
+            const count = Number(notifyImportedCount) || 0;
+            if (count < 1) {
+                return res.status(200).json({
+                    success: true,
+                    message: 'Import complete',
+                    imported: 0,
+                    messagingOnly: true,
+                });
+            }
+            res.status(200).json({
+                success: true,
+                message: 'Sending messages',
+                imported: 0,
+                messagingOnly: true,
+            });
+            runPostImportMessaging(userId, defaultGroup, {
+                importPurpose,
+                notifyImportedCount: count,
+                followupMessage,
+                sourceHint,
+                fileDups: Number(req.body.fileDups) || 0,
+                dbDups: Number(req.body.dbDups) || 0,
+            }).catch((err) => {
+                console.error('[importLeads] Post-import messaging failed:', err.message);
+            });
+            return;
+        }
+
         if (!Array.isArray(leads) || leads.length === 0) {
             return res.status(400).json({ success: false, message: 'No leads provided' });
         }
-
-        const userId = req.user.id;
 
         // 1. Dedup within batch — mark as duplicate if email matches OR phone matches
         const seenEmail = new Set();
@@ -279,7 +434,6 @@ export const importLeads = async (req, res) => {
 
         const captureCfg = captureRes.rows[0];
         const followupActive = followupRes.rows[0]?.is_active;
-        const captureActive = !skipCapture && captureCfg?.lead_capture_active && captureCfg?.auto_response_message;
 
         const existingEmails = new Set(existingRes.rows.map(r => r.email).filter(Boolean));
         const existingPhones = new Set(existingRes.rows.map(r => r.phone).filter(Boolean));
@@ -315,17 +469,13 @@ export const importLeads = async (req, res) => {
             });
         }
 
-        // 4. Bulk INSERT — single DB round-trip via unnest()
-        // Logic for scheduling follow-ups:
-        // - If we are sending a "Lead Capture" message now (captureActive), set last_followup_at = NOW()
-        //   so that the cron job waits for the first follow-up delay before sending.
-        // - If we are NOT sending a capture message (captureActive=false), set last_followup_at = 1 year ago
-        //   so that the cron job picks up the first follow-up message IMMEDIATELY.
-        const lastFollowupAt = followupActive 
-            ? (captureActive 
-                ? new Date().toISOString() 
-                : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString())
-            : null;
+        // 4. Bulk INSERT — cron timing depends on which employee owns this import
+        let lastFollowupAt = null;
+        if (importPurpose === 'followup' && followupActive) {
+            lastFollowupAt = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+        } else if (importPurpose === 'capture' && followupActive) {
+            lastFollowupAt = new Date().toISOString();
+        }
 
         const names    = newLeads.map(l => l.full_name || extractNameFromEmail(l.email) || 'Imported Lead');
         const emails   = newLeads.map(l => (l.email || '').trim());
@@ -352,7 +502,8 @@ export const importLeads = async (req, res) => {
         );
 
         const savedLeads = insertRes.rows;
-        const isReviewImport = /review\s*funnel/i.test(String(sourceHint || ''));
+        const isReviewImport =
+            importPurpose === 'review' || /review\s*funnel/i.test(String(sourceHint || ''));
 
         if (savedLeads.length > 0) {
             try {
@@ -396,71 +547,17 @@ export const importLeads = async (req, res) => {
 
         if (savedLeads.length === 0) return;
 
-        import('../services/ownerNotifyService.js')
-            .then(({ notifyOwnerLeadImportComplete }) =>
-                notifyOwnerLeadImportComplete(userId, {
-                    imported: savedLeads.length,
-                    folderName: defaultGroup,
-                    fileDups,
-                    dbDups,
-                }),
-            )
-            .catch((err) => {
-                console.error('[importLeads] Owner import WhatsApp notify failed:', err.message);
+        if (req.body.runPostImport) {
+            runPostImportMessaging(userId, defaultGroup, {
+                importPurpose: isReviewImport ? 'review' : importPurpose,
+                notifyImportedCount: Number(notifyImportedCount) || savedLeads.length,
+                followupMessage,
+                sourceHint,
+                fileDups,
+                dbDups,
+            }).catch((err) => {
+                console.error('[importLeads] Post-import messaging failed:', err.message);
             });
-
-        // 5. Fire-and-forget capture auto-responses
-        if (captureActive) {
-            Promise.allSettled(
-                savedLeads.filter(l => l.email || l.phone).map(lead =>
-                    dispatchFollowupForLead(userId, { ...lead, automation_id: captureCfg.automation_id, google_review_url: captureCfg.google_review_url }, captureCfg.auto_response_message, 'Thanks for reaching out!', {
-                        whatsappEnabled: captureCfg.whatsapp_enabled,
-                        emailEnabled: captureCfg.email_enabled,
-                    })
-                )
-            ).then(async (results) => {
-                const sent = results.filter(x => x.status === 'fulfilled' && x.value !== 'none').length;
-                console.log(`[importLeads] Auto-response: ${sent}/${savedLeads.length} sent`);
-                try {
-                    await logActivity({
-                        userId,
-                        automationName: 'Lead Capture Form',
-                        triggerType: 'Auto-response',
-                        status: sent > 0 ? 'Success' : 'Attention',
-                        detail: `${sent}/${savedLeads.length} capture messages sent`,
-                        metadata: { folder: defaultGroup, sent, total: savedLeads.length },
-                    });
-                    const { notifyOwnerBulkSendComplete } = await import('../services/ownerNotifyService.js');
-                    await notifyOwnerBulkSendComplete(userId, {
-                        purpose: 'capture',
-                        sent,
-                        total: savedLeads.length,
-                        folderName: defaultGroup,
-                    });
-                } catch (logErr) {
-                    console.error('[importLeads] capture activity log failed:', logErr.message);
-                }
-            });
-        }
-
-        if (followupActive) {
-            console.log(`[importLeads] ${savedLeads.length} leads queued for follow-up cron`);
-        }
-
-        if (isReviewImport) {
-            executeBulkLeadMessaging(userId, {
-                group: defaultGroup,
-                purpose: 'review',
-                notifyOwner: true,
-            })
-                .then((result) => {
-                    console.log(
-                        `[importLeads] Review bulk: ${result.sent}/${result.total} sent for folder ${defaultGroup}`
-                    );
-                })
-                .catch((err) => {
-                    console.error('[importLeads] Review bulk send failed:', err.message);
-                });
         }
     } catch (err) {
         console.error('[importLeads] Error:', err.message, err.code || '', err.detail || '');

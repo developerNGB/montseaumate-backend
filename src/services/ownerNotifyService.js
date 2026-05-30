@@ -2,6 +2,7 @@ import pool from '../db/pool.js';
 import { createEmailTemplate } from '../utils/templateUtils.js';
 import { sendDynamicEmail } from './emailService.js';
 import * as whatsappService from './whatsappService.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 
 function digitsOnly(phone) {
     return String(phone || '').trim().replace(/\D/g, '');
@@ -139,16 +140,23 @@ export async function notifyOwnerChannels(
     return channels;
 }
 
-/** After CSV/Excel import — "20 leads were captured just now". */
+/** After CSV/Excel import — owner WhatsApp with link to Leads page. */
 export async function notifyOwnerLeadImportComplete(
     userId,
-    { imported = 0, folderName = null, fileDups = 0, dbDups = 0 }
+    { imported = 0, folderName = null, fileDups = 0, dbDups = 0, importPurpose = 'capture' }
 ) {
     if (!imported || imported < 1) return;
 
     const targets = await loadOwnerNotifyTargets(userId);
     const leadWord = imported === 1 ? 'lead' : 'leads';
-    let body = `${imported} ${leadWord} were captured just now`;
+    const verb =
+        importPurpose === 'followup'
+            ? 'added for follow-up'
+            : importPurpose === 'review'
+              ? 'added for review requests'
+              : 'captured';
+
+    let body = `${imported} ${leadWord} were ${verb} just now`;
     if (folderName) {
         body += ` in "${folderName}"`;
     }
@@ -157,6 +165,14 @@ export async function notifyOwnerLeadImportComplete(
     const skipped = fileDups + dbDups;
     if (skipped > 0) {
         body += ` (${skipped} duplicate${skipped === 1 ? '' : 's'} skipped.)`;
+    }
+
+    const base = frontendBaseUrl();
+    if (base && folderName) {
+        const leadsUrl = `${base}/dashboard/leads?folder=${encodeURIComponent(folderName)}`;
+        body += `\n\nView here: ${leadsUrl}`;
+    } else if (base) {
+        body += `\n\nView here: ${base}/dashboard/leads`;
     }
 
     const subject =
