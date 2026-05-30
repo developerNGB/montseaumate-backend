@@ -377,6 +377,7 @@ const runMigrations = async () => {
         await safeQuery('translations_table',           `CREATE TABLE IF NOT EXISTS translations (id SERIAL PRIMARY KEY, key_name VARCHAR(255) UNIQUE NOT NULL, english_text TEXT, spanish_text TEXT, updated_at TIMESTAMP DEFAULT NOW())`);
         await safeQuery('review_funnel.lead_sources',    `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
         await safeQuery('review_funnel.capture_sources', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('review_funnel.capture_embed_type', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_embed_type VARCHAR(20) DEFAULT 'inline'`);
         
         // Create marketplace_leads table + contact info columns (Apify enrichment)
         await safeQuery('marketplace_leads_table', `
@@ -513,6 +514,7 @@ const runMigrations = async () => {
         await safeQuery('review_funnel.lead_sources',         `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS lead_sources JSONB DEFAULT '["qr"]'`);
         await safeQuery('review_funnel.capture_source',       `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_source VARCHAR(50) DEFAULT 'qr'`);
         await safeQuery('review_funnel.capture_sources',      `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
+        await safeQuery('review_funnel.capture_embed_type',   `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS capture_embed_type VARCHAR(20) DEFAULT 'inline'`);
         await safeQuery('review_funnel.whatsapp_enabled',     `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('review_funnel.email_enabled',        `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('review_funnel.review_next_step_done', `ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS review_next_step_done BOOLEAN DEFAULT FALSE`);

@@ -263,6 +263,16 @@ export const saveReviewFunnelConfig = async (req, res) => {
             );
         } catch (_) { /* column not yet migrated — safe to ignore */ }
 
+        const embedType = req.body.capture_embed_type;
+        if (embedType === 'widget' || embedType === 'inline') {
+            try {
+                await pool.query(
+                    `UPDATE review_funnel_settings SET capture_embed_type = $1 WHERE user_id = $2`,
+                    [embedType, req.user.id],
+                );
+            } catch (_) { /* column not yet migrated */ }
+        }
+
         const baseUrl = frontendBaseUrl();
         if (!baseUrl) {
             return res.status(500).json({
