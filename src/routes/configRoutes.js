@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { 
-    getReviewFunnelConfig, saveReviewFunnelConfig, 
+    getReviewFunnelConfig, saveReviewFunnelConfig, ensureAutomationId,
     getLeadFollowupConfig, saveLeadFollowupConfig, 
     toggleRecipe, deleteAutomation 
 } from '../controllers/configController.js';
@@ -16,6 +16,9 @@ router.get('/review-funnel', getReviewFunnelConfig);
 
 // POST /api/config/review-funnel — Save config for logged-in user
 router.post('/review-funnel', saveReviewFunnelConfig);
+
+// POST /api/config/ensure-automation-id — Provision stable public ID for embed snippets
+router.post('/ensure-automation-id', ensureAutomationId);
 
 // GET /api/config/lead-followup
 router.get('/lead-followup', getLeadFollowupConfig);

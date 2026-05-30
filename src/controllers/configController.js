@@ -102,6 +102,59 @@ export const getReviewFunnelConfig = async (req, res) => {
     }
 };
 
+/** Create or return the user's stable public automation_id (for embed snippets before full hire). */
+async function resolveOrCreateAutomationId(userId) {
+    const result = await pool.query(
+        'SELECT automation_id FROM review_funnel_settings WHERE user_id = $1',
+        [userId]
+    );
+    if (result.rows.length > 0 && result.rows[0].automation_id) {
+        return result.rows[0].automation_id;
+    }
+    const automationId = crypto.randomBytes(4).toString('hex');
+    if (result.rows.length === 0) {
+        await pool.query(
+            `INSERT INTO review_funnel_settings
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message,
+                 filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback,
+                 lead_source, capture_source, updated_at)
+             VALUES ($1, $2, '', '', '', '[]', false, false, '', 'qr', 'qr', NOW())`,
+            [userId, automationId]
+        );
+    } else {
+        await pool.query(
+            'UPDATE review_funnel_settings SET automation_id = $2, updated_at = NOW() WHERE user_id = $1',
+            [userId, automationId]
+        );
+    }
+    return automationId;
+}
+
+// POST /api/config/ensure-automation-id — idempotent; returns leadUrl + QR for copy-paste embeds
+export const ensureAutomationId = async (req, res) => {
+    try {
+        const baseUrl = frontendBaseUrl();
+        if (!baseUrl) {
+            return res.status(500).json({
+                success: false,
+                message: 'Server misconfiguration: set FRONTEND_URL for public links and QR codes.',
+            });
+        }
+        const automationId = await resolveOrCreateAutomationId(req.user.id);
+        const leadUrl = `${baseUrl}/l/${automationId}`;
+        const leadQrCode = await qrcode.toDataURL(leadUrl);
+        return res.status(200).json({
+            success: true,
+            automation_id: automationId,
+            leadUrl,
+            leadQrCode,
+        });
+    } catch (err) {
+        console.error('[ensureAutomationId] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 // POST /api/config/review-funnel
 export const saveReviewFunnelConfig = async (req, res) => {
     console.log('[saveReviewFunnelConfig] Received:', req.body);
