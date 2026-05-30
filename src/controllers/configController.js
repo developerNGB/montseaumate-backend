@@ -6,6 +6,7 @@ import {
     countEmployeesAfterPatch,
     getMaxEmployees,
     getMaxFollowupSequenceSteps,
+    FOLLOWUP_SEQUENCE_HARD_MAX,
     resolveBillingForEntitlements,
 } from '../services/subscriptionPlans.js';
 
@@ -516,8 +517,9 @@ export const saveLeadFollowupConfig = async (req, res) => {
         if (!Array.isArray(followup_sequence)) followup_sequence = [];
 
         const billingLf = await loadBillingRow(req.user.id, req.user);
-        const maxFollowSteps = getMaxFollowupSequenceSteps(billingLf.plan, billingLf.trial_ends_at);
-        if (maxFollowSteps !== null && followup_sequence.length > maxFollowSteps) {
+        const planMaxFollowSteps = getMaxFollowupSequenceSteps(billingLf.plan, billingLf.trial_ends_at);
+        const maxFollowSteps = planMaxFollowSteps ?? FOLLOWUP_SEQUENCE_HARD_MAX;
+        if (followup_sequence.length > maxFollowSteps) {
             return res.status(403).json({
                 success: false,
                 code: 'FOLLOWUP_SEQUENCE_PLAN_LIMIT',

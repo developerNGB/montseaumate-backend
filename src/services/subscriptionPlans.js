@@ -115,24 +115,12 @@ export const countActiveEmployeesFromRows = (rfRow, lfRow) => {
 };
 
 /**
- * Highest follow-up automation steps allowed per tier (beyond the legacy single-message path).
- * `null` means no cap.
+ * Plan-specific follow-up sequence cap. `null` = use platform hard cap only (see config save).
+ * Product allows many touchpoints; limits are enforced in the UI via MAX_FOLLOWUP_STEPS_UI.
  */
-export const getMaxFollowupSequenceSteps = (plan, trialEndsAt) => {
-    if (isTrialing(trialEndsAt)) return 2;
-    const tier = normalizeBillingPlan(plan);
-    if (tier === 'free_trial') return 2;
-    switch (tier) {
-        case 'growth':
-            return 5;
-        case 'pro':
-        case 'enterprise':
-            return null;
-        case 'basic':
-        default:
-            return 2;
-    }
-};
+export const FOLLOWUP_SEQUENCE_HARD_MAX = 50;
+
+export const getMaxFollowupSequenceSteps = (_plan, _trialEndsAt) => null;
 
 /**
  * Plan-based feature gates (single source of truth for APIs + `/api/apollo/usage`).

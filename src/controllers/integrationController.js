@@ -127,9 +127,16 @@ export const providerCallback = async (req, res) => {
             console.error('[providerCallback] FRONTEND_URL is not set');
             return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
         }
+        const configPaths = {
+            'config-capture': '/dashboard/config/lead-capture',
+            'config-followup': '/dashboard/config/lead-followup',
+            'config-review': '/dashboard/config/review-funnel',
+        };
         let frontendRedirect = `${BASE}/dashboard/integrations`;
         if (jobId === 'onboarding') {
             frontendRedirect = `${BASE}/dashboard/integrations`;
+        } else if (jobId && configPaths[jobId]) {
+            frontendRedirect = `${BASE}${configPaths[jobId]}`;
         } else if (jobId) {
             frontendRedirect = `${BASE}/dashboard/employee/${jobId}`;
         }
@@ -322,8 +329,17 @@ export const providerCallback = async (req, res) => {
         if (!baseUrl) {
             return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
         }
+        const configPaths = {
+            'config-capture': '/dashboard/config/lead-capture',
+            'config-followup': '/dashboard/config/lead-followup',
+            'config-review': '/dashboard/config/review-funnel',
+        };
         let frontendRedirect = `${baseUrl}/dashboard/integrations`;
-        if (jobId) frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
+        if (jobId && configPaths[jobId]) {
+            frontendRedirect = `${baseUrl}${configPaths[jobId]}`;
+        } else if (jobId) {
+            frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
+        }
 
         return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(errMsg)}`);
     }
