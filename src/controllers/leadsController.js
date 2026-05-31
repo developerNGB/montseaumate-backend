@@ -889,3 +889,76 @@ export const bulkDeleteLeads = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Server error deleting leads' });
     }
 };
+
+/**
+ * POST /api/leads/:id/send-email
+ * Body (multipart/form-data):
+ *   subject  {string}
+ *   body     {string}  plain-text
+ *   html     {string}  optional HTML
+ *   files    {File[]}  optional attachments
+ */
+export const sendLeadEmail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
+        const { subject, body: textBody, html } = req.body;
+
+        if (!subject?.trim() || !textBody?.trim()) {
+            return res.status(400).json({ success: false, message: 'Subject and body are required.' });
+        }
+
+        // Verify the lead belongs to this user and has an email
+        const leadRes = await pool.query(
+            `SELECT id, full_name, email FROM leads WHERE id = $1 AND user_id = $2`,
+            [id, userId]
+        );
+        if (leadRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Lead not found.' });
+        }
+        const lead = leadRes.rows[0];
+        if (!lead.email?.trim()) {
+            return res.status(400).json({ success: false, message: 'This lead has no email address.' });
+        }
+
+        // Build attachment list from multer files
+        const attachments = (req.files || []).map((f) => ({
+            filename: f.originalname,
+            content:  f.buffer,
+            contentType: f.mimetype,
+        }));
+
+        const { sendDynamicEmail } = await import('../services/emailService.js');
+        const result = await sendDynamicEmail(userId, {
+            to: lead.email,
+            subject: subject.trim(),
+            text: textBody.trim(),
+            html: html?.trim() || undefined,
+            attachments,
+        });
+
+        // Log to activity timeline
+        await logActivity({
+            userId,
+            automationName: 'Manual Email',
+            triggerType:    'Manual Send',
+            status:         'Success',
+            detail:         `Email sent: ${subject.trim()}`,
+            metadata:       { lead_id: String(id), provider: result.provider },
+        });
+
+        return res.status(200).json({
+            success:   true,
+            provider:  result.provider,
+            messageId: result.messageId,
+        });
+    } catch (err) {
+        console.error('[sendLeadEmail] Error:', err.message);
+        return res.status(502).json({
+            success: false,
+            message: err.message?.includes('reconnect') || err.message?.includes('configured')
+                ? err.message
+                : 'Failed to send email. Check your email integration in Settings.',
+        });
+    }
+};
