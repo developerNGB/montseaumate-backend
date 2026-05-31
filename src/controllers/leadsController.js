@@ -118,7 +118,13 @@ export const getLeads = async (req, res) => {
         }
 
         if (search) {
-            query += ` AND (full_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex} OR phone ILIKE $${paramIndex})`;
+            query += ` AND (
+                full_name ILIKE $${paramIndex}
+                OR email ILIKE $${paramIndex}
+                OR phone ILIKE $${paramIndex}
+                OR COALESCE(lead_group, '') ILIKE $${paramIndex}
+                OR COALESCE(notes, '') ILIKE $${paramIndex}
+            )`;
             params.push(`%${search}%`);
             paramIndex++;
         }
@@ -655,12 +661,14 @@ export const triggerLeadFollowup = async (req, res) => {
             [id]
         );
 
-        // Log activity
-        await pool.query(
-            `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, created_at)
-             VALUES ($1, $2, $3, 'Success', $4, NOW())`,
-            [req.user.id, 'Lead Follow-up', 'Manual Trigger', 'Follow-up sent']
-        );
+        await logActivity({
+            userId: req.user.id,
+            automationName: 'Lead Follow-up',
+            triggerType: 'Manual Trigger',
+            status: 'Success',
+            detail: `Follow-up sent via ${channel}`,
+            metadata: { lead_id: id, provider: channel },
+        });
 
         console.log(`[triggerLeadFollowup][${Date.now() - startTime}ms] ✅ Success via ${channel}`);
         return res.status(200).json({ success: true, message: `Follow-up sent via ${channel}`, provider: channel });
@@ -752,6 +760,82 @@ export const triggerBulkFollowup = async (req, res) => {
     } catch (err) {
         console.error('[triggerBulkFollowup] Error:', err.message);
         if (!res.headersSent) res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+function inferTimelineType(detail = '', triggerType = '') {
+    const text = `${detail} ${triggerType}`.toLowerCase();
+    if (text.includes('whatsapp') || text.includes('wa.me')) return 'whatsapp';
+    if (text.includes('email') || text.includes('gmail')) return 'email';
+    if (text.includes('call') || text.includes('phone')) return 'call';
+    return 'note';
+}
+
+/** GET /api/leads/:id/timeline — activity for lead detail modal */
+export const getLeadTimeline = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const leadRes = await pool.query(
+            `SELECT id, full_name, source, lead_group, created_at, last_followup_at, lead_status
+             FROM leads WHERE id = $1 AND user_id = $2`,
+            [id, req.user.id]
+        );
+        if (leadRes.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+        const lead = leadRes.rows[0];
+        const timeline = [];
+
+        timeline.push({
+            type: 'note',
+            title: 'Lead captured',
+            description: [lead.source, lead.lead_group].filter(Boolean).join(' · ') || undefined,
+            timestamp: lead.created_at,
+        });
+
+        const logsRes = await pool.query(
+            `SELECT automation_name, trigger_type, status, detail, metadata, created_at
+             FROM activity_logs
+             WHERE user_id = $1
+               AND (
+                 metadata->>'lead_id' = $2
+                 OR metadata->>'leadId' = $2
+               )
+             ORDER BY created_at DESC
+             LIMIT 80`,
+            [req.user.id, String(id)]
+        );
+
+        for (const log of logsRes.rows) {
+            const detail = log.detail || '';
+            timeline.push({
+                type: inferTimelineType(detail, log.trigger_type || ''),
+                title: log.trigger_type || log.automation_name || 'Activity',
+                description: [detail, log.status].filter(Boolean).join(' · ') || undefined,
+                timestamp: log.created_at,
+            });
+        }
+
+        if (lead.last_followup_at) {
+            const alreadyLogged = timeline.some(
+                (e) => e.title?.toLowerCase().includes('follow-up') || e.title?.toLowerCase().includes('followup')
+            );
+            if (!alreadyLogged) {
+                timeline.push({
+                    type: 'whatsapp',
+                    title: 'Follow-up sent',
+                    description: lead.lead_status === 'Contacted' ? 'Marked as contacted' : undefined,
+                    timestamp: lead.last_followup_at,
+                });
+            }
+        }
+
+        timeline.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+        return res.status(200).json({ success: true, timeline });
+    } catch (err) {
+        console.error('[getLeadTimeline] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 

@@ -9,7 +9,8 @@ import {
     triggerLeadFollowup,
     triggerBulkFollowup,
     deleteLead,
-    bulkDeleteLeads
+    bulkDeleteLeads,
+    getLeadTimeline,
 } from '../controllers/leadsController.js';
 import authenticate from '../middleware/authenticate.js';
 
@@ -23,6 +24,9 @@ router.get('/', getLeads);
 
 router.get('/folders', getLeadFolders);
 router.put('/folders/message', express.json(), updateFolderMessage);
+
+// GET /api/leads/:id/timeline
+router.get('/:id/timeline', getLeadTimeline);
 
 // PATCH /api/leads/:id
 router.patch('/:id', updateLeadStatus);
