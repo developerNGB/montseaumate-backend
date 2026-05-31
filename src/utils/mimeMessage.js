@@ -1,3 +1,5 @@
+import nodemailer from 'nodemailer';
+
 /** RFC 2047 encoded-word for MIME headers (display names with special characters). */
 export function encodeMimeHeaderValue(value) {
     const text = String(value ?? '');
@@ -28,34 +30,33 @@ export function parseReplyToAddress(replyTo) {
 /**
  * Build a base64url-encoded MIME message for Gmail API `users.messages.send`.
  */
-export function buildGmailRawMime(mailOptions, fromEmail) {
-    const body = mailOptions.html || mailOptions.text || '';
-    const contentType = mailOptions.html ? 'text/html' : 'text/plain';
+export async function buildGmailRawMime(mailOptions, fromEmail) {
     const fromLine = mailOptions.from
         ? mailOptions.from.includes('<')
             ? mailOptions.from.replace(/<[^>]+>/, `<${fromEmail}>`)
-            : formatFromHeader(mailOptions.from, fromEmail)
+            : `"${mailOptions.from}" <${fromEmail}>`
         : fromEmail;
 
-    const lines = ['MIME-Version: 1.0', `To: ${mailOptions.to}`, `From: ${fromLine}`];
+    const transporter = nodemailer.createTransport({
+        streamTransport: true,
+        newline: 'windows',
+    });
 
-    if (mailOptions.replyTo) lines.push(`Reply-To: ${mailOptions.replyTo}`);
-    if (mailOptions.messageId) lines.push(`Message-ID: ${mailOptions.messageId}`);
+    const info = await transporter.sendMail({
+        ...mailOptions,
+        from: fromLine,
+    });
 
-    const extraHeaders = mailOptions.headers || {};
-    for (const [key, value] of Object.entries(extraHeaders)) {
-        if (value != null && value !== '') lines.push(`${key}: ${value}`);
-    }
+    const getStreamBuffer = (stream) => new Promise((resolve, reject) => {
+        const chunks = [];
+        stream.on('data', (chunk) => chunks.push(chunk));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+        stream.on('error', reject);
+    });
 
-    lines.push(
-        `Subject: =?utf-8?B?${Buffer.from(mailOptions.subject || '').toString('base64')}?=`,
-        `Content-Type: ${contentType}; charset="UTF-8"`,
-        'Content-Transfer-Encoding: 7bit',
-        '',
-        body,
-    );
+    const mimeBuffer = await getStreamBuffer(info.message);
 
-    return Buffer.from(lines.join('\r\n'))
+    return mimeBuffer
         .toString('base64')
         .replace(/\+/g, '-')
         .replace(/\//g, '_')

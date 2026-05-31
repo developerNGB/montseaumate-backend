@@ -113,6 +113,18 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
                         ];
                     }
 
+                    const graphAttachments = (mailOptions.attachments || []).map((att) => ({
+                        '@odata.type': '#microsoft.graph.fileAttachment',
+                        name: att.filename,
+                        contentType: att.contentType || 'application/octet-stream',
+                        contentBytes: Buffer.isBuffer(att.content)
+                            ? att.content.toString('base64')
+                            : Buffer.from(att.content).toString('base64'),
+                    }));
+                    if (graphAttachments.length > 0) {
+                        graphMessage.attachments = graphAttachments;
+                    }
+
                     const response = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
                         method: 'POST',
                         headers: {
@@ -145,7 +157,7 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
             if (googleAccessToken && googleFrom) {
                 console.log(`[EmailService][${Date.now() - startTime}ms] Using Gmail API (Direct Fetch)`);
 
-                const encodedMail = buildGmailRawMime(mailOptions, googleFrom);
+                const encodedMail = await buildGmailRawMime(mailOptions, googleFrom);
 
                 const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
                     method: 'POST',
