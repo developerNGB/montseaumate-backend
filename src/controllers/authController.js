@@ -7,6 +7,7 @@ import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 import { signAccessToken } from '../utils/accessToken.js';
 import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAccess.js';
 import { verifyFirebaseIdToken } from '../utils/firebaseAdmin.js';
+import { frontendBaseUrl } from '../utils/publicUrls.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -33,6 +34,9 @@ const selectUserByEmailQuery = `
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',
+    connectionTimeout: 15000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -49,6 +53,15 @@ const isValidEmail = (email) => {
 
 const isEmailVerificationRequired = () =>
     String(process.env.AUTH_REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase() === 'true';
+
+const sendMailWithTimeout = async (mailOptions, timeoutMs = 20000) => {
+    return Promise.race([
+        transporter.sendMail(mailOptions),
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Email delivery timed out.')), timeoutMs);
+        }),
+    ]);
+};
 
 /**
  * POST /auth/request-otp
@@ -432,52 +445,84 @@ export const updatePassword = async (req, res) => {
 export const forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
-        if (!email) {
-            return res.status(400).json({ success: false, message: 'Email is required.' });
+        if (!email || !isValidEmail(email)) {
+            return res.status(400).json({ success: false, message: 'A valid email address is required.' });
         }
 
-        const result = await pool.query('SELECT id, name FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+        const emailLower = email.toLowerCase().trim();
+        const result = await pool.query('SELECT id, name FROM users WHERE email = $1', [emailLower]);
 
         if (result.rows.length === 0) {
-            return res.status(404).json({ success: false, message: 'gmail not found' });
+            return res.status(200).json({
+                success: true,
+                message: 'If this email is registered, a password reset link has been sent.',
+            });
         }
 
         const user = result.rows[0];
 
-        // Generate a short-lived token (5 mins) for immediate reset
+        // Generate a short-lived token
         const resetToken = crypto.randomBytes(32).toString('hex');
         const tokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+        await pool.query('DELETE FROM password_resets WHERE user_id = $1 AND used = FALSE', [user.id]);
 
         await pool.query(
             'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
             [user.id, tokenHash, expiresAt]
         );
 
-        const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+        const frontendUrl = frontendBaseUrl() || 'http://localhost:5173';
+        const resetLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
 
         const mailOptions = {
             from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
-            to: email.toLowerCase().trim(),
-            subject: 'Reset your password - Equipo Experto',
+            to: emailLower,
+            subject: 'Reset your Equipo Experto password',
+            text:
+                `Hello ${user.name},\n\n` +
+                `We received a request to reset your Equipo Experto password.\n\n` +
+                `Open this link to set a new password:\n${resetLink}\n\n` +
+                `This link expires in 30 minutes. If you did not request this, you can ignore this email.`,
             html: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
-                    <h2 style="color: #4f46e5; text-align: center;">Password Reset Request</h2>
-                    <p>Hello ${user.name},</p>
-                    <p>We received a request to reset your password. Click the professional secure link below to proceed:</p>
-                    <div style="text-align: center; margin: 30px 0;">
-                        <a href="${resetLink}" style="background: #4f46e5; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Reset Password</a>
+                <div style="font-family: Inter, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden;">
+                    <div style="padding: 24px 24px 12px; text-align: center; background: #0f172a;">
+                        <img src="https://equipoexperto.com/equipoexperto.jpg" alt="Equipo Experto" style="height: 48px; width: auto; border-radius: 8px;" />
                     </div>
-                    <p style="color: #6b7280; font-size: 14px;">This link will expire in 5 minutes. If you did not request this, please ignore this email.</p>
+                    <div style="padding: 32px 24px;">
+                        <h1 style="margin: 0 0 16px; font-size: 24px; line-height: 1.2; color: #0f172a;">Reset your password</h1>
+                        <p style="margin: 0 0 16px; color: #334155; font-size: 15px;">Hello ${user.name},</p>
+                        <p style="margin: 0 0 24px; color: #334155; font-size: 15px; line-height: 1.6;">
+                            We received a request to reset your Equipo Experto password. Click the button below to open the secure reset page and choose a new password.
+                        </p>
+                        <div style="text-align: center; margin: 32px 0;">
+                            <a href="${resetLink}" style="display: inline-block; background: #111827; color: #ffffff; padding: 14px 24px; text-decoration: none; border-radius: 10px; font-weight: 700; font-size: 15px;">
+                                Reset Password
+                            </a>
+                        </div>
+                        <p style="margin: 0 0 12px; color: #475569; font-size: 14px; line-height: 1.6;">
+                            This link expires in <strong>30 minutes</strong>.
+                        </p>
+                        <p style="margin: 0 0 12px; color: #475569; font-size: 14px; line-height: 1.6;">
+                            If the button does not open, copy and paste this URL into your browser:
+                        </p>
+                        <p style="margin: 0 0 24px; word-break: break-all; color: #2563eb; font-size: 13px; line-height: 1.6;">
+                            <a href="${resetLink}" style="color: #2563eb; text-decoration: underline;">${resetLink}</a>
+                        </p>
+                        <p style="margin: 0; color: #64748b; font-size: 13px; line-height: 1.6;">
+                            If you did not request this, you can ignore this email. Your current password will continue to work.
+                        </p>
+                    </div>
                 </div>
             `
         };
 
-        await transporter.sendMail(mailOptions);
+        await sendMailWithTimeout(mailOptions);
 
         return res.status(200).json({
             success: true,
-            message: 'A professional reset link has been sent to your email.'
+            message: 'Password reset email sent. Check your inbox.'
         });
     } catch (err) {
         console.error('[forgotPassword] Error:', err);
