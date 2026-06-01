@@ -9,6 +9,46 @@ import {
 } from './supportMailService.js';
 import { sendDynamicEmail } from './emailService.js';
 
+const GMAIL_TOKEN_TIMEOUT_MS = 4500;
+const GMAIL_SEND_TIMEOUT_MS = 6500;
+
+function buildTimeoutError(code, message) {
+    const err = new Error(message);
+    err.code = code;
+    return err;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs, timeoutCode) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (err?.name === 'AbortError') {
+            throw buildTimeoutError(timeoutCode, `${timeoutCode} after ${timeoutMs}ms`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function promiseWithTimeout(promise, timeoutMs, timeoutCode) {
+    let timeoutId;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(buildTimeoutError(timeoutCode, `${timeoutCode} after ${timeoutMs}ms`));
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 function normalizeEmail(value) {
     return value != null ? String(value).trim().toLowerCase() : '';
 }
@@ -150,7 +190,7 @@ function hasEnvGmailSender() {
 
 async function refreshEnvGmailAccessToken() {
     const refreshToken = process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN.trim();
-    const response = await fetch('https://oauth2.googleapis.com/token', {
+    const response = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -159,7 +199,7 @@ async function refreshEnvGmailAccessToken() {
             refresh_token: refreshToken,
             grant_type: 'refresh_token',
         }),
-    });
+    }, GMAIL_TOKEN_TIMEOUT_MS, 'GMAIL_API_TIMEOUT');
     const data = await response.json();
     if (data.error) {
         throw new Error(
@@ -180,14 +220,14 @@ async function sendViaEnvGmailApi(mailOptions) {
     const accessToken = await refreshEnvGmailAccessToken();
     const encodedMail = buildGmailRawMime(mailOptions, from);
 
-    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    const response = await fetchWithTimeout('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST',
         headers: {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({ raw: encodedMail }),
-    });
+    }, GMAIL_SEND_TIMEOUT_MS, 'GMAIL_API_TIMEOUT');
 
     if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
@@ -206,7 +246,11 @@ async function sendViaEnvGmailApi(mailOptions) {
 }
 
 async function sendViaGmailApiForUser(userId, mailOptions) {
-    const result = await sendDynamicEmail(userId, mailOptions, { integrationsOnly: true });
+    const result = await promiseWithTimeout(
+        sendDynamicEmail(userId, mailOptions, { integrationsOnly: true }),
+        GMAIL_SEND_TIMEOUT_MS,
+        'GMAIL_API_TIMEOUT'
+    );
     console.log(`[contactForm] Gmail API (${result.provider}, user ${userId}) → ${mailOptions.to}`);
     return { ...result, to: mailOptions.to };
 }

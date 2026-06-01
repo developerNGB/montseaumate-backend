@@ -209,9 +209,32 @@ app.get('/api/health', async (_req, res) => {
         checks.dbError = err.code === '42P01' ? 'users_table_missing' : err.message;
     }
     const ok = checks.jwtSecret && checks.databaseUrl && checks.usersTable;
-    res.status(ok ? 200 : 503).json({ success: ok, checks });
+    const allowDetails =
+        process.env.NODE_ENV !== 'production' ||
+        (process.env.HEALTHCHECK_SECRET &&
+            _req.headers['x-healthcheck-secret'] === process.env.HEALTHCHECK_SECRET);
+    return res.status(ok ? 200 : 503).json(
+        allowDetails
+            ? { success: ok, checks }
+            : {
+                  success: ok,
+                  status: ok ? 'ok' : 'degraded',
+                  timestamp: new Date().toISOString(),
+              }
+    );
 });
 // Auth endpoints
+app.use(
+    [
+        '/auth/login',
+        '/auth/register',
+        '/auth/request-otp',
+        '/auth/forgot-password',
+        '/auth/google',
+        '/auth/firebase',
+    ],
+    authLimiter
+);
 app.use('/auth', authRoutes);
 
 app.use('/api/stripe', stripeRoutes);

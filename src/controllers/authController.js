@@ -64,7 +64,8 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
         code === 'SMTP_TIMEOUT' ||
         code === 'ETIMEDOUT' ||
         code === 'ESOCKET' ||
-        code === 'PLATFORM_GMAIL_TIMEOUT'
+        code === 'PLATFORM_GMAIL_TIMEOUT' ||
+        code === 'GMAIL_API_TIMEOUT'
     ) {
         return res.status(504).json({
             success: false,
@@ -314,10 +315,10 @@ export const login = async (req, res) => {
             user: enrichUserForClient(safeUser),
         });
     } catch (err) {
-        console.error('Error:', err);
+        console.error('[login] Error:', err.message);
         return res.status(500).json({
             success: false,
-            message: `Server error: ${err.message}`,
+            message: 'Server error. Please try again later.',
         });
     }
 };
@@ -352,8 +353,7 @@ export const getProfile = async (req, res) => {
         console.error('[getProfile] CRITICAL:', err.message, err.stack);
         return res.status(500).json({
             success: false,
-            message: `Server sync error: ${err.message}`,
-            hint: 'This usually means a database column is missing or unreachable.'
+            message: 'Server sync error. Please try again later.',
         });
     }
 };

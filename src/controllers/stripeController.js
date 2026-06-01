@@ -46,6 +46,7 @@ const planFromStripePriceId = (priceId) => {
 };
 
 const frontendBaseUrl = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+const stripeCheckoutIdempotencyBucketMs = 15 * 60 * 1000;
 
 /** Free trial days on Stripe Checkout (card collected today, first charge after trial). Default 30. Set 0 to disable. */
 const stripeTrialDays = () => {
@@ -170,6 +171,8 @@ export const createCheckoutSession = async (req, res) => {
         const appPlan = planIdFromPriceKey(priceKey);
         const userId = req.user.id;
         const frontend = frontendBaseUrl();
+        const idempotencyBucket = Math.floor(Date.now() / stripeCheckoutIdempotencyBucketMs);
+        const checkoutIdempotencyKey = `checkout:${userId}:${priceKey}:${idempotencyBucket}`;
 
         let userRow;
         try {
@@ -221,7 +224,9 @@ export const createCheckoutSession = async (req, res) => {
 
         let session;
         try {
-            session = await stripe.checkout.sessions.create(sessionParams);
+            session = await stripe.checkout.sessions.create(sessionParams, {
+                idempotencyKey: checkoutIdempotencyKey,
+            });
         } catch (stripeErr) {
             const msg = stripeErr?.raw?.message || stripeErr?.message || 'Stripe error';
             console.error('[createCheckoutSession] Stripe:', msg, stripeErr?.code);
@@ -235,7 +240,9 @@ export const createCheckoutSession = async (req, res) => {
                 delete sessionParams.customer;
                 sessionParams.customer_email =
                     req.user.email || userRow.rows[0]?.email || undefined;
-                session = await stripe.checkout.sessions.create(sessionParams);
+                session = await stripe.checkout.sessions.create(sessionParams, {
+                    idempotencyKey: `${checkoutIdempotencyKey}:nocustomer`,
+                });
                 await pool.query(
                     'UPDATE users SET stripe_customer_id = NULL, stripe_subscription_id = NULL WHERE id = $1',
                     [userId]
