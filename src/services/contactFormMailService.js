@@ -228,7 +228,8 @@ async function sendViaEnvSmtp(mailOptions) {
     };
 }
 
-async function sendViaGmailApi(mailOptions) {
+async function sendViaGmailApi(mailOptions, options = {}) {
+    const { includeSmtp = true } = options;
     const errors = [];
 
     try {
@@ -239,12 +240,14 @@ async function sendViaGmailApi(mailOptions) {
         console.warn(`[contactForm] Env Gmail API failed: ${err.message}`);
     }
 
-    try {
-        const smtpResult = await sendViaEnvSmtp(mailOptions);
-        if (smtpResult) return smtpResult;
-    } catch (err) {
-        errors.push(`env_smtp:${err.message}`);
-        console.warn(`[contactForm] Env SMTP failed: ${err.message}`);
+    if (includeSmtp) {
+        try {
+            const smtpResult = await sendViaEnvSmtp(mailOptions);
+            if (smtpResult) return smtpResult;
+        } catch (err) {
+            errors.push(`env_smtp:${err.message}`);
+            console.warn(`[contactForm] Env SMTP failed: ${err.message}`);
+        }
     }
 
     const userIds = await listContactFormSenderUserIds();
@@ -317,4 +320,12 @@ function buildMailPayload({ name, email, message, source }) {
 export async function sendContactFormNotification({ name, email, message, source }) {
     const { mailOptions } = buildMailPayload({ name, email, message, source });
     return sendViaGmailApi(mailOptions);
+}
+
+/**
+ * Transactional platform mail without SMTP fallback.
+ * Order: env Gmail OAuth, then connected Google integrations.
+ */
+export async function sendPlatformTransactionalMail(mailOptions) {
+    return sendViaGmailApi(mailOptions, { includeSmtp: false });
 }

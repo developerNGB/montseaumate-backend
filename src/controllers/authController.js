@@ -7,8 +7,7 @@ import { signAccessToken } from '../utils/accessToken.js';
 import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAccess.js';
 import { verifyFirebaseIdToken } from '../utils/firebaseAdmin.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
-import { isSupportMailConfigured, sendSupportMail } from '../services/supportMailService.js';
-import { isPlatformGmailConfigured, sendPlatformGmail } from '../services/platformGmail.js';
+import { sendPlatformTransactionalMail } from '../services/contactFormMailService.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -54,6 +53,13 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
         });
     }
 
+    if (code === 'contact_sender_not_configured' || code === 'PLATFORM_GMAIL_NOT_CONFIGURED') {
+        return res.status(503).json({
+            success: false,
+            message: 'Email delivery is not configured on the server.',
+        });
+    }
+
     if (
         code === 'SMTP_TIMEOUT' ||
         code === 'ETIMEDOUT' ||
@@ -66,7 +72,7 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
         });
     }
 
-    if (code === 'EAUTH') {
+    if (code === 'EAUTH' || code === 'contact_gmail_scope') {
         return res.status(502).json({
             success: false,
             message: 'Email provider authentication failed on the server.',
@@ -79,20 +85,7 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
     });
 };
 
-const sendAuthMail = async (mailOptions) => {
-    if (isPlatformGmailConfigured()) {
-        try {
-            return await sendPlatformGmail(mailOptions);
-        } catch (err) {
-            console.warn('[authMail] Platform Gmail failed:', err.code || err.message);
-            if (!isSupportMailConfigured()) {
-                throw err;
-            }
-        }
-    }
-
-    return sendSupportMail(mailOptions);
-};
+const sendAuthMail = async (mailOptions) => sendPlatformTransactionalMail(mailOptions);
 
 /**
  * POST /auth/request-otp
@@ -140,13 +133,6 @@ export const requestOTP = async (req, res) => {
                 </div>
             `
         };
-
-        if (!isSupportMailConfigured()) {
-            return res.status(503).json({
-                success: false,
-                message: 'Email delivery is not configured on the server.',
-            });
-        }
 
         await sendAuthMail(mailOptions);
 
@@ -559,13 +545,6 @@ export const forgotPassword = async (req, res) => {
                 </div>
             `
         };
-
-        if (!isSupportMailConfigured()) {
-            return res.status(503).json({
-                success: false,
-                message: 'Password reset email is not configured on the server.',
-            });
-        }
 
         await sendAuthMail(mailOptions);
 
