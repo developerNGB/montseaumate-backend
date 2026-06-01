@@ -43,6 +43,36 @@ const isValidEmail = (email) => {
 const isEmailVerificationRequired = () =>
     String(process.env.AUTH_REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase() === 'true';
 
+const sendMailErrorResponse = (res, err, fallbackMessage) => {
+    const code = err?.code || '';
+
+    if (code === 'SMTP_NOT_CONFIGURED') {
+        return res.status(503).json({
+            success: false,
+            message: 'Email delivery is not configured on the server.',
+        });
+    }
+
+    if (code === 'SMTP_TIMEOUT' || code === 'ETIMEDOUT' || code === 'ESOCKET') {
+        return res.status(504).json({
+            success: false,
+            message: 'Email delivery timed out. Please try again in a moment.',
+        });
+    }
+
+    if (code === 'EAUTH') {
+        return res.status(502).json({
+            success: false,
+            message: 'Email provider authentication failed on the server.',
+        });
+    }
+
+    return res.status(500).json({
+        success: false,
+        message: fallbackMessage,
+    });
+};
+
 /**
  * POST /auth/request-otp
  * Body: { email }
@@ -104,8 +134,12 @@ export const requestOTP = async (req, res) => {
             message: 'Verification code sent to your email.'
         });
     } catch (err) {
-        console.error('[requestOTP] Error:', err.message);
-        return res.status(500).json({ success: false, message: 'Failed to send verification email. Please ensure your email settings are correct.' });
+        console.error('[requestOTP] Error:', err.code || err.message);
+        return sendMailErrorResponse(
+            res,
+            err,
+            'Failed to send verification email. Please ensure your email settings are correct.'
+        );
     }
 };
 
@@ -519,8 +553,12 @@ export const forgotPassword = async (req, res) => {
             message: 'Password reset email sent. Check your inbox.'
         });
     } catch (err) {
-        console.error('[forgotPassword] Error:', err);
-        return res.status(500).json({ success: false, message: 'Failed to send reset email. Please try again later.' });
+        console.error('[forgotPassword] Error:', err.code || err.message);
+        return sendMailErrorResponse(
+            res,
+            err,
+            'Failed to send reset email. Please try again later.'
+        );
     }
 };
 
