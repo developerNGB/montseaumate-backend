@@ -546,12 +546,20 @@ export const forgotPassword = async (req, res) => {
             });
         }
 
-        await sendSupportMail(mailOptions);
-
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
             message: 'Password reset email sent. Check your inbox.'
         });
+
+        queueMicrotask(async () => {
+            try {
+                await sendSupportMail(mailOptions);
+            } catch (mailErr) {
+                console.error('[forgotPassword] Background mail send failed:', mailErr.code || mailErr.message);
+            }
+        });
+
+        return;
     } catch (err) {
         console.error('[forgotPassword] Error:', err.code || err.message);
         return sendMailErrorResponse(
