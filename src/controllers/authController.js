@@ -47,6 +47,9 @@ const isValidEmail = (email) => {
     return emailRegex.test(email.toLowerCase().trim());
 };
 
+const isEmailVerificationRequired = () =>
+    String(process.env.AUTH_REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase() === 'true';
+
 /**
  * POST /auth/request-otp
  * Body: { email }
@@ -113,21 +116,38 @@ export const requestOTP = async (req, res) => {
 export const register = async (req, res) => {
     try {
         const { name, email, password, company_name, otp } = req.body;
+        const emailVerificationRequired = isEmailVerificationRequired();
 
-        if (!name || !email || !password || !company_name || !otp) {
-            return res.status(400).json({ success: false, message: 'All fields including the verification code are required.' });
+        if (!name || !email || !password || !company_name) {
+            return res.status(400).json({ success: false, message: 'All fields are required.' });
         }
 
         const emailLower = email.toLowerCase().trim();
 
-        // Verify OTP
-        const otpResult = await pool.query(
-            'SELECT id FROM otp_verifications WHERE email = $1 AND otp_code = $2 AND expires_at > NOW()',
-            [emailLower, otp]
-        );
+        if (!isValidEmail(emailLower)) {
+            return res.status(400).json({ success: false, message: 'A valid email address is required.' });
+        }
 
-        if (otpResult.rows.length === 0) {
-            return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+        if (String(password).length < 8) {
+            return res.status(400).json({ success: false, message: 'Password must be at least 8 characters long.' });
+        }
+
+        if (emailVerificationRequired) {
+            if (!otp) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'A verification code is required to complete registration.',
+                });
+            }
+
+            const otpResult = await pool.query(
+                'SELECT id FROM otp_verifications WHERE email = $1 AND otp_code = $2 AND expires_at > NOW()',
+                [emailLower, otp]
+            );
+
+            if (otpResult.rows.length === 0) {
+                return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+            }
         }
 
         // Check if email already registered (race condition check)
@@ -148,8 +168,9 @@ export const register = async (req, res) => {
 
         const newUser = result.rows[0];
 
-        // Cleanup used OTP
-        await pool.query('DELETE FROM otp_verifications WHERE email = $1', [emailLower]);
+        if (emailVerificationRequired) {
+            await pool.query('DELETE FROM otp_verifications WHERE email = $1', [emailLower]);
+        }
 
         await pool.query(
             'INSERT INTO password_history (user_id, password_hash) VALUES ($1, $2)',
@@ -163,9 +184,9 @@ export const register = async (req, res) => {
 
         return res.status(201).json({
             success: true,
-            message:
-                'Account verified and created successfully. Connect Google in Dashboard → Integrations ' +
-                'to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
+            message: emailVerificationRequired
+                ? 'Account verified and created successfully. Connect Google in Dashboard → Integrations to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).'
+                : 'Account created successfully. Connect Google in Dashboard → Integrations to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
             token, // Keep for backward compatibility during transition
             user: enrichUserForNewSignup(newUser),
         });
