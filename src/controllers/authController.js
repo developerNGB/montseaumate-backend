@@ -6,6 +6,7 @@ import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
 import { signAccessToken } from '../utils/accessToken.js';
 import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAccess.js';
+import { verifyFirebaseIdToken } from '../utils/firebaseAdmin.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -20,6 +21,16 @@ const SALT_ROUNDS = 10; // Optimized for performance while maintaining high secu
 
 const signToken = (user) => signAccessToken(user);
 
+const selectUserByEmailQuery = `
+    SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at,
+           COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+           COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
+           trial_ends_at, stripe_subscription_id, stripe_customer_id
+    FROM users
+    WHERE lower(email) = $1
+    LIMIT 1
+`;
+
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -29,11 +40,11 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Validates if the email is a professional Gmail account
+ * Validates if the email is a standard email address format
  */
-const isGmail = (email) => {
-    const gmailRegex = /^[a-z0-9](\.?[a-z0-9]){5,}@(gmail\.com|googlemail\.com)$/i;
-    return gmailRegex.test(email.toLowerCase().trim());
+const isValidEmail = (email) => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email.toLowerCase().trim());
 };
 
 /**
@@ -44,10 +55,10 @@ export const requestOTP = async (req, res) => {
     try {
         const { email } = req.body;
 
-        if (!email || !isGmail(email)) {
+        if (!email || !isValidEmail(email)) {
             return res.status(400).json({
                 success: false,
-                message: 'A valid Gmail address is required to create a professional account.'
+                message: 'A valid email address is required to create a professional account.'
             });
         }
 
@@ -56,7 +67,7 @@ export const requestOTP = async (req, res) => {
         // Check if user already exists
         const existing = await pool.query('SELECT id FROM users WHERE email = $1', [emailLower]);
         if (existing.rows.length > 0) {
-            return res.status(409).json({ success: false, message: 'An account with this Gmail already exists.' });
+            return res.status(409).json({ success: false, message: 'An account with this email already exists.' });
         }
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -70,7 +81,7 @@ export const requestOTP = async (req, res) => {
         const mailOptions = {
             from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
             to: emailLower,
-            subject: 'Verify your Gmail - Equipo Experto',
+            subject: 'Verify your email - Equipo Experto',
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e1e1e1; border-radius: 10px;">
                     <h2 style="color: #4f46e5; text-align: center;">Welcome to Equipo Experto</h2>
@@ -87,7 +98,7 @@ export const requestOTP = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'Verification code sent to your Gmail.'
+            message: 'Verification code sent to your email.'
         });
     } catch (err) {
         console.error('[requestOTP] Error:', err.message);
@@ -445,7 +456,7 @@ export const forgotPassword = async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            message: 'A professional reset link has been sent to your Gmail.'
+            message: 'A professional reset link has been sent to your email.'
         });
     } catch (err) {
         console.error('[forgotPassword] Error:', err);
@@ -699,6 +710,126 @@ export const googleLogin = async (req, res) => {
 };
 
 /**
+ * POST /auth/firebase
+ * Body: { idToken, createIfMissing?, profile?: { name, company_name } }
+ */
+export const firebaseSessionLogin = async (req, res) => {
+    try {
+        const { idToken, createIfMissing = false, profile } = req.body || {};
+
+        if (!idToken || typeof idToken !== 'string') {
+            return res.status(400).json({ success: false, message: 'Firebase ID token is required.' });
+        }
+
+        const decoded = await verifyFirebaseIdToken(idToken);
+        const emailLower = decoded.email?.toLowerCase().trim();
+
+        if (!emailLower) {
+            return res.status(400).json({ success: false, message: 'Firebase account email is unavailable.' });
+        }
+
+        let result;
+        try {
+            result = await pool.query(selectUserByEmailQuery, [emailLower]);
+        } catch (e) {
+            if (e.code !== '42703') throw e;
+            result = await pool.query(
+                `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at,
+                        trial_ends_at, stripe_subscription_id, stripe_customer_id
+                 FROM users
+                 WHERE lower(email) = $1
+                 LIMIT 1`,
+                [emailLower]
+            );
+            result.rows = result.rows.map((row) => ({
+                ...row,
+                weekly_reports_enabled: true,
+                onboarding_completed: false,
+            }));
+        }
+
+        let user = result.rows[0];
+        let isNewUser = false;
+
+        if (!user) {
+            if (!createIfMissing) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'No account exists for this email. Sign up first.',
+                });
+            }
+
+            const displayName =
+                typeof profile?.name === 'string' && profile.name.trim()
+                    ? profile.name.trim()
+                    : typeof decoded.name === 'string' && decoded.name.trim()
+                      ? decoded.name.trim()
+                      : emailLower.split('@')[0];
+            const companyName =
+                typeof profile?.company_name === 'string' ? profile.company_name.trim() : '';
+
+            const insertResult = await pool.query(
+                `INSERT INTO users (name, email, password_hash, company_name, trial_ends_at)
+                 VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP + INTERVAL '30 days')
+                 RETURNING id, name, email, password_hash, company_name, phone, plan, role, status, created_at,
+                           COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+                           COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
+                           trial_ends_at, stripe_subscription_id, stripe_customer_id`,
+                [displayName, emailLower, '', companyName]
+            );
+
+            user = insertResult.rows[0];
+            isNewUser = true;
+        } else if (
+            (typeof profile?.name === 'string' && profile.name.trim() && !user.name) ||
+            (typeof profile?.company_name === 'string' && profile.company_name.trim() && !user.company_name)
+        ) {
+            const patched = await pool.query(
+                `UPDATE users
+                 SET name = COALESCE(NULLIF($1, ''), name),
+                     company_name = COALESCE(NULLIF($2, ''), company_name),
+                     updated_at = NOW()
+                 WHERE id = $3
+                 RETURNING id, name, email, password_hash, company_name, phone, plan, role, status, created_at,
+                           COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+                           COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
+                           trial_ends_at, stripe_subscription_id, stripe_customer_id`,
+                [
+                    typeof profile?.name === 'string' ? profile.name.trim() : '',
+                    typeof profile?.company_name === 'string' ? profile.company_name.trim() : '',
+                    user.id,
+                ]
+            );
+            user = patched.rows[0] || user;
+        }
+
+        if (user.status !== 'active') {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account is deactivated. Please contact support.',
+            });
+        }
+
+        const token = signToken(user);
+        setJwtCookie(res, token);
+
+        return res.status(200).json({
+            success: true,
+            message: isNewUser ? 'Firebase sign-up successful.' : 'Firebase sign-in successful.',
+            token,
+            user: isNewUser ? enrichUserForNewSignup(user) : enrichUserForClient(user),
+            isNewUser,
+        });
+    } catch (err) {
+        console.error('[firebaseSessionLogin] Error:', err.message);
+        return res.status(401).json({
+            success: false,
+            message: 'Firebase authentication failed. Verify the Firebase project configuration on both frontend and backend.',
+        });
+    }
+};
+
+/**
  * PUT /auth/plan
  * Body: { plan }
  */
@@ -774,4 +905,3 @@ export const deleteAccount = async (req, res) => {
         return res.status(500).json({ success: false, message: 'Failed to delete account. Please try again.' });
     }
 };
-

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, getProfile, updateProfile, updatePassword, forgotPassword, resetPassword, verifyResetToken, requestOTP, googleLogin, deleteAccount, updatePlan } from '../controllers/authController.js';
+import { register, login, getProfile, updateProfile, updatePassword, forgotPassword, resetPassword, verifyResetToken, requestOTP, googleLogin, firebaseSessionLogin, deleteAccount, updatePlan } from '../controllers/authController.js';
 import authenticate from '../middleware/authenticate.js';
 import { clearJwtCookie } from '../utils/cookieHelpers.js';
 
@@ -13,6 +13,9 @@ router.post('/register', register);
 
 // POST /auth/login — authenticate and receive a JWT
 router.post('/login', login);
+
+// POST /auth/firebase — exchange a verified Firebase ID token for the app JWT
+router.post('/firebase', firebaseSessionLogin);
 
 // GET /auth/profile — get the logged-in user's profile (protected)
 router.get('/profile', authenticate, getProfile);

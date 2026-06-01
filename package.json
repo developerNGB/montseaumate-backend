@@ -21,6 +21,7 @@
         "dotenv": "^16.4.7",
         "express": "^4.21.2",
         "express-rate-limit": "^7.5.0",
+        "firebase-admin": "^13.10.0",
         "google-auth-library": "^10.6.1",
         "jsdom": "^29.0.2",
         "jsonwebtoken": "^9.0.2",
