@@ -1,6 +1,8 @@
 import nodemailer from 'nodemailer';
 
 let cachedTransporter = null;
+const PLATFORM_GMAIL_TIMEOUT_MS = 4_500;
+const PLATFORM_GMAIL_SEND_TIMEOUT_MS = 6_500;
 
 function normalizeAppPassword(pass) {
     return pass?.replace(/\s+/g, '') || '';
@@ -30,9 +32,9 @@ export function getPlatformGmailTransporter() {
         cachedTransporter = nodemailer.createTransport({
             service: 'gmail',
             auth: { user, pass },
-            connectionTimeout: 10_000,
-            greetingTimeout: 10_000,
-            socketTimeout: 12_000,
+            connectionTimeout: PLATFORM_GMAIL_TIMEOUT_MS,
+            greetingTimeout: PLATFORM_GMAIL_TIMEOUT_MS,
+            socketTimeout: PLATFORM_GMAIL_TIMEOUT_MS,
         });
     }
     return cachedTransporter;
@@ -63,10 +65,20 @@ export async function sendPlatformGmail(mailOptions) {
             ? `"${mailOptions.from}" <${fromUser}>`
             : mailOptions.from || `"Equipo Experto" <${fromUser}>`;
 
-    const info = await transporter.sendMail({
+    let timer;
+    const sendPromise = transporter.sendMail({
         ...mailOptions,
         from,
     });
+    const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const err = new Error('PLATFORM_GMAIL_TIMEOUT');
+            err.code = 'PLATFORM_GMAIL_TIMEOUT';
+            reject(err);
+        }, PLATFORM_GMAIL_SEND_TIMEOUT_MS);
+    });
+
+    const info = await Promise.race([sendPromise, timeoutPromise]).finally(() => clearTimeout(timer));
 
     const rejected = info?.rejected || [];
     if (rejected.length > 0 || !info?.messageId) {

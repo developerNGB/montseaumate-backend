@@ -8,6 +8,7 @@ import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAcc
 import { verifyFirebaseIdToken } from '../utils/firebaseAdmin.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { isSupportMailConfigured, sendSupportMail } from '../services/supportMailService.js';
+import { isPlatformGmailConfigured, sendPlatformGmail } from '../services/platformGmail.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -53,7 +54,12 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
         });
     }
 
-    if (code === 'SMTP_TIMEOUT' || code === 'ETIMEDOUT' || code === 'ESOCKET') {
+    if (
+        code === 'SMTP_TIMEOUT' ||
+        code === 'ETIMEDOUT' ||
+        code === 'ESOCKET' ||
+        code === 'PLATFORM_GMAIL_TIMEOUT'
+    ) {
         return res.status(504).json({
             success: false,
             message: 'Email delivery timed out. Please try again in a moment.',
@@ -71,6 +77,21 @@ const sendMailErrorResponse = (res, err, fallbackMessage) => {
         success: false,
         message: fallbackMessage,
     });
+};
+
+const sendAuthMail = async (mailOptions) => {
+    if (isPlatformGmailConfigured()) {
+        try {
+            return await sendPlatformGmail(mailOptions);
+        } catch (err) {
+            console.warn('[authMail] Platform Gmail failed:', err.code || err.message);
+            if (!isSupportMailConfigured()) {
+                throw err;
+            }
+        }
+    }
+
+    return sendSupportMail(mailOptions);
 };
 
 /**
@@ -127,7 +148,7 @@ export const requestOTP = async (req, res) => {
             });
         }
 
-        await sendSupportMail(mailOptions);
+        await sendAuthMail(mailOptions);
 
         return res.status(200).json({
             success: true,
@@ -546,7 +567,7 @@ export const forgotPassword = async (req, res) => {
             });
         }
 
-        await sendSupportMail(mailOptions);
+        await sendAuthMail(mailOptions);
 
         return res.status(200).json({
             success: true,
