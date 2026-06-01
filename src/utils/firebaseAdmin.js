@@ -1,12 +1,14 @@
 import { cert, getApp, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 
+const FIREBASE_PROJECT_ID_FALLBACK = 'project-62bc5c10-6bba-401a-b93';
+
 function getFirebaseProjectId() {
     return (
         process.env.FIREBASE_PROJECT_ID?.trim() ||
         process.env.VITE_FIREBASE_PROJECT_ID?.trim() ||
         process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
-        ''
+        FIREBASE_PROJECT_ID_FALLBACK
     );
 }
 
