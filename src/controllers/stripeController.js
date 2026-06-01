@@ -338,7 +338,6 @@ export const verifyCheckoutSession = async (req, res) => {
             success: true,
             paid,
             user: enrichUserForClient(user),
-            token,
         });
     } catch (err) {
         console.error('[verifyCheckoutSession]', err.message);

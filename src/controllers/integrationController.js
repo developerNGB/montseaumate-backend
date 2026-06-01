@@ -1,12 +1,73 @@
 import pool from '../db/pool.js';
-import jwt from 'jsonwebtoken';
 import fetch from 'node-fetch';
+import crypto from 'crypto';
 import { backendBaseUrl, frontendBaseUrl } from '../utils/publicUrls.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { getValidGoogleTokens } from '../utils/googleAuth.js';
 
 // Mock OAuth Credentials
 const MOCK_CLIENT_ID = 'mock_client_id';
+const OAUTH_CONNECT_TICKET_TTL_MINUTES = 10;
+
+async function ensureOAuthConnectTicketsTable() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS oauth_connect_tickets (
+            ticket VARCHAR(128) PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider VARCHAR(50) NOT NULL,
+            job_id VARCHAR(100),
+            used BOOLEAN DEFAULT FALSE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+    `);
+}
+
+function buildFrontendRedirect(baseUrl, jobId = '') {
+    const configPaths = {
+        'config-capture': '/dashboard/config/lead-capture',
+        'config-followup': '/dashboard/config/lead-followup',
+        'config-review': '/dashboard/config/review-funnel',
+    };
+    if (jobId === 'onboarding') return `${baseUrl}/dashboard/integrations`;
+    if (jobId && configPaths[jobId]) return `${baseUrl}${configPaths[jobId]}`;
+    if (jobId) return `${baseUrl}/dashboard/employee/${jobId}`;
+    return `${baseUrl}/dashboard/integrations`;
+}
+
+export const createConnectTicket = async (req, res) => {
+    try {
+        const { provider } = req.params;
+        const { jobId = '' } = req.body || {};
+
+        if (!['google', 'microsoft', 'whatsapp'].includes(provider)) {
+            return res.status(400).json({ success: false, message: 'Invalid Provider' });
+        }
+
+        await ensureOAuthConnectTicketsTable();
+
+        const ticket = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + OAUTH_CONNECT_TICKET_TTL_MINUTES * 60 * 1000);
+        await pool.query(
+            `INSERT INTO oauth_connect_tickets (ticket, user_id, provider, job_id, expires_at)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [ticket, req.user.id, provider, String(jobId || '').trim() || null, expiresAt]
+        );
+
+        const apiBase = backendBaseUrl();
+        if (!apiBase) {
+            return res.status(500).json({ success: false, message: 'Server misconfiguration: set BACKEND_URL' });
+        }
+
+        return res.status(200).json({
+            success: true,
+            url: `${apiBase}/api/integrations/${provider}/connect?ticket=${encodeURIComponent(ticket)}`,
+        });
+    } catch (err) {
+        console.error('[createConnectTicket] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
 
 /**
  * GET /api/integrations
@@ -28,28 +89,30 @@ export const getIntegrations = async (req, res) => {
 /**
  * GET /api/integrations/:provider/connect
  * Redirects the user to the OAuth Provider
- * Expects ?token=YOUR_JWT or passed via header if possible (we use query for redirects)
+ * Expects ?ticket=ONE_TIME_SERVER_TICKET
  */
 export const connectProvider = async (req, res) => {
     try {
         const { provider } = req.params;
-        const { token, jobId } = req.query;
+        const { ticket } = req.query;
 
-        if (!token) {
-            return res.status(401).send('Unauthorized: No token provided');
+        if (!ticket) {
+            return res.status(401).send('Unauthorized: No connect ticket provided');
         }
 
-        // Verify the token to ensure the user is valid before starting OAuth
-        let decoded;
-        try {
-            decoded = jwt.verify(token, process.env.JWT_SECRET);
-        } catch (e) {
-            return res.status(401).send('Unauthorized: Invalid token');
+        await ensureOAuthConnectTicketsTable();
+        const ticketRes = await pool.query(
+            `SELECT user_id, provider, job_id
+             FROM oauth_connect_tickets
+             WHERE ticket = $1 AND provider = $2 AND used = FALSE AND expires_at > NOW()
+             LIMIT 1`,
+            [String(ticket), provider]
+        );
+        if (ticketRes.rows.length === 0) {
+            return res.status(401).send('Unauthorized: Invalid or expired connect ticket');
         }
 
-        // We use the JWT as the 'state' variable so it passes safely through the OAuth flow
-        // We append jobId to the state to maintain context
-        const state = jobId ? `${token}___${jobId}` : token;
+        const state = String(ticket);
 
         const apiBase = backendBaseUrl();
         if (!apiBase) {
@@ -113,33 +176,26 @@ export const providerCallback = async (req, res) => {
         const { provider } = req.params;
         const { code, state, error } = req.query;
 
-        // Extract token and jobId from state
-        let actualToken = state;
-        let jobId = '';
-        if (state && typeof state === 'string' && state.includes('___')) {
-            const parts = state.split('___');
-            actualToken = parts[0];
-            jobId = parts[1];
-        }
-
         const BASE = frontendBaseUrl();
         if (!BASE) {
             console.error('[providerCallback] FRONTEND_URL is not set');
             return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
         }
-        const configPaths = {
-            'config-capture': '/dashboard/config/lead-capture',
-            'config-followup': '/dashboard/config/lead-followup',
-            'config-review': '/dashboard/config/review-funnel',
-        };
-        let frontendRedirect = `${BASE}/dashboard/integrations`;
-        if (jobId === 'onboarding') {
-            frontendRedirect = `${BASE}/dashboard/integrations`;
-        } else if (jobId && configPaths[jobId]) {
-            frontendRedirect = `${BASE}${configPaths[jobId]}`;
-        } else if (jobId) {
-            frontendRedirect = `${BASE}/dashboard/employee/${jobId}`;
-        }
+
+        await ensureOAuthConnectTicketsTable();
+        const ticket = String(state || '').trim();
+        const ticketRes = ticket
+            ? await pool.query(
+                  `SELECT user_id, job_id
+                   FROM oauth_connect_tickets
+                   WHERE ticket = $1 AND provider = $2 AND used = FALSE AND expires_at > NOW()
+                   LIMIT 1`,
+                  [ticket, provider]
+              )
+            : { rows: [] };
+        const ticketRow = ticketRes.rows[0] || null;
+        const jobId = ticketRow?.job_id || '';
+        const frontendRedirect = buildFrontendRedirect(BASE, jobId);
 
         if (error) {
             console.error(`[${provider} OAuth Error]:`, error);
@@ -150,15 +206,11 @@ export const providerCallback = async (req, res) => {
             return res.redirect(`${frontendRedirect}?error=invalid_callback`);
         }
 
-        // Verify the state (which is the user's actualToken)
-        let decoded;
-        try {
-            decoded = jwt.verify(actualToken, process.env.JWT_SECRET);
-        } catch (e) {
+        if (!ticketRow) {
             return res.redirect(`${frontendRedirect}?error=invalid_state`);
         }
 
-        const userId = decoded.id;
+        const userId = ticketRow.user_id;
         let accessToken = '';
         let refreshToken = '';
         let accountId = '';
@@ -311,6 +363,7 @@ export const providerCallback = async (req, res) => {
                 updated_at = NOW()`,
             [userId, provider, accessToken, refreshToken, expiresAt, accountId, JSON.stringify(metadata)]
         );
+        await pool.query('UPDATE oauth_connect_tickets SET used = TRUE WHERE ticket = $1', [ticket]);
 
         // 3. Redirect user back to the dashboard integrations tab successfully
         return res.redirect(`${frontendRedirect}?success=connected`);
@@ -321,25 +374,25 @@ export const providerCallback = async (req, res) => {
         if (err?.stack) console.error('[providerCallback] Stack:', err.stack);
 
         // Extract jobId for fallback redirect
-        let jobId = '';
-        if (req.query.state && typeof req.query.state === 'string' && req.query.state.includes('___')) {
-            jobId = req.query.state.split('___')[1];
-        }
         const baseUrl = frontendBaseUrl();
         if (!baseUrl) {
             return res.status(500).send('Server misconfiguration: set FRONTEND_URL');
         }
-        const configPaths = {
-            'config-capture': '/dashboard/config/lead-capture',
-            'config-followup': '/dashboard/config/lead-followup',
-            'config-review': '/dashboard/config/review-funnel',
-        };
-        let frontendRedirect = `${baseUrl}/dashboard/integrations`;
-        if (jobId && configPaths[jobId]) {
-            frontendRedirect = `${baseUrl}${configPaths[jobId]}`;
-        } else if (jobId) {
-            frontendRedirect = `${baseUrl}/dashboard/employee/${jobId}`;
+        let jobId = '';
+        try {
+            await ensureOAuthConnectTicketsTable();
+            const ticket = String(req.query.state || '').trim();
+            if (ticket) {
+                const fallbackTicket = await pool.query(
+                    'SELECT job_id FROM oauth_connect_tickets WHERE ticket = $1 LIMIT 1',
+                    [ticket]
+                );
+                jobId = fallbackTicket.rows[0]?.job_id || '';
+            }
+        } catch {
+            /* noop */
         }
+        const frontendRedirect = buildFrontendRedirect(baseUrl, jobId);
 
         return res.redirect(`${frontendRedirect}?error=server_error&details=${encodeURIComponent(errMsg)}`);
     }

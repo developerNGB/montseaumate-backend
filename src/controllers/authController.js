@@ -229,7 +229,6 @@ export const register = async (req, res) => {
             message: emailVerificationRequired
                 ? 'Account verified and created successfully. Connect Google in Dashboard → Integrations to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).'
                 : 'Account created successfully. Connect Google in Dashboard → Integrations to send emails from the same Gmail you used to sign up (you can switch to Microsoft or SMTP later).',
-            token, // Keep for backward compatibility during transition
             user: enrichUserForNewSignup(newUser),
         });
     } catch (err) {
@@ -311,7 +310,6 @@ export const login = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: 'Login successful.',
-            token, // Keep for backward compatibility during transition
             user: enrichUserForClient(safeUser),
         });
     } catch (err) {
@@ -780,7 +778,6 @@ export const googleLogin = async (req, res) => {
             message: isNewUser
                 ? 'Google sign-in successful. Connect Gmail once under Dashboard → Integrations if you still need it for sending outbound mail.'
                 : 'Google sign-in successful.',
-            token,
             user: isNewUser ? enrichUserForNewSignup(user) : enrichUserForClient(user),
             isNewUser,
         });
@@ -914,7 +911,6 @@ export const firebaseSessionLogin = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: isNewUser ? 'Firebase sign-up successful.' : 'Firebase sign-in successful.',
-            token,
             user: isNewUser ? enrichUserForNewSignup(user) : enrichUserForClient(user),
             isNewUser,
         });
@@ -960,7 +956,6 @@ export const updatePlan = async (req, res) => {
             success: true,
             message: `Plan upgraded to ${plan} successfully!`,
             user: enrichUserForClient(updatedUser),
-            token
         });
     } catch (err) {
         console.error('[updatePlan] Error:', err.message);

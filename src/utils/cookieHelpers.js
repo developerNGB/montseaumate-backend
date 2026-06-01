@@ -4,14 +4,27 @@
  */
 
 const isProduction = process.env.NODE_ENV === 'production';
+const requestedSameSite = String(process.env.COOKIE_SAME_SITE || '').trim().toLowerCase();
+const cookieSameSite =
+    requestedSameSite === 'strict' || requestedSameSite === 'lax' || requestedSameSite === 'none'
+        ? requestedSameSite
+        : isProduction
+          ? 'none'
+          : 'lax';
+const cookieSecure =
+    String(process.env.COOKIE_SECURE || '').trim().toLowerCase() === 'false'
+        ? false
+        : cookieSameSite === 'none'
+          ? true
+          : isProduction;
 
 /**
  * Cookie options for JWT token
  */
 export const JWT_COOKIE_OPTIONS = {
     httpOnly: true,      // Prevent JavaScript access
-    secure: isProduction, // HTTPS only in production
-    sameSite: isProduction ? 'strict' : 'lax', // CSRF protection
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (matches JWT expiry)
     path: '/',
 };
@@ -21,8 +34,8 @@ export const JWT_COOKIE_OPTIONS = {
  */
 export const REFRESH_COOKIE_OPTIONS = {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
+    secure: cookieSecure,
+    sameSite: cookieSameSite,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     path: '/',
 };
@@ -41,7 +54,11 @@ export const setJwtCookie = (res, token) => {
  * @param {Object} res - Express response object
  */
 export const clearJwtCookie = (res) => {
-    res.clearCookie('jwt', { path: '/' });
+    res.clearCookie('jwt', {
+        path: '/',
+        secure: cookieSecure,
+        sameSite: cookieSameSite,
+    });
 };
 
 /**
