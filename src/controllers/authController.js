@@ -1,6 +1,5 @@
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
 import { OAuth2Client } from 'google-auth-library';
 import pool from '../db/pool.js';
 import { setJwtCookie, clearJwtCookie } from '../utils/cookieHelpers.js';
@@ -8,6 +7,7 @@ import { signAccessToken } from '../utils/accessToken.js';
 import { enrichUserForClient, enrichUserForNewSignup } from '../utils/billingAccess.js';
 import { verifyFirebaseIdToken } from '../utils/firebaseAdmin.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
+import { isSupportMailConfigured, sendSupportMail } from '../services/supportMailService.js';
 
 // Create OAuth client lazily to ensure env vars are loaded
 const getGoogleClient = () => {
@@ -32,17 +32,6 @@ const selectUserByEmailQuery = `
     LIMIT 1
 `;
 
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    connectionTimeout: 15000,
-    greetingTimeout: 10000,
-    socketTimeout: 20000,
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
-});
-
 /**
  * Validates if the email is a standard email address format
  */
@@ -53,15 +42,6 @@ const isValidEmail = (email) => {
 
 const isEmailVerificationRequired = () =>
     String(process.env.AUTH_REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase() === 'true';
-
-const sendMailWithTimeout = async (mailOptions, timeoutMs = 20000) => {
-    return Promise.race([
-        transporter.sendMail(mailOptions),
-        new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Email delivery timed out.')), timeoutMs);
-        }),
-    ]);
-};
 
 /**
  * POST /auth/request-otp
@@ -95,7 +75,7 @@ export const requestOTP = async (req, res) => {
         );
 
         const mailOptions = {
-            from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
+            from: 'Equipo Experto Support',
             to: emailLower,
             subject: 'Verify your email - Equipo Experto',
             html: `
@@ -110,7 +90,14 @@ export const requestOTP = async (req, res) => {
             `
         };
 
-        await transporter.sendMail(mailOptions);
+        if (!isSupportMailConfigured()) {
+            return res.status(503).json({
+                success: false,
+                message: 'Email delivery is not configured on the server.',
+            });
+        }
+
+        await sendSupportMail(mailOptions);
 
         return res.status(200).json({
             success: true,
@@ -477,7 +464,7 @@ export const forgotPassword = async (req, res) => {
         const resetLink = `${frontendUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
 
         const mailOptions = {
-            from: `"Equipo Experto Support" <${process.env.EMAIL_USER}>`,
+            from: 'Equipo Experto Support',
             to: emailLower,
             subject: 'Reset your Equipo Experto password',
             text:
@@ -518,7 +505,14 @@ export const forgotPassword = async (req, res) => {
             `
         };
 
-        await sendMailWithTimeout(mailOptions);
+        if (!isSupportMailConfigured()) {
+            return res.status(503).json({
+                success: false,
+                message: 'Password reset email is not configured on the server.',
+            });
+        }
+
+        await sendSupportMail(mailOptions);
 
         return res.status(200).json({
             success: true,
