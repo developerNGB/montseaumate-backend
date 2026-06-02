@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
     createConnectTicket,
     getIntegrations,
+    getGoogleReviewLinkSuggestion,
     getIntegrationHealth,
     disconnectProvider,
 } from '../controllers/integrationController.js';
@@ -14,6 +15,7 @@ router.get('/', authenticate, getIntegrations);
 
 // GET /api/integrations/health — WhatsApp/Gmail status for dashboard alerts
 router.get('/health', authenticate, getIntegrationHealth);
+router.get('/google/review-link', authenticate, getGoogleReviewLinkSuggestion);
 router.post('/:provider/connect-ticket', authenticate, createConnectTicket);
 
 // DELETE /api/integrations/:provider — Remove integration

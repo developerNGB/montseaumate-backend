@@ -8,6 +8,203 @@ import { getValidGoogleTokens } from '../utils/googleAuth.js';
 // Mock OAuth Credentials
 const MOCK_CLIENT_ID = 'mock_client_id';
 const OAUTH_CONNECT_TICKET_TTL_MINUTES = 10;
+const GENERIC_EMAIL_DOMAINS = new Set([
+    'gmail.com',
+    'googlemail.com',
+    'outlook.com',
+    'hotmail.com',
+    'live.com',
+    'yahoo.com',
+    'icloud.com',
+    'me.com',
+    'aol.com',
+    'proton.me',
+    'protonmail.com',
+]);
+
+function normalizeText(value = '') {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function tokenize(value = '') {
+    return normalizeText(value)
+        .split(' ')
+        .filter(Boolean);
+}
+
+function extractDomain(value = '') {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) return '';
+    try {
+        const host = raw.includes('://') ? new URL(raw).hostname : raw;
+        return host.replace(/^www\./, '');
+    } catch {
+        return raw.replace(/^www\./, '');
+    }
+}
+
+function scoreBusinessLocation(location, { companyName = '', email = '' } = {}) {
+    const title = String(location?.title || '');
+    const normalizedTitle = normalizeText(title);
+    const normalizedCompany = normalizeText(companyName);
+    let score = 0;
+
+    if (normalizedCompany && normalizedTitle) {
+        if (normalizedTitle === normalizedCompany) {
+            score += 120;
+        } else if (normalizedTitle.includes(normalizedCompany) || normalizedCompany.includes(normalizedTitle)) {
+            score += 70;
+        }
+
+        const titleTokens = new Set(tokenize(title));
+        const companyTokens = tokenize(companyName);
+        const overlap = companyTokens.filter((token) => titleTokens.has(token)).length;
+        score += overlap * 12;
+    }
+
+    const emailDomain = extractDomain(String(email).split('@')[1] || '');
+    const websiteDomain = extractDomain(location?.websiteUri || '');
+    if (
+        emailDomain &&
+        websiteDomain &&
+        !GENERIC_EMAIL_DOMAINS.has(emailDomain) &&
+        (websiteDomain === emailDomain || websiteDomain.endsWith(`.${emailDomain}`) || emailDomain.endsWith(`.${websiteDomain}`))
+    ) {
+        score += 45;
+    }
+
+    if (location?.metadata?.newReviewUri) score += 20;
+    return score;
+}
+
+async function fetchGoogleJson(url, accessToken) {
+    const response = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-GOOG-API-FORMAT-VERSION': '2',
+        },
+    });
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch {
+        data = null;
+    }
+
+    return { response, data };
+}
+
+async function findGoogleBusinessReviewLink({ userId, companyName = '', email = '' }) {
+    const { access_token: accessToken } = await getValidGoogleTokens(userId);
+    if (!accessToken) {
+        return { ok: false, code: 'GOOGLE_TOKEN_UNAVAILABLE', reason: 'token_unavailable' };
+    }
+
+    const accountsResult = await fetchGoogleJson(
+        'https://mybusinessaccountmanagement.googleapis.com/v1/accounts',
+        accessToken
+    );
+
+    if (!accountsResult.response.ok) {
+        const errorMessage = accountsResult.data?.error?.message || '';
+        const code =
+            accountsResult.response.status === 403
+                ? 'GBP_SCOPE_OR_API_UNAVAILABLE'
+                : 'GBP_ACCOUNTS_FETCH_FAILED';
+        return {
+            ok: false,
+            code,
+            status: accountsResult.response.status,
+            reason: errorMessage || 'accounts_fetch_failed',
+        };
+    }
+
+    const accounts = Array.isArray(accountsResult.data?.accounts) ? accountsResult.data.accounts : [];
+    const candidates = [];
+
+    for (const account of accounts) {
+        const accountName = String(account?.name || '').trim();
+        if (!accountName) continue;
+
+        let nextPageToken = '';
+        let pageGuard = 0;
+
+        do {
+            const params = new URLSearchParams({
+                readMask: 'title,websiteUri,metadata',
+                pageSize: '100',
+            });
+            if (nextPageToken) params.set('pageToken', nextPageToken);
+
+            const locationsResult = await fetchGoogleJson(
+                `https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?${params.toString()}`,
+                accessToken
+            );
+
+            if (!locationsResult.response.ok) {
+                nextPageToken = '';
+                break;
+            }
+
+            const locations = Array.isArray(locationsResult.data?.locations) ? locationsResult.data.locations : [];
+            for (const location of locations) {
+                if (!location?.metadata?.newReviewUri) continue;
+                candidates.push({
+                    accountName: account.accountName || account.name,
+                    title: location.title || '',
+                    websiteUri: location.websiteUri || '',
+                    reviewUrl: location.metadata.newReviewUri,
+                    mapsUri: location.metadata.mapsUri || '',
+                    placeId: location.metadata.placeId || '',
+                    score: scoreBusinessLocation(location, { companyName, email }),
+                });
+            }
+
+            nextPageToken = String(locationsResult.data?.nextPageToken || '').trim();
+            pageGuard += 1;
+        } while (nextPageToken && pageGuard < 10);
+    }
+
+    if (!candidates.length) {
+        return { ok: false, code: 'GBP_NO_LOCATIONS', reason: 'no_locations' };
+    }
+
+    candidates.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+    const best = candidates[0];
+    const second = candidates[1];
+    const isSingleCandidate = candidates.length === 1;
+    const isConfidentMatch =
+        best.score >= 90 ||
+        (best.score >= 60 && (!second || best.score - second.score >= 25));
+
+    if (!isSingleCandidate && !isConfidentMatch) {
+        return {
+            ok: false,
+            code: 'GBP_AMBIGUOUS',
+            reason: 'ambiguous',
+            candidates: candidates.slice(0, 5).map((candidate) => ({
+                title: candidate.title,
+                reviewUrl: candidate.reviewUrl,
+                mapsUri: candidate.mapsUri,
+            })),
+        };
+    }
+
+    return {
+        ok: true,
+        source: 'google_business_profile',
+        reviewUrl: best.reviewUrl,
+        businessName: best.title,
+        mapsUri: best.mapsUri,
+        placeId: best.placeId,
+        matchedBy: isSingleCandidate ? 'single_location' : 'best_match',
+    };
+}
 
 async function ensureOAuthConnectTicketsTable() {
     await pool.query(`
@@ -86,6 +283,60 @@ export const getIntegrations = async (req, res) => {
     }
 };
 
+export const getGoogleReviewLinkSuggestion = async (req, res) => {
+    try {
+        const integrationRes = await pool.query(
+            'SELECT id FROM integrations WHERE user_id = $1 AND provider = $2 LIMIT 1',
+            [req.user.id, 'google']
+        );
+        if (integrationRes.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                code: 'GOOGLE_NOT_CONNECTED',
+                message: 'Google is not connected for this user.',
+            });
+        }
+
+        const userRes = await pool.query(
+            'SELECT company_name, name, email FROM users WHERE id = $1 LIMIT 1',
+            [req.user.id]
+        );
+        const user = userRes.rows[0] || {};
+        const companyName = String(user.company_name || user.name || '').trim();
+        const email = String(user.email || '').trim();
+
+        const result = await findGoogleBusinessReviewLink({
+            userId: req.user.id,
+            companyName,
+            email,
+        });
+
+        if (!result.ok) {
+            const status =
+                result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 401 :
+                result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
+                result.code === 'GBP_NO_LOCATIONS' ? 404 :
+                result.code === 'GBP_AMBIGUOUS' ? 409 : 502;
+            return res.status(status).json({
+                success: false,
+                ...result,
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            ...result,
+        });
+    } catch (err) {
+        console.error('[getGoogleReviewLinkSuggestion] Error:', err.message);
+        return res.status(500).json({
+            success: false,
+            code: 'REVIEW_LINK_SUGGESTION_FAILED',
+            message: 'Could not resolve Google review link automatically.',
+        });
+    }
+};
+
 /**
  * GET /api/integrations/:provider/connect
  * Redirects the user to the OAuth Provider
@@ -128,7 +379,16 @@ export const connectProvider = async (req, res) => {
                 // gmail.send â†’ Gmail API users.messages.send (see emailService.js)
                 // email + profile â†’ oauth2 userinfo for connected account display
                 // Note: automatic "reply detected" inbox scanning (followupCron) needs readonly and is skipped if list returns 403.
-                const scopes = [ 'openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/gmail.send' ].join(' ');const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes)}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
+                const scopes = [
+                    'openid',
+                    'https://www.googleapis.com/auth/userinfo.email',
+                    'https://www.googleapis.com/auth/userinfo.profile',
+                    'https://www.googleapis.com/auth/gmail.send',
+                ];
+                if (String(process.env.GOOGLE_BUSINESS_PROFILE_SCOPE || '').trim().toLowerCase() === 'true') {
+                    scopes.push('https://www.googleapis.com/auth/business.manage');
+                }
+                const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes.join(' '))}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
                 return res.redirect(authUrl);
             } else {
                 // Mock OAuth Redirect
