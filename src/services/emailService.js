@@ -6,16 +6,18 @@ import { getValidMicrosoftToken } from '../utils/microsoftAuth.js';
 import { buildGmailRawMime, parseReplyToAddress } from '../utils/mimeMessage.js';
 import fetch from 'node-fetch';
 
+// Nodemailer per-operation timeouts — kept short so the total
+// completes well within cdmon/nginx's ~10–15 s proxy window.
 const SMTP_TIMEOUTS = {
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-    dnsTimeout: 5000,
+    connectionTimeout: 4000,   // TCP connect
+    greetingTimeout:   4000,   // server banner
+    socketTimeout:     6000,   // idle socket
+    dnsTimeout:        3000,
 };
 
-// Hard deadline for the entire test flow (verify + send) — must be well
-// below whatever proxy/hosting timeout is in place (usually 30 s on Render).
-const SMTP_TEST_HARD_LIMIT_MS = 25000;
+// Hard ceiling for the entire test (verify + optional send).
+// Must be shorter than the hosting proxy timeout (~10-15 s on cdmon).
+const SMTP_TEST_HARD_LIMIT_MS = 12000;
 
 const SMTP_PROVIDER_PRESETS = [
     {
@@ -486,26 +488,23 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
 
 /**
  * Validates SMTP connection and sends a test email.
- * Wrapped in a hard 25-second deadline so it never hangs long
- * enough for a reverse-proxy to return a 504.
+ * Wrapped in a hard 12-second deadline so it always responds before
+ * the hosting reverse-proxy (cdmon nginx ~10-15 s) kills the connection.
  */
 export const testSmtpConnection = async (config) => {
-    const timeoutError = () => ({
+    const timeoutPayload = {
         success: false,
         code: 'smtp_timeout',
         status: 504,
         message: 'The mail server did not respond in time.',
         hint: config.secure
-            ? 'Try Standard security on port 587 instead. Some hosting providers also block outbound SMTP until it is enabled in cPanel/Plesk.'
-            : 'Try SSL/TLS on port 465 instead. Some hosting providers also block outbound SMTP until it is enabled in cPanel/Plesk.',
-    });
+            ? 'Try Standard security on port 587 instead. Make sure outbound SMTP is enabled in cPanel → Email → SMTP Restrictions.'
+            : 'Try SSL/TLS on port 465 instead. Make sure outbound SMTP is enabled in cPanel → Email → SMTP Restrictions.',
+    };
 
-    // Race the actual work against a hard timeout
     return Promise.race([
         _doSmtpTest(config),
-        new Promise((resolve) =>
-            setTimeout(() => resolve(timeoutError()), SMTP_TEST_HARD_LIMIT_MS)
-        ),
+        new Promise((resolve) => setTimeout(() => resolve(timeoutPayload), SMTP_TEST_HARD_LIMIT_MS)),
     ]);
 };
 
@@ -514,36 +513,56 @@ async function _doSmtpTest(config) {
     const transporter = nodemailer.createTransport(buildSmtpTransportOptions(normalizedConfig));
 
     try {
+        // Phase 1: verify credentials & connection (fast — 4 s timeout)
         await transporter.verify();
+
+        // Phase 2: send test email — give it its own short window
         const recipient = String(config.testRecipient || normalizedConfig.auth_user).trim();
         if (recipient) {
-            const info = await transporter.sendMail({
-                from: formatSmtpFrom(normalizedConfig, config.from_email, config.from_name),
-                to: recipient,
-                subject: 'SMTP test email from Equipo Experto',
-                text:
-                    `Your mailbox is connected correctly.\n\n` +
-                    `Server: ${normalizedConfig.host}:${normalizedConfig.port}\n` +
-                    `Security: ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}\n\n` +
-                    `You can now send emails from Equipo Experto using this mailbox.`,
-                html:
-                    `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">` +
-                    `<h2 style="margin:0 0 12px">SMTP connection verified</h2>` +
-                    `<p style="margin:0 0 12px">Your mailbox is connected correctly and can now send emails from Equipo Experto.</p>` +
-                    `<ul style="margin:0 0 16px;padding-left:20px">` +
-                    `<li><strong>Server:</strong> ${normalizedConfig.host}:${normalizedConfig.port}</li>` +
-                    `<li><strong>Security:</strong> ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}</li>` +
-                    `</ul>` +
-                    `<p style="margin:0">If you did not request this test, you can ignore this email.</p>` +
-                    `</div>`,
-            });
+            try {
+                const info = await Promise.race([
+                    transporter.sendMail({
+                        from: formatSmtpFrom(normalizedConfig, config.from_email, config.from_name),
+                        to: recipient,
+                        subject: 'SMTP test email from Equipo Experto',
+                        text:
+                            `Your mailbox is connected correctly.\n\n` +
+                            `Server: ${normalizedConfig.host}:${normalizedConfig.port}\n` +
+                            `Security: ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}\n\n` +
+                            `You can now send emails from Equipo Experto using this mailbox.`,
+                        html:
+                            `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">` +
+                            `<h2 style="margin:0 0 12px">SMTP connection verified</h2>` +
+                            `<p style="margin:0 0 12px">Your mailbox is connected correctly and can now send emails from Equipo Experto.</p>` +
+                            `<ul style="margin:0 0 16px;padding-left:20px">` +
+                            `<li><strong>Server:</strong> ${normalizedConfig.host}:${normalizedConfig.port}</li>` +
+                            `<li><strong>Security:</strong> ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}</li>` +
+                            `</ul>` +
+                            `<p style="margin:0">If you did not request this test, you can ignore this email.</p>` +
+                            `</div>`,
+                    }),
+                    // If sending takes too long, skip it but still report success
+                    new Promise((resolve) =>
+                        setTimeout(() => resolve(null), 5000)
+                    ),
+                ]);
 
-            return {
-                success: true,
-                messageId: info.messageId,
-                message: `Test email sent to ${recipient}.`,
-                hint: getSecurityHint(normalizedConfig),
-            };
+                return {
+                    success: true,
+                    messageId: info?.messageId ?? null,
+                    message: info
+                        ? `Connection verified. Test email sent to ${recipient}.`
+                        : `Connection verified successfully. (Test email delivery was slow — check your inbox in a moment.)`,
+                    hint: getSecurityHint(normalizedConfig),
+                };
+            } catch (sendErr) {
+                // verify() passed but sendMail failed — still a partial success
+                return {
+                    success: true,
+                    message: `SMTP login verified. However, sending the test email failed: ${sendErr.message}`,
+                    hint: getSecurityHint(normalizedConfig) || 'Check that the From address belongs to this mailbox.',
+                };
+            }
         }
 
         return {

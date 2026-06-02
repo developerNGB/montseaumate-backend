@@ -11,9 +11,8 @@ router.get('/', smtpController.getSmtpSettings);
 router.post('/', smtpController.saveSmtpSettings);
 router.post('/detect', smtpController.detectConnection);
 
-// SMTP test can take up to 25 s (nodemailer verify + sendMail).
-// Apply a 27 s route-level timeout so Express always responds before
-// the reverse-proxy's 30 s window and the browser never sees a raw 504.
+// SMTP test is wrapped in a 12 s Promise.race in emailService.
+// This route-level timer is a safety net for cdmon's short nginx proxy window.
 const smtpTestTimeout = (req, res, next) => {
     const timer = setTimeout(() => {
         if (!res.headersSent) {
@@ -21,10 +20,10 @@ const smtpTestTimeout = (req, res, next) => {
                 success: false,
                 code: 'smtp_timeout',
                 message: 'The mail server did not respond in time.',
-                hint: 'Try SSL/TLS on port 465, or Standard security on port 587. Some hosting providers also block outbound SMTP — enable it in cPanel/Plesk first.',
+                hint: 'Try SSL/TLS on port 465, or Standard security on port 587. Also make sure outbound SMTP is enabled in cPanel → Email → SMTP Restrictions.',
             });
         }
-    }, 27000);
+    }, 12000);
     res.on('finish', () => clearTimeout(timer));
     res.on('close', () => clearTimeout(timer));
     next();
