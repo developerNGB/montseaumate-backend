@@ -1,9 +1,292 @@
 import nodemailer from 'nodemailer';
+import { promises as dns } from 'node:dns';
 import pool from '../db/pool.js';
 import { getValidGoogleTokens } from '../utils/googleAuth.js';
 import { getValidMicrosoftToken } from '../utils/microsoftAuth.js';
 import { buildGmailRawMime, parseReplyToAddress } from '../utils/mimeMessage.js';
 import fetch from 'node-fetch';
+
+const SMTP_TIMEOUTS = {
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 12000,
+    dnsTimeout: 6000,
+};
+
+const SMTP_PROVIDER_PRESETS = [
+    {
+        id: 'gmail',
+        label: 'Google Workspace / Gmail',
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        mxPattern: /(google\.com|googlemail\.com)$/i,
+        authHint:
+            'Use your full Gmail address and a Google App Password. If this mailbox is already on Google Workspace, Google OAuth is easier than SMTP.',
+    },
+    {
+        id: 'outlook',
+        label: 'Microsoft 365 / Outlook',
+        host: 'smtp.office365.com',
+        port: 587,
+        secure: false,
+        mxPattern: /(outlook\.com|protection\.outlook\.com)$/i,
+        authHint:
+            'Use your full mailbox address and password. If your Microsoft account uses MFA, create an app password if your tenant allows it.',
+    },
+    {
+        id: 'zoho',
+        label: 'Zoho Mail',
+        host: 'smtp.zoho.com',
+        port: 465,
+        secure: true,
+        mxPattern: /zoho\.(com|eu|in|com\.au)$/i,
+        authHint: 'Use your full Zoho mailbox address and mailbox password.',
+    },
+    {
+        id: 'privateemail',
+        label: 'Namecheap Private Email',
+        host: 'mail.privateemail.com',
+        port: 587,
+        secure: false,
+        mxPattern: /privateemail\.com$/i,
+        authHint: 'Use your full mailbox address and mailbox password.',
+    },
+    {
+        id: 'hostinger',
+        label: 'Hostinger Email',
+        host: 'smtp.hostinger.com',
+        port: 465,
+        secure: true,
+        mxPattern: /hostinger\.io$/i,
+        authHint: 'Use your full mailbox address and mailbox password.',
+    },
+    {
+        id: 'titan',
+        label: 'Titan Email',
+        host: 'smtp.titan.email',
+        port: 465,
+        secure: true,
+        mxPattern: /titan\.email$/i,
+        authHint: 'Use your full mailbox address and mailbox password.',
+    },
+];
+
+function normalizeSmtpHost(host) {
+    return String(host || '')
+        .trim()
+        .replace(/^\w+:\/\//i, '')
+        .replace(/\/.*$/, '')
+        .replace(/:\d+$/, '')
+        .trim()
+        .toLowerCase();
+}
+
+function normalizeSmtpConfig(config = {}) {
+    const host = normalizeSmtpHost(config.host);
+    const parsedPort = Number.parseInt(String(config.port ?? '').trim(), 10);
+    const secure =
+        config.secure === true ||
+        config.secure === 'true' ||
+        config.secure === 1 ||
+        config.secure === '1';
+    return {
+        host,
+        port: Number.isFinite(parsedPort) ? parsedPort : secure ? 465 : 587,
+        secure,
+        auth_user: String(config.auth_user || '').trim(),
+        auth_pass: String(config.auth_pass || ''),
+    };
+}
+
+function findProviderByHost(host) {
+    const normalizedHost = normalizeSmtpHost(host);
+    return SMTP_PROVIDER_PRESETS.find((provider) => provider.host === normalizedHost) || null;
+}
+
+function findProviderByMx(exchange) {
+    const normalizedExchange = String(exchange || '').trim().toLowerCase();
+    return SMTP_PROVIDER_PRESETS.find((provider) => provider.mxPattern.test(normalizedExchange)) || null;
+}
+
+function buildSmtpTransportOptions(config) {
+    const normalized = normalizeSmtpConfig(config);
+    return {
+        host: normalized.host,
+        port: normalized.port,
+        secure: normalized.secure,
+        auth: {
+            user: normalized.auth_user,
+            pass: normalized.auth_pass,
+        },
+        tls: { rejectUnauthorized: false },
+        ...SMTP_TIMEOUTS,
+    };
+}
+
+function getSecurityHint(config) {
+    if (config.port === 465 && !config.secure) {
+        return 'Port 465 usually needs SSL/TLS turned on.';
+    }
+    if (config.port === 587 && config.secure) {
+        return 'Port 587 usually uses Standard / STARTTLS instead of SSL/TLS.';
+    }
+    return null;
+}
+
+function mapSmtpError(error, config) {
+    const rawMessage = String(error?.message || 'Unknown SMTP error');
+    const lowerMessage = rawMessage.toLowerCase();
+    const provider = findProviderByHost(config.host);
+    const portHint =
+        config.secure
+            ? 'If this keeps failing, try Standard security on port 587.'
+            : 'If this keeps failing, try SSL/TLS on port 465.';
+
+    if (
+        error?.code === 'EAUTH' ||
+        /invalid login|username and password not accepted|authentication unsuccessful|app password|534-5\.7\.9|535/i.test(rawMessage)
+    ) {
+        return {
+            success: false,
+            code: 'smtp_auth_failed',
+            status: 400,
+            message: 'Login failed. Check the mailbox password.',
+            hint:
+                provider?.authHint ||
+                'If your provider uses 2-step verification, use an app password instead of your normal password.',
+        };
+    }
+
+    if (error?.code === 'ENOTFOUND' || /getaddrinfo|not found/i.test(rawMessage)) {
+        return {
+            success: false,
+            code: 'smtp_host_not_found',
+            status: 400,
+            message: 'Mail server address was not found.',
+            hint: 'Check the SMTP host spelling or use provider auto-detect.',
+        };
+    }
+
+    if (
+        error?.code === 'ETIMEDOUT' ||
+        error?.code === 'ESOCKET' ||
+        error?.code === 'ECONNECTION' ||
+        /timed out|timeout|greeting/i.test(lowerMessage)
+    ) {
+        return {
+            success: false,
+            code: 'smtp_timeout',
+            status: 504,
+            message: 'The mail server did not respond in time.',
+            hint: `${portHint} Some hosting providers also block outbound SMTP until it is enabled.`,
+        };
+    }
+
+    if (
+        /ssl routines|wrong version number|certificate|tls|starttls|handshake/i.test(lowerMessage) ||
+        error?.code === 'EPROTOCOL'
+    ) {
+        return {
+            success: false,
+            code: 'smtp_tls_mismatch',
+            status: 400,
+            message: 'Security settings do not match this mail server.',
+            hint: 'Try port 587 with Standard security or port 465 with SSL/TLS.',
+        };
+    }
+
+    if (
+        error?.code === 'EENVELOPE' ||
+        /sender address rejected|mail from command failed|550|553|from address/i.test(lowerMessage)
+    ) {
+        return {
+            success: false,
+            code: 'smtp_sender_rejected',
+            status: 400,
+            message: 'The login worked, but the sender address was rejected.',
+            hint: 'Use a From email that belongs to this mailbox or verified domain.',
+        };
+    }
+
+    return {
+        success: false,
+        code: 'smtp_connection_failed',
+        status: 400,
+        message: 'Could not connect to the mail server.',
+        hint: getSecurityHint(config) || 'Check the host, port, security mode, and mailbox credentials.',
+    };
+}
+
+function formatSmtpFrom(config, fromEmail, fromName) {
+    const finalEmail = String(fromEmail || config.auth_user || '').trim();
+    const finalName = String(fromName || '').trim();
+    if (!finalEmail) {
+        return undefined;
+    }
+    return finalName ? `"${finalName.replace(/"/g, '\\"')}" <${finalEmail}>` : finalEmail;
+}
+
+export async function detectSmtpProvider(emailAddress) {
+    const email = String(emailAddress || '').trim().toLowerCase();
+    const domain = email.split('@')[1];
+
+    if (!domain) {
+        return {
+            success: false,
+            status: 400,
+            code: 'smtp_email_required',
+            message: 'Enter a mailbox email address first.',
+        };
+    }
+
+    const fallback = {
+        providerId: 'cpanel',
+        providerLabel: 'Custom domain mailbox',
+        host: `mail.${domain}`,
+        port: 587,
+        secure: false,
+        confidence: 'low',
+        hint: 'This is a best guess. If your host shows a different SMTP server in its mail panel, use that value instead.',
+    };
+
+    try {
+        const mxRecords = await dns.resolveMx(domain);
+        const primaryMx = [...mxRecords].sort((a, b) => a.priority - b.priority)[0];
+        const provider = findProviderByMx(primaryMx?.exchange);
+
+        if (!provider) {
+            return {
+                success: true,
+                message: `We could not match ${domain} to a known provider, so we filled a common custom-domain default.`,
+                config: fallback,
+                mxHost: primaryMx?.exchange || null,
+            };
+        }
+
+        return {
+            success: true,
+            message: `Detected ${provider.label}. Server settings were filled automatically.`,
+            config: {
+                providerId: provider.id,
+                providerLabel: provider.label,
+                host: provider.host,
+                port: provider.port,
+                secure: provider.secure,
+                confidence: 'high',
+                hint: provider.authHint,
+            },
+            mxHost: primaryMx?.exchange || null,
+        };
+    } catch {
+        return {
+            success: true,
+            message: `We could not read MX records for ${domain}, so we filled a common custom-domain default.`,
+            config: fallback,
+            mxHost: null,
+        };
+    }
+}
 
 function parseIntegrationMetadata(raw) {
     if (!raw) return {};
@@ -70,16 +353,7 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
             const config = smtpRes.rows[0];
             console.log(`[EmailService][${Date.now() - startTime}ms] Using Custom SMTP (${config.from_email})`);
             
-            const transporter = nodemailer.createTransport({
-                host: config.host,
-                port: config.port,
-                secure: config.secure, 
-                auth: {
-                    user: config.auth_user,
-                    pass: config.auth_pass,
-                },
-                tls: { rejectUnauthorized: false }
-            });
+            const transporter = nodemailer.createTransport(buildSmtpTransportOptions(config));
 
             const finalFrom = config.from_name 
                 ? `"${config.from_name}" <${config.from_email}>` 
@@ -210,21 +484,50 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
  * Validates SMTP connection
  */
 export const testSmtpConnection = async (config) => {
-    const transporter = nodemailer.createTransport({
-        host: config.host,
-        port: config.port,
-        secure: config.secure,
-        auth: {
-            user: config.auth_user,
-            pass: config.auth_pass,
-        },
-        timeout: 10000 // 10s timeout
-    });
+    const normalizedConfig = normalizeSmtpConfig(config);
+    const transporter = nodemailer.createTransport(buildSmtpTransportOptions(normalizedConfig));
 
     try {
         await transporter.verify();
-        return { success: true };
+        const recipient = String(config.testRecipient || normalizedConfig.auth_user).trim();
+        if (recipient) {
+            const info = await transporter.sendMail({
+                from: formatSmtpFrom(normalizedConfig, config.from_email, config.from_name),
+                to: recipient,
+                subject: 'SMTP test email from Equipo Experto',
+                text:
+                    `Your mailbox is connected correctly.\n\n` +
+                    `Server: ${normalizedConfig.host}:${normalizedConfig.port}\n` +
+                    `Security: ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}\n\n` +
+                    `You can now send emails from Equipo Experto using this mailbox.`,
+                html:
+                    `<div style="font-family:Arial,sans-serif;line-height:1.5;color:#0f172a">` +
+                    `<h2 style="margin:0 0 12px">SMTP connection verified</h2>` +
+                    `<p style="margin:0 0 12px">Your mailbox is connected correctly and can now send emails from Equipo Experto.</p>` +
+                    `<ul style="margin:0 0 16px;padding-left:20px">` +
+                    `<li><strong>Server:</strong> ${normalizedConfig.host}:${normalizedConfig.port}</li>` +
+                    `<li><strong>Security:</strong> ${normalizedConfig.secure ? 'SSL/TLS' : 'STARTTLS / Standard'}</li>` +
+                    `</ul>` +
+                    `<p style="margin:0">If you did not request this test, you can ignore this email.</p>` +
+                    `</div>`,
+            });
+
+            return {
+                success: true,
+                messageId: info.messageId,
+                message: `Test email sent to ${recipient}.`,
+                hint: getSecurityHint(normalizedConfig),
+            };
+        }
+
+        return {
+            success: true,
+            message: 'SMTP login verified.',
+            hint: getSecurityHint(normalizedConfig),
+        };
     } catch (error) {
-        return { success: false, error: error.message };
+        return mapSmtpError(error, normalizedConfig);
+    } finally {
+        transporter.close();
     }
 };

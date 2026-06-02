@@ -1,5 +1,5 @@
 import pool from '../db/pool.js';
-import { testSmtpConnection } from '../services/emailService.js';
+import { detectSmtpProvider, testSmtpConnection } from '../services/emailService.js';
 
 /**
  * GET /api/smtp
@@ -79,28 +79,61 @@ export const saveSmtpSettings = async (req, res) => {
  */
 export const testConnection = async (req, res) => {
     try {
-        const { host, port, secure, auth_user, auth_pass } = req.body;
+        const { host, port, secure, auth_user, auth_pass, from_email, from_name, test_email } = req.body;
         
-        // If password is not provided, try to get from DB
         let finalPass = auth_pass;
         if (!finalPass) {
-             const existing = await pool.query('SELECT auth_pass FROM smtp_settings WHERE user_id = $1', [req.user.id]);
-             finalPass = existing.rows[0]?.auth_pass;
+            const existing = await pool.query('SELECT auth_pass FROM smtp_settings WHERE user_id = $1', [req.user.id]);
+            finalPass = existing.rows[0]?.auth_pass;
         }
 
         if (!host || !port || !auth_user || !finalPass) {
             return res.status(400).json({ success: false, message: 'Incomplete configuration for testing' });
         }
 
-        const testResult = await testSmtpConnection({ host, port: parseInt(port), secure, auth_user, auth_pass: finalPass });
+        const testRecipient = String(test_email || from_email || auth_user || req.user.email || '').trim();
+        const testResult = await testSmtpConnection({
+            host,
+            port: parseInt(port, 10),
+            secure,
+            auth_user,
+            auth_pass: finalPass,
+            from_email: from_email || auth_user,
+            from_name,
+            testRecipient,
+        });
 
         if (testResult.success) {
-            return res.status(200).json({ success: true, message: 'SMTP Connection Successful!' });
-        } else {
-            return res.status(400).json({ success: false, message: 'Connection failed', error: testResult.error });
+            return res.status(200).json({
+                success: true,
+                message: testResult.message || 'SMTP connection verified.',
+                hint: testResult.hint || null,
+            });
         }
+
+        return res.status(testResult.status || 400).json({
+            success: false,
+            code: testResult.code || 'smtp_test_failed',
+            message: testResult.message || 'Connection failed.',
+            hint: testResult.hint || null,
+        });
     } catch (error) {
-        return res.status(500).json({ success: false, message: 'Test interrupted', error: error.message });
+        console.error('[testConnection] Error:', error.message);
+        return res.status(500).json({ success: false, message: 'SMTP test failed unexpectedly.' });
+    }
+};
+
+export const detectConnection = async (req, res) => {
+    try {
+        const { email } = req.body || {};
+        const detection = await detectSmtpProvider(email);
+        return res.status(detection.status || 200).json(detection);
+    } catch (error) {
+        console.error('[detectConnection] Error:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: 'Could not detect SMTP settings right now.',
+        });
     }
 };
 

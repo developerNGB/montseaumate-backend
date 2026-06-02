@@ -9,6 +9,7 @@ router.use(authenticate);
 
 router.get('/', smtpController.getSmtpSettings);
 router.post('/', smtpController.saveSmtpSettings);
+router.post('/detect', smtpController.detectConnection);
 router.post('/test', smtpController.testConnection);
 router.delete('/', smtpController.deleteSmtpSettings);
 
