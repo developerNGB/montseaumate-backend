@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
@@ -589,14 +589,24 @@ const startServer = () => {
                 console.log(
                     ok
                         ? `   Contact form send  : configured (sender user ${senderId || 'n/a'})`
-                        : '   Contact form send  : NOT configured â€” connect Gmail in Dashboard â†’ Integrations',
+                        : '   Contact form send  : NOT configured — connect Gmail in Dashboard → Integrations',
                 );
             })
             .catch(() => {});
+
+        // Keep-alive ping — prevents Render free plan from sleeping (spins down after 15 min)
+        // Set RENDER_EXTERNAL_URL env var in Render dashboard (it's set automatically by Render)
+        if (process.env.NODE_ENV === 'production' && process.env.RENDER_EXTERNAL_URL) {
+            const pingUrl = `${process.env.RENDER_EXTERNAL_URL}/api/health`;
+            setInterval(async () => {
+                try {
+                    const { default: nodeFetch } = await import('node-fetch');
+                    await nodeFetch(pingUrl, { signal: AbortSignal.timeout(10000) });
+                } catch { /* ignore */ }
+            }, 10 * 60 * 1000);
+            console.log(`   Keep-alive  : pinging ${pingUrl} every 10 min`);
+        }
     });
 };
 
 runMigrations();
-
-
-
