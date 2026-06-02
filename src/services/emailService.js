@@ -7,11 +7,15 @@ import { buildGmailRawMime, parseReplyToAddress } from '../utils/mimeMessage.js'
 import fetch from 'node-fetch';
 
 const SMTP_TIMEOUTS = {
-    connectionTimeout: 8000,
-    greetingTimeout: 8000,
-    socketTimeout: 12000,
-    dnsTimeout: 6000,
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
+    dnsTimeout: 5000,
 };
+
+// Hard deadline for the entire test flow (verify + send) — must be well
+// below whatever proxy/hosting timeout is in place (usually 30 s on Render).
+const SMTP_TEST_HARD_LIMIT_MS = 25000;
 
 const SMTP_PROVIDER_PRESETS = [
     {
@@ -481,9 +485,31 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
 };
 
 /**
- * Validates SMTP connection
+ * Validates SMTP connection and sends a test email.
+ * Wrapped in a hard 25-second deadline so it never hangs long
+ * enough for a reverse-proxy to return a 504.
  */
 export const testSmtpConnection = async (config) => {
+    const timeoutError = () => ({
+        success: false,
+        code: 'smtp_timeout',
+        status: 504,
+        message: 'The mail server did not respond in time.',
+        hint: config.secure
+            ? 'Try Standard security on port 587 instead. Some hosting providers also block outbound SMTP until it is enabled in cPanel/Plesk.'
+            : 'Try SSL/TLS on port 465 instead. Some hosting providers also block outbound SMTP until it is enabled in cPanel/Plesk.',
+    });
+
+    // Race the actual work against a hard timeout
+    return Promise.race([
+        _doSmtpTest(config),
+        new Promise((resolve) =>
+            setTimeout(() => resolve(timeoutError()), SMTP_TEST_HARD_LIMIT_MS)
+        ),
+    ]);
+};
+
+async function _doSmtpTest(config) {
     const normalizedConfig = normalizeSmtpConfig(config);
     const transporter = nodemailer.createTransport(buildSmtpTransportOptions(normalizedConfig));
 
@@ -530,4 +556,4 @@ export const testSmtpConnection = async (config) => {
     } finally {
         transporter.close();
     }
-};
+}
