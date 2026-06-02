@@ -11,24 +11,12 @@ router.get('/', smtpController.getSmtpSettings);
 router.post('/', smtpController.saveSmtpSettings);
 router.post('/detect', smtpController.detectConnection);
 
-// SMTP test is wrapped in a 12 s Promise.race in emailService.
-// This route-level timer is a safety net for cdmon's short nginx proxy window.
-const smtpTestTimeout = (req, res, next) => {
-    const timer = setTimeout(() => {
-        if (!res.headersSent) {
-            res.status(504).json({
-                success: false,
-                code: 'smtp_timeout',
-                message: 'The mail server did not respond in time.',
-                hint: 'Try SSL/TLS on port 465, or Standard security on port 587. Also make sure outbound SMTP is enabled in cPanel → Email → SMTP Restrictions.',
-            });
-        }
-    }, 12000);
-    res.on('finish', () => clearTimeout(timer));
-    res.on('close', () => clearTimeout(timer));
-    next();
-};
-router.post('/test', smtpTestTimeout, smtpController.testConnection);
+// POST /test  → kicks off async SMTP test, returns 202 + jobId immediately
+// GET  /test/:jobId → poll for result (pending=202, done=200/400)
+// This fire-and-forget pattern avoids nginx gateway timeouts completely.
+router.post('/test', smtpController.testConnection);
+router.get('/test/:jobId', smtpController.pollTestResult);
+
 router.delete('/', smtpController.deleteSmtpSettings);
 
 export default router;

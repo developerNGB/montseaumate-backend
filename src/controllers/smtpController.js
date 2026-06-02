@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import { detectSmtpProvider, testSmtpConnection } from '../services/emailService.js';
+import crypto from 'crypto';
 
 /**
  * GET /api/smtp
@@ -73,14 +74,25 @@ export const saveSmtpSettings = async (req, res) => {
     }
 };
 
+// ── In-memory SMTP test job store ────────────────────────────────────────────
+// Each entry: { status: 'pending'|'done', result: {...}, expiresAt: timestamp }
+const smtpTestJobs = new Map();
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, job] of smtpTestJobs) {
+        if (job.expiresAt < now) smtpTestJobs.delete(id);
+    }
+}, 5 * 60 * 1000);
+
 /**
  * POST /api/smtp/test
- * Tests the provided SMTP configuration immediately
+ * Kicks off the SMTP test in the background and returns a jobId immediately.
+ * This avoids nginx gateway timeouts on cdmon which kills long-running requests.
  */
 export const testConnection = async (req, res) => {
     try {
         const { host, port, secure, auth_user, auth_pass, from_email, from_name, test_email } = req.body;
-        
+
         let finalPass = auth_pass;
         if (!finalPass) {
             const existing = await pool.query('SELECT auth_pass FROM smtp_settings WHERE user_id = $1', [req.user.id]);
@@ -91,8 +103,17 @@ export const testConnection = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Incomplete configuration for testing' });
         }
 
+        // Create a job and respond immediately — test runs in background
+        const jobId = crypto.randomUUID();
+        smtpTestJobs.set(jobId, {
+            status: 'pending',
+            result: null,
+            expiresAt: Date.now() + 5 * 60 * 1000, // expires in 5 min
+        });
+
+        // Fire and forget — do NOT await
         const testRecipient = String(test_email || from_email || auth_user || req.user.email || '').trim();
-        const testResult = await testSmtpConnection({
+        testSmtpConnection({
             host,
             port: parseInt(port, 10),
             secure,
@@ -101,27 +122,59 @@ export const testConnection = async (req, res) => {
             from_email: from_email || auth_user,
             from_name,
             testRecipient,
-        });
-
-        if (testResult.success) {
-            return res.status(200).json({
-                success: true,
-                message: testResult.message || 'SMTP connection verified.',
-                hint: testResult.hint || null,
+        }).then((testResult) => {
+            smtpTestJobs.set(jobId, {
+                status: 'done',
+                result: testResult,
+                expiresAt: Date.now() + 5 * 60 * 1000,
             });
-        }
-
-        return res.status(testResult.status || 400).json({
-            success: false,
-            code: testResult.code || 'smtp_test_failed',
-            message: testResult.message || 'Connection failed.',
-            hint: testResult.hint || null,
+        }).catch((err) => {
+            smtpTestJobs.set(jobId, {
+                status: 'done',
+                result: {
+                    success: false,
+                    code: 'smtp_test_failed',
+                    message: err.message || 'SMTP test failed.',
+                },
+                expiresAt: Date.now() + 5 * 60 * 1000,
+            });
         });
+
+        // Respond immediately — frontend will poll
+        return res.status(202).json({ jobId });
+
     } catch (error) {
         console.error('[testConnection] Error:', error.message);
         return res.status(500).json({ success: false, message: 'SMTP test failed unexpectedly.' });
     }
 };
+
+/**
+ * GET /api/smtp/test/:jobId
+ * Poll for the result of an async SMTP test job.
+ */
+export const pollTestResult = (req, res) => {
+    const job = smtpTestJobs.get(req.params.jobId);
+    if (!job) {
+        return res.status(404).json({ success: false, message: 'Test job not found or expired.' });
+    }
+    if (job.status === 'pending') {
+        return res.status(202).json({ status: 'pending' });
+    }
+    // Done — clean up and return result
+    smtpTestJobs.delete(req.params.jobId);
+    const r = job.result;
+    if (r.success) {
+        return res.status(200).json({ success: true, message: r.message, hint: r.hint || null });
+    }
+    return res.status(r.status || 400).json({
+        success: false,
+        code: r.code || 'smtp_test_failed',
+        message: r.message || 'Connection failed.',
+        hint: r.hint || null,
+    });
+};
+
 
 export const detectConnection = async (req, res) => {
     try {
