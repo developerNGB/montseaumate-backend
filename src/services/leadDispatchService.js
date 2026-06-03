@@ -37,7 +37,7 @@ export const dispatchFollowupForLead = async (
     if (!origin) {
         console.error('[dispatchFollowup] FRONTEND_URL is not set; review/funnel links in messages may be wrong');
     }
-    const link = lead.automation_id ? `${origin}/r/${lead.automation_id}` : origin;
+    const link = lead.automation_id ? `${origin}/r/${lead.automation_id}?source=list` : origin;
 
     const personalisedMsg = injectPlaceholders(message || 'Hi {name}! Thanks for reaching out.', {
         name: leadName,

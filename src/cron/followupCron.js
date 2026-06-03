@@ -114,10 +114,10 @@ const startFollowupCron = () => {
                     const leadEmail = match?.[1] || match?.[2];
                     
                     if (leadEmail) {
-                        // If this email matches a lead for this user, mark them as Contacted
+                        // If this email matches a lead for this user, mark them as Replied
                         await pool.query(
-                            `UPDATE leads SET lead_status = 'Contacted', updated_at = NOW() 
-                             WHERE user_id = $1 AND lower(email) = $2 AND lead_status != 'Contacted'`,
+                            `UPDATE leads SET lead_status = 'Replied', updated_at = NOW() 
+                             WHERE user_id = $1 AND lower(email) = $2 AND lead_status != 'Replied'`,
                             [userId, leadEmail.toLowerCase()]
                         );
                     }
@@ -210,7 +210,7 @@ const startFollowupCron = () => {
 
                         const baseUrl = frontendBaseUrl() || '';
                         if (!baseUrl) console.error('[followupCron] FRONTEND_URL is not set');
-                        const link = baseUrl ? `${baseUrl}/r/${lead.automation_id || ''}` : '';
+                        const link = baseUrl ? `${baseUrl}/r/${lead.automation_id || ''}?source=list` : '';
                         const msg = injectPlaceholders(step.message || '', {
                             name: lead.full_name,
                             link: link,

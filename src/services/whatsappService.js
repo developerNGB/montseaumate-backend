@@ -114,6 +114,28 @@ export const initWhatsAppClient = async (userId) => {
             }
         });
 
+        sock.ev.on('messages.upsert', async (m) => {
+            if (m.type !== 'notify') return;
+            try {
+                for (const msg of m.messages) {
+                    if (msg.key.fromMe) continue;
+                    const JID = msg.key.remoteJid;
+                    if (!JID || !JID.endsWith('@s.whatsapp.net')) continue;
+                    const fromPhone = JID.split('@')[0];
+                    if (!fromPhone) continue;
+
+                    // Update matching lead's status to 'Replied' if they are not already Replied
+                    await pool.query(
+                        `UPDATE leads SET lead_status = 'Replied', updated_at = NOW()
+                         WHERE user_id = $1 AND regexp_replace(phone, '[^0-9]', '', 'g') = $2 AND lead_status != 'Replied'`,
+                        [userId, fromPhone]
+                    );
+                }
+            } catch (err) {
+                console.error('[WA-Socket] Error updating lead on WhatsApp reply:', err.message);
+            }
+        });
+
     } catch (e) {
         console.error(`[WA-Init] Client init error for user ${userId}:`, e.message);
         clientStatus.set(userId, 'error');

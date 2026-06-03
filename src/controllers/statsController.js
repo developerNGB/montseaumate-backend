@@ -260,22 +260,28 @@ export const getEmployeeActivityStatus = async (req, res) => {
         const now = new Date();
         const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-        // Query based on employee type
-        let activityQueries;
-        
+        let lastActivity = null;
+        let pendingCount = 0;
+        let sentToday = 0;
+        let isActive = false;
+        let detailedStats = {};
+
         if (employee === 'followup') {
-            activityQueries = await Promise.all([
-                // Last follow-up message sent
+            const [
+                lastActivityRes,
+                pendingRes,
+                sentTodayRes,
+                isActiveRes,
+                sentRes,
+                repliedRes
+            ] = await Promise.all([
                 pool.query(`
                     SELECT MAX(created_at) as last_activity
                     FROM activity_logs 
                     WHERE user_id = $1 
-                    AND automation_name = 'Follow-up Agent'
-                    AND status = 'success'
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                    AND automation_name = 'Lead Follow-up'
+                    AND status = 'Success'
                 `, [userId]),
-                // Pending leads to follow up
                 pool.query(`
                     SELECT COUNT(*) as pending_count
                     FROM leads 
@@ -283,33 +289,64 @@ export const getEmployeeActivityStatus = async (req, res) => {
                     AND lead_status IN ('New', 'Contacted')
                     AND marketing_consent = true
                 `, [userId]),
-                // Messages sent today
                 pool.query(`
                     SELECT COUNT(*) as sent_today
                     FROM activity_logs 
                     WHERE user_id = $1 
-                    AND automation_name = 'Follow-up Agent'
-                    AND status = 'success'
+                    AND automation_name = 'Lead Follow-up'
+                    AND status = 'Success'
                     AND created_at >= $2
                 `, [userId, todayStart]),
-                // Is active
                 pool.query(`
                     SELECT is_active FROM lead_followup_settings WHERE user_id = $1
+                `, [userId]),
+                pool.query(`
+                    SELECT (
+                        SELECT COUNT(*) FROM activity_logs 
+                        WHERE user_id = $1 AND automation_name = 'Lead Follow-up' AND status = 'Success'
+                    ) + (
+                        SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
+                        FROM activity_logs 
+                        WHERE user_id = $1 AND trigger_type = 'Bulk Trigger' AND status = 'Success'
+                    ) as count
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM leads 
+                    WHERE user_id = $1 AND lead_status = 'Replied'
                 `, [userId])
             ]);
+
+            lastActivity = lastActivityRes.rows[0]?.last_activity;
+            pendingCount = parseInt(pendingRes.rows[0]?.pending_count || 0);
+            sentToday = parseInt(sentTodayRes.rows[0]?.sent_today || 0);
+            isActive = isActiveRes.rows[0]?.is_active === true;
+            detailedStats = {
+                sent: parseInt(sentRes.rows[0]?.count || 0),
+                replied: parseInt(repliedRes.rows[0]?.count || 0)
+            };
+
         } else if (employee === 'review') {
-            activityQueries = await Promise.all([
-                // Last review request sent
+            const [
+                lastActivityRes,
+                pendingRes,
+                sentTodayRes,
+                isActiveRes,
+                qrScansRes,
+                qrAnswersRes,
+                qrReviewsRes,
+                listSentRes,
+                listBouncesRes,
+                listAnswersRes,
+                listReviewsRes,
+                listUnsatisfiedRes
+            ] = await Promise.all([
                 pool.query(`
                     SELECT MAX(created_at) as last_activity
                     FROM activity_logs 
                     WHERE user_id = $1 
-                    AND trigger_type = 'Customer Review'
-                    AND status = 'success'
-                    ORDER BY created_at DESC
-                    LIMIT 1
+                    AND (trigger_type = 'Customer Review' OR trigger_type = 'Review request')
+                    AND status = 'Success'
                 `, [userId]),
-                // Pending review requests (leads without reviews)
                 pool.query(`
                     SELECT COUNT(*) as pending_count
                     FROM leads 
@@ -319,30 +356,105 @@ export const getEmployeeActivityStatus = async (req, res) => {
                         WHERE user_id = $1 AND trigger_type = 'Customer Review'
                     )
                 `, [userId]),
-                // Reviews requested today
                 pool.query(`
                     SELECT COUNT(*) as sent_today
                     FROM activity_logs 
                     WHERE user_id = $1 
-                    AND trigger_type = 'Customer Review'
-                    AND status = 'success'
+                    AND (trigger_type = 'Customer Review' OR trigger_type = 'Review request')
+                    AND status = 'Success'
                     AND created_at >= $2
                 `, [userId, todayStart]),
-                // Is active
                 pool.query(`
                     SELECT is_active FROM review_funnel_settings WHERE user_id = $1
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 AND trigger_type = 'QR Scan'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type IN ('Feedback Received', 'Customer Review') 
+                    AND metadata::jsonb->>'source' = 'qr'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type = 'Customer Review' 
+                    AND status = 'Success' 
+                    AND metadata::jsonb->>'source' = 'qr'
+                `, [userId]),
+                pool.query(`
+                    SELECT (
+                        SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
+                        FROM activity_logs 
+                        WHERE user_id = $1 AND trigger_type = 'Review request' AND status = 'Success'
+                    ) + (
+                        SELECT COUNT(*) 
+                        FROM activity_logs 
+                        WHERE user_id = $1 AND trigger_type = 'Customer Review' AND status = 'Success' AND metadata::jsonb->>'source' = 'list'
+                    ) as count
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 AND status = 'Failed' AND (detail LIKE '%Email failed%' OR metadata::jsonb->>'email_attempted' = 'true')
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type IN ('Feedback Received', 'Customer Review') 
+                    AND metadata::jsonb->>'source' = 'list'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type = 'Customer Review' 
+                    AND status = 'Success' 
+                    AND metadata::jsonb->>'source' = 'list'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 
+                    AND trigger_type IN ('Feedback Received', 'Customer Review') 
+                    AND status = 'Attention'
                 `, [userId])
             ]);
+
+            lastActivity = lastActivityRes.rows[0]?.last_activity;
+            pendingCount = parseInt(pendingRes.rows[0]?.pending_count || 0);
+            sentToday = parseInt(sentTodayRes.rows[0]?.sent_today || 0);
+            isActive = isActiveRes.rows[0]?.is_active === true;
+            detailedStats = {
+                qr: {
+                    scans: parseInt(qrScansRes.rows[0]?.count || 0),
+                    answers: parseInt(qrAnswersRes.rows[0]?.count || 0),
+                    reviews: parseInt(qrReviewsRes.rows[0]?.count || 0)
+                },
+                list: {
+                    sent: parseInt(listSentRes.rows[0]?.count || 0),
+                    bounces: parseInt(listBouncesRes.rows[0]?.count || 0),
+                    answers: parseInt(listAnswersRes.rows[0]?.count || 0),
+                    reviews: parseInt(listReviewsRes.rows[0]?.count || 0),
+                    unsatisfied_alerts: parseInt(listUnsatisfiedRes.rows[0]?.count || 0)
+                }
+            };
+
         } else { // capture
-            activityQueries = await Promise.all([
-                // Last lead captured (any source)
+            const [
+                lastActivityRes,
+                pendingRes,
+                sentTodayRes,
+                isActiveRes,
+                formViewsRes,
+                completedRes,
+                highPriorityRes
+            ] = await Promise.all([
                 pool.query(`
                     SELECT MAX(created_at) as last_activity
                     FROM leads 
                     WHERE user_id = $1 
                     AND source IN ('QR Survey', 'Website', 'bulk_import', 'Excel Upload', 'Public Link')
                 `, [userId]),
-                // New leads today not yet processed
                 pool.query(`
                     SELECT COUNT(*) as pending_count
                     FROM leads 
@@ -350,28 +462,49 @@ export const getEmployeeActivityStatus = async (req, res) => {
                     AND lead_status = 'New'
                     AND created_at >= NOW() - INTERVAL '24 hours'
                 `, [userId]),
-                // Leads captured today
                 pool.query(`
                     SELECT COUNT(*) as sent_today
                     FROM leads 
                     WHERE user_id = $1 
                     AND created_at >= $2
                 `, [userId, todayStart]),
-                // Is active
                 pool.query(`
                     SELECT lead_capture_active as is_active 
                     FROM review_funnel_settings 
                     WHERE user_id = $1
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Form View'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM activity_logs 
+                    WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Lead Subscribed'
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM leads 
+                    WHERE user_id = $1 
+                    AND filtering_responses IS NOT NULL 
+                    AND filtering_responses != '{}'::jsonb
                 `, [userId])
             ]);
+
+            lastActivity = lastActivityRes.rows[0]?.last_activity;
+            pendingCount = parseInt(pendingRes.rows[0]?.pending_count || 0);
+            sentToday = parseInt(sentTodayRes.rows[0]?.sent_today || 0);
+            isActive = isActiveRes.rows[0]?.is_active === true;
+
+            const formViews = parseInt(formViewsRes.rows[0]?.count || 0);
+            const completed = parseInt(completedRes.rows[0]?.count || 0);
+            const abandoned = Math.max(0, formViews - completed);
+
+            detailedStats = {
+                form_views: formViews,
+                completed: completed,
+                abandoned: abandoned,
+                high_priority: parseInt(highPriorityRes.rows[0]?.count || 0)
+            };
         }
-
-        const [lastActivityRes, pendingRes, sentTodayRes, isActiveRes] = activityQueries;
-
-        const lastActivity = lastActivityRes.rows[0]?.last_activity;
-        const pendingCount = parseInt(pendingRes.rows[0]?.pending_count || 0);
-        const sentToday = parseInt(sentTodayRes.rows[0]?.sent_today || 0);
-        const isActive = isActiveRes.rows[0]?.is_active === true;
 
         // Determine status
         let status = 'off_duty';
@@ -393,12 +526,12 @@ export const getEmployeeActivityStatus = async (req, res) => {
             is_active: isActive,
             last_activity: lastActivity,
             pending_count: pendingCount,
-            sent_today: sentToday
+            sent_today: sentToday,
+            detailed_stats: detailedStats
         });
 
     } catch (err) {
         console.error('[getEmployeeActivityStatus] Error:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Server error fetching activity status.', error: err.message });
     }
-};
 

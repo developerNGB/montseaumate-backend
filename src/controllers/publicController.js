@@ -171,7 +171,7 @@ export const getPublicReviewConfig = async (req, res) => {
         const { automation_id } = req.params;
 
         const result = await pool.query(
-            `SELECT COALESCE(u.company_name, u.name) as business_name, r.filtering_questions, r.whatsapp_number_fallback
+            `SELECT r.user_id, COALESCE(u.company_name, u.name) as business_name, r.filtering_questions, r.whatsapp_number_fallback
              FROM review_funnel_settings r
              JOIN users u ON u.id = r.user_id 
              WHERE r.automation_id = $1`,
@@ -182,7 +182,47 @@ export const getPublicReviewConfig = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Automation not found.' });
         }
 
-        return res.status(200).json({ success: true, data: result.rows[0] });
+        const config = result.rows[0];
+
+        // Track page views and QR scans in activity_logs
+        const source = req.query.source || '';
+        const originalUrl = req.originalUrl || '';
+        
+        let triggerType = 'Form View';
+        let automationName = 'Review Funnel';
+        let detail = 'Review form viewed';
+        
+        if (originalUrl.includes('/api/l/')) {
+            automationName = 'Lead Capture Form';
+            detail = 'Lead capture form viewed';
+            if (source === 'qr') {
+                triggerType = 'QR Scan';
+                detail = 'Lead capture form viewed via QR';
+            }
+        } else {
+            if (source === 'qr') {
+                triggerType = 'QR Scan';
+                detail = 'QR Code scanned';
+            } else if (source === 'list') {
+                triggerType = 'List Link Click';
+                detail = 'Review link clicked from email/list';
+            }
+        }
+
+        pool.query(
+            `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+            [
+                config.user_id,
+                automationName,
+                triggerType,
+                'Success',
+                detail,
+                JSON.stringify({ source, url: originalUrl, date: new Date().toISOString() })
+            ]
+        ).catch(err => console.error('[getPublicReviewConfig] Log view failed:', err.message));
+
+        return res.status(200).json({ success: true, data: config });
 
     } catch (err) {
         console.error('[getPublicReviewConfig] Error:', err.message);
@@ -196,7 +236,7 @@ export const getPublicReviewConfig = async (req, res) => {
 export const submitReview = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { rating, feedback, filtering_responses, ui_language } = req.body;
+        const { rating, feedback, filtering_responses, ui_language, source } = req.body;
         const reviewLang = String(ui_language || '').toLowerCase().startsWith('es') ? 'es' : 'en';
 
         console.log(`[submitReview] Incoming review for ${automation_id}:`, { rating, feedback });
@@ -236,6 +276,7 @@ export const submitReview = async (req, res) => {
                     rating,
                     feedback: feedback || 'No written feedback',
                     filtering_responses: filtering_responses || {},
+                    source: source || null,
                     date: new Date().toISOString()
                 })
             ]
@@ -291,6 +332,7 @@ export const submitFeedback = async (req, res) => {
             customer_phone,
             filtering_responses,
             ui_language,
+            source,
         } = req.body;
 
         const lang = String(ui_language || '')
@@ -336,6 +378,7 @@ export const submitFeedback = async (req, res) => {
         // 2. If contact requested, also save as a Lead
         if (contact_requested && (customer_email || customer_phone)) {
             const feedbackGroup = normalizeLeadGroup(req.body.lead_group, 'Reviews');
+            const finalSource = source === 'qr' ? 'QR Survey' : (source === 'list' ? 'Excel Upload' : `Feedback Funnel: ${automation_id}`);
             await pool.query(
                 `INSERT INTO leads (user_id, full_name, email, phone, message, source, lead_group, consent_given, marketing_consent)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -345,7 +388,7 @@ export const submitFeedback = async (req, res) => {
                     customer_email || 'no-email@feedback.com',
                     customer_phone || '',
                     `Feedback Comment: ${comment}`,
-                    `Feedback Funnel: ${automation_id}`,
+                    finalSource,
                     feedbackGroup,
                     true,
                     !!contact_requested
@@ -373,6 +416,7 @@ export const submitFeedback = async (req, res) => {
                     customer_email,
                     customer_phone,
                     filtering_responses: filtering_responses || {},
+                    source: source || null,
                 })
             ]
         );
@@ -473,7 +517,7 @@ export const submitFeedback = async (req, res) => {
 export const submitLead = async (req, res) => {
     try {
         const { automation_id } = req.params;
-        const { full_name, email, phone, message, filtering_responses, consent_given, marketing_consent, lead_group } = req.body;
+        const { full_name, email, phone, message, filtering_responses, consent_given, marketing_consent, lead_group, source } = req.body;
         const captureGroup = normalizeLeadGroup(lead_group, 'Captured');
         console.log(`[submitLead] Incoming lead for ${automation_id}:`, { full_name, email, marketing_consent });
 
@@ -508,11 +552,13 @@ export const submitLead = async (req, res) => {
         const owner_email = result.rows[0].owner_email;
         const current_date = new Date().toISOString();
 
+        const finalSource = source === 'qr' ? 'QR Survey' : (source === 'list' ? 'Excel Upload' : 'Public Link');
+
         // 1. Save Lead to DB
         const leadInsert = await pool.query(
             `INSERT INTO leads (user_id, full_name, email, phone, message, filtering_responses, source, lead_group, consent_given, marketing_consent, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'Public Link', $7, $8, $9, $10) RETURNING id`,
-            [user_id, full_name, email, phone, message || '', JSON.stringify(filtering_responses || {}), captureGroup, !!consent_given, !!marketing_consent, current_date]
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+            [user_id, full_name, email, phone, message || '', JSON.stringify(filtering_responses || {}), finalSource, captureGroup, !!consent_given, !!marketing_consent, current_date]
         );
         const lead_id = leadInsert.rows[0].id;
 
@@ -526,7 +572,7 @@ export const submitLead = async (req, res) => {
                 'Lead Subscribed',
                 'Success',
                 `Captured contact: ${full_name}`,
-                JSON.stringify({ full_name, email, phone, message: message || '', filtering_responses, consent_given, marketing_consent, date: current_date })
+                JSON.stringify({ full_name, email, phone, message: message || '', filtering_responses, consent_given, marketing_consent, source: source || null, date: current_date })
             ]
         );
 

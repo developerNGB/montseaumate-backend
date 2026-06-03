@@ -38,6 +38,7 @@ export const getLeadFolders = async (req, res) => {
                 COUNT(*)::int AS total,
                 COUNT(*) FILTER (WHERE l.lead_status = 'New')::int AS new_count,
                 COUNT(*) FILTER (WHERE l.lead_status = 'Contacted')::int AS contacted_count,
+                COUNT(*) FILTER (WHERE l.lead_status = 'Replied')::int AS replied_count,
                 MAX(l.created_at) AS last_lead_at,
                 f.followup_message,
                 f.source_hint,
@@ -54,7 +55,7 @@ export const getLeadFolders = async (req, res) => {
 
         const orphanFolders = await pool.query(
             `SELECT f.name, f.followup_message, f.source_hint, f.created_at AS folder_created_at,
-                    0::int AS total, 0::int AS new_count, 0::int AS contacted_count, f.updated_at AS last_lead_at
+                    0::int AS total, 0::int AS new_count, 0::int AS contacted_count, 0::int AS replied_count, f.updated_at AS last_lead_at
              FROM lead_folders f
              WHERE f.user_id = $1
                AND NOT EXISTS (
@@ -960,5 +961,45 @@ export const sendLeadEmail = async (req, res) => {
                 ? err.message
                 : 'Failed to send email. Check your email integration in Settings.',
         });
+    }
+};
+
+/**
+ * POST /api/leads/folders/start-followup
+ * Resets and schedules all leads in a specific folder to start the follow-up sequence.
+ */
+export const startFolderFollowup = async (req, res) => {
+    try {
+        const { folderName } = req.body;
+        if (!folderName) {
+            return res.status(400).json({ success: false, message: 'Folder name is required' });
+        }
+
+        const userId = req.user.id;
+        const normalizedGroup = folderName.trim();
+
+        // Reset all leads in this folder that are not Closed, Qualified, Won, or Lost
+        const result = await pool.query(
+            `UPDATE leads 
+             SET lead_status = 'New',
+                 followup_step_index = 0,
+                 last_followup_at = NOW() - INTERVAL '365 days',
+                 followup_status = 'pending',
+                 updated_at = NOW()
+             WHERE user_id = $1 
+               AND COALESCE(NULLIF(TRIM(lead_group), ''), $2) = $3
+               AND lead_status NOT IN ('Closed', 'Qualified', 'Won', 'Lost')
+             RETURNING id`,
+            [userId, DEFAULT_LEAD_GROUP, normalizedGroup]
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: `Started follow-up sequence for ${result.rowCount} lead(s) in "${normalizedGroup}".`,
+            count: result.rowCount,
+        });
+    } catch (err) {
+        console.error('[startFolderFollowup] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
     }
 };

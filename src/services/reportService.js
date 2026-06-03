@@ -14,7 +14,24 @@ export const getWeeklyStats = async (userId) => {
         reviewsRes, 
         ratingRes, 
         topDayRes, 
-        activeEngineRes
+        activeEngineRes,
+        
+        qrScansRes,
+        qrAnswersRes,
+        qrReviewsRes,
+        
+        listSentRes,
+        listBouncesRes,
+        listAnswersRes,
+        listReviewsRes,
+        listUnsatisfiedRes,
+        
+        formViewsRes,
+        completedRes,
+        highPriorityRes,
+        
+        followupSentRes,
+        followupAnsweredRes
     ] = await Promise.all([
         pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
         pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND (lead_status = 'Contacted' OR followup_status = 'success') AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
@@ -22,8 +39,48 @@ export const getWeeklyStats = async (userId) => {
         pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type IN ('Review Submitted', 'Customer Review') AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
         pool.query("SELECT AVG(rating_overall) as avg_rating FROM feedback WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
         pool.query("SELECT trim(to_char(created_at, 'Day')) as day_name, COUNT(*) FROM activity_logs WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days' GROUP BY day_name ORDER BY count DESC LIMIT 1", [userId]),
-        pool.query("SELECT automation_name, COUNT(*) FROM activity_logs WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days' GROUP BY automation_name ORDER BY count DESC LIMIT 1", [userId])
+        pool.query("SELECT automation_name, COUNT(*) FROM activity_logs WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days' GROUP BY automation_name ORDER BY count DESC LIMIT 1", [userId]),
+        
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'QR Scan' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type IN ('Feedback Received', 'Customer Review') AND metadata::jsonb->>'source' = 'qr' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review' AND status = 'Success' AND metadata::jsonb->>'source' = 'qr' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        
+        pool.query(`
+            SELECT (
+                SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
+                FROM activity_logs 
+                WHERE user_id = $1 AND trigger_type = 'Review request' AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'
+            ) + (
+                SELECT COUNT(*) 
+                FROM activity_logs 
+                WHERE user_id = $1 AND trigger_type = 'Customer Review' AND status = 'Success' AND metadata::jsonb->>'source' = 'list' AND created_at >= NOW() - INTERVAL '7 days'
+            ) as count
+        `, [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND status = 'Failed' AND (detail LIKE '%Email failed%' OR metadata::jsonb->>'email_attempted' = 'true') AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type IN ('Feedback Received', 'Customer Review') AND metadata::jsonb->>'source' = 'list' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type = 'Customer Review' AND status = 'Success' AND metadata::jsonb->>'source' = 'list' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND trigger_type IN ('Feedback Received', 'Customer Review') AND status = 'Attention' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Form View' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Lead Subscribed' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND filtering_responses IS NOT NULL AND filtering_responses != '{}'::jsonb AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
+        
+        pool.query(`
+            SELECT (
+                SELECT COUNT(*) FROM activity_logs 
+                WHERE user_id = $1 AND automation_name = 'Lead Follow-up' AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'
+            ) + (
+                SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
+                FROM activity_logs 
+                WHERE user_id = $1 AND trigger_type = 'Bulk Trigger' AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'
+            ) as count
+        `, [userId]),
+        pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND lead_status = 'Replied' AND updated_at >= NOW() - INTERVAL '7 days'", [userId])
     ]);
+
+    const formViews = parseInt(formViewsRes.rows[0]?.count || 0, 10);
+    const completed = parseInt(completedRes.rows[0]?.count || 0, 10);
+    const abandoned = Math.max(0, formViews - completed);
 
     return {
         newLeads: parseInt(leadsRes.rows[0]?.count || 0, 10),
@@ -32,12 +89,35 @@ export const getWeeklyStats = async (userId) => {
         reviewsCollected: parseInt(reviewsRes.rows[0]?.count || 0, 10),
         avgRating: parseFloat(ratingRes.rows[0]?.avg_rating || 0).toFixed(1),
         topDay: topDayRes.rows[0]?.day_name || 'N/A',
-        activeEngine: activeEngineRes.rows[0]?.automation_name || 'N/A'
+        activeEngine: activeEngineRes.rows[0]?.automation_name || 'N/A',
+        
+        employeeReviewsQr: {
+            scans: parseInt(qrScansRes.rows[0]?.count || 0, 10),
+            answers: parseInt(qrAnswersRes.rows[0]?.count || 0, 10),
+            reviews: parseInt(qrReviewsRes.rows[0]?.count || 0, 10)
+        },
+        employeeReviewsList: {
+            sent: parseInt(listSentRes.rows[0]?.count || 0, 10),
+            bounces: parseInt(listBouncesRes.rows[0]?.count || 0, 10),
+            answers: parseInt(listAnswersRes.rows[0]?.count || 0, 10),
+            reviews: parseInt(listReviewsRes.rows[0]?.count || 0, 10),
+            unsatisfied: parseInt(listUnsatisfiedRes.rows[0]?.count || 0, 10)
+        },
+        employeeLeadScoring: {
+            formViews,
+            completed,
+            abandoned,
+            highPriority: parseInt(highPriorityRes.rows[0]?.count || 0, 10)
+        },
+        employeeFollowup: {
+            sent: parseInt(followupSentRes.rows[0]?.count || 0, 10),
+            replied: parseInt(followupAnsweredRes.rows[0]?.count || 0, 10)
+        }
     };
 };
 
 export const generateReportHtml = (user, stats) => {
-    // Generate dates for "Week of April 7-13"
+    // Generate dates for report week
     const end = new Date();
     const start = new Date();
     start.setDate(start.getDate() - 7);
@@ -56,199 +136,147 @@ export const generateReportHtml = (user, stats) => {
         <html>
         <head>
             <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Weekly Performance Report</title>
         </head>
-        <body>
-            <style>
-                body { 
-                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-                    background-color: #f8fafc; 
-                    color: #0f172a; 
-                    margin: 0; 
-                    padding: 0; 
-                    -webkit-font-smoothing: antialiased;
-                }
-                .wrapper {
-                    max-width: 800px;
-                    margin: 0 auto;
-                    background: #ffffff;
-                    border-radius: 16px;
-                    overflow: hidden;
-                    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
-                    border: 1px solid #f1f5f9;
-                }
-                .header { 
-                    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); 
-                    padding: 48px 40px; 
-                    text-align: left; 
-                }
-                .header h1 { 
-                    color: #ffffff; 
-                    margin: 0 0 8px 0; 
-                    font-size: 28px; 
-                    font-weight: 800; 
-                    letter-spacing: -0.02em;
-                }
-                .header p { 
-                    color: #94a3b8; 
-                    margin: 0; 
-                    font-size: 15px; 
-                    font-weight: 500;
-                }
-                .content { 
-                    padding: 40px; 
-                }
-                .greeting { 
-                    font-size: 20px; 
-                    font-weight: 600; 
-                    color: #0f172a;
-                    margin-bottom: 8px; 
-                }
-                .intro-text {
-                    font-size: 15px;
-                    color: #64748b;
-                    line-height: 1.6;
-                    margin-bottom: 32px;
-                }
-                .grid-container {
-                    display: flex;
-                    flex-wrap: wrap;
-                    gap: 20px;
-                    margin-bottom: 32px;
-                }
-                .stat-card { 
-                    flex: 0 0 calc(50% - 10px);
-                    background: #f8fafc; 
-                    border: 1px solid #e2e8f0;
-                    padding: 24px; 
-                    border-radius: 12px; 
-                    box-sizing: border-box;
-                }
-                .stat-label { 
-                    font-size: 13px; 
-                    color: #64748b; 
-                    font-weight: 600; 
-                    text-transform: uppercase; 
-                    letter-spacing: 0.06em; 
-                    margin-bottom: 12px; 
-                }
-                .stat-value { 
-                    font-size: 32px; 
-                    font-weight: 800; 
-                    color: #0f172a; 
-                    line-height: 1;
-                }
-                .highlight-section {
-                    background: #f0fdf4;
-                    border: 1px solid #bbf7d0;
-                    border-radius: 12px;
-                    padding: 24px;
-                    margin-bottom: 32px;
-                    overflow: hidden;
-                }
-                .highlight-grid {
-                    display: flex;
-                    justify-content: space-around;
-                    align-items: center;
-                }
-                .highlight-item {
-                    flex: 1;
-                    text-align: center;
-                }
-                .highlight-item .label {
-                    font-size: 13px;
-                    color: #166534;
-                    font-weight: 600;
-                    margin-bottom: 8px;
-                }
-                .highlight-item .value {
-                    font-size: 18px;
-                    font-weight: 700;
-                    color: #14532d;
-                }
-                .rating-badge {
-                    display: inline-flex;
-                    align-items: center;
-                    background: #fef08a;
-                    color: #854d0e;
-                    padding: 4px 12px;
-                    border-radius: 9999px;
-                    font-size: 18px;
-                    font-weight: 800;
-                }
-                .footer { 
-                    background: #f8fafc; 
-                    padding: 32px 40px; 
-                    text-align: center; 
-                    border-top: 1px solid #f1f5f9; 
-                }
-                .footer-logo {
-                    font-size: 16px;
-                    font-weight: 800;
-                    color: #0f172a;
-                    margin-bottom: 8px;
-                }
-                .footer p { 
-                    font-size: 13px; 
-                    color: #94a3b8; 
-                    margin: 0; 
-                    line-height: 1.5;
-                }
-            </style>
-            <div style="padding: 20px; background-color: #f8fafc;">
-                <div class="wrapper">
-                    <div class="header">
-                        <h1>Weekly Performance Report</h1>
-                        <p>${dateStr}</p>
+        <body style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0b0f19; color: #f1f5f9; margin: 0; padding: 20px; -webkit-font-smoothing: antialiased;">
+            <div style="max-width: 650px; margin: 0 auto; background: #111827; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); border: 1px solid #1f2937;">
+                
+                <!-- HEADER -->
+                <div style="background: linear-gradient(135deg, #1e1b4b 0%, #311042 100%); padding: 40px; border-bottom: 1px solid #2e1065;">
+                    <h1 style="color: #ffffff; margin: 0 0 8px 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em;">Weekly Performance Report</h1>
+                    <p style="color: #a5b4fc; margin: 0; font-size: 14px; font-weight: 500;">${dateStr}</p>
+                </div>
+                
+                <!-- CONTENT -->
+                <div style="padding: 30px;">
+                    <div style="font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 6px;">Hello ${user.name || user.company_name || 'Partner'},</div>
+                    <div style="font-size: 14px; color: #9ca3af; line-height: 1.5; margin-bottom: 24px;">
+                        Your digital employees have been actively driving results. Here is your detailed productivity report from the last 7 days.
                     </div>
                     
-                    <div class="content">
-                        <div class="greeting">Hello ${user.name || user.company_name || 'Partner'},</div>
-                        <div class="intro-text">
-                            Your automated systems have been working diligently. Here is a snapshot of your platform's performance over the last 7 days.
+                    <!-- HIGH-LEVEL SNAPSHOT -->
+                    <h3 style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: #6366f1; letter-spacing: 0.1em; margin: 0 0 16px 0;">Overview Performance</h3>
+                    <div style="display: flex; flex-direction: row; flex-wrap: wrap; gap: 12px; margin-bottom: 24px;">
+                        <div style="flex: 1; min-width: 130px; background: #1f2937; border: 1px solid #374151; padding: 16px; border-radius: 12px; text-align: center;">
+                            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom: 6px;">New Leads</div>
+                            <div style="font-size: 24px; font-weight: 800; color: #3b82f6;">${stats.newLeads}</div>
                         </div>
-                        
-                        <div class="grid-container">
-                            <div class="stat-card">
-                                <div class="stat-label">New Leads</div>
-                                <div class="stat-value" style="color: #3b82f6;">${stats.newLeads}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">Messages Sent</div>
-                                <div class="stat-value" style="color: #ec4899;">${stats.messagesSent > stats.newLeads ? stats.messagesSent : stats.newLeads}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">Responses Received</div>
-                                <div class="stat-value" style="color: #f59e0b;">${stats.responsesReceived}</div>
-                            </div>
-                            <div class="stat-card">
-                                <div class="stat-label">Google Reviews Collected</div>
-                                <div class="stat-value" style="color: #10b981;">${stats.reviewsCollected}</div>
-                            </div>
+                        <div style="flex: 1; min-width: 130px; background: #1f2937; border: 1px solid #374151; padding: 16px; border-radius: 12px; text-align: center;">
+                            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom: 6px;">Google Reviews</div>
+                            <div style="font-size: 24px; font-weight: 800; color: #10b981;">${stats.reviewsCollected}</div>
                         </div>
+                        <div style="flex: 1; min-width: 130px; background: #1f2937; border: 1px solid #374151; padding: 16px; border-radius: 12px; text-align: center;">
+                            <div style="font-size: 11px; color: #9ca3af; text-transform: uppercase; font-weight: 600; margin-bottom: 6px;">Rating</div>
+                            <div style="font-size: 24px; font-weight: 800; color: #f59e0b;">⭐ ${stats.avgRating > 0 ? stats.avgRating : 'N/A'}</div>
+                        </div>
+                    </div>
 
-                        <div class="highlight-section">
-                            <div class="highlight-grid">
-                                <div class="highlight-item" style="border-right: 1px solid #bbf7d0;">
-                                    <div class="label">Top Performing Day</div>
-                                    <div class="value">${stats.topDay}</div>
-                                </div>
-                                <div class="highlight-item" style="border-right: 1px solid #bbf7d0;">
-                                    <div class="label">Most Active Engine</div>
-                                    <div class="value">${stats.activeEngine}</div>
-                                </div>
-                                <div class="highlight-item">
-                                    <div class="label">Average Rating</div>
-                                    <div class="rating-badge">⭐ ${stats.avgRating > 0 ? stats.avgRating : 'N/A'}</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- EMPLOYEES LOGS -->
+                    <h3 style="font-size: 12px; font-weight: 700; text-transform: uppercase; color: #6366f1; letter-spacing: 0.1em; margin: 0 0 16px 0;">Digital Employee Productivity</h3>
                     
-                    <div class="footer">
-                        <div class="footer-logo">Equipo Experto</div>
-                        <p>© ${new Date().getFullYear()} Equipo Experto. All rights reserved.</p>
-                        <p style="margin-top: 4px;">This report is automatically generated based on platform activity.</p>
+                    <!-- EMPLOYEE: REVIEWS (QR) -->
+                    <div style="background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div style="background: rgba(99, 102, 241, 0.1); color: #818cf8; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold;">📱</div>
+                            <div style="font-size: 14px; font-weight: 700; color: #ffffff;">Employee: Reviews (QR Code Funnel)</div>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">QR Code Scans</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeReviewsQr.scans}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Completed QR Surveys</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeReviewsQr.answers}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #9ca3af;">Google Reviews Left</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #10b981;">${stats.employeeReviewsQr.reviews}</td>
+                            </tr>
+                        </table>
                     </div>
+
+                    <!-- EMPLOYEE: REVIEWS (UPLOAD LIST) -->
+                    <div style="background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div style="background: rgba(168, 85, 247, 0.1); color: #c084fc; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold;">📊</div>
+                            <div style="font-size: 14px; font-weight: 700; color: #ffffff;">Employee: Reviews (Spreadsheet Imports)</div>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Questionnaires Sent</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeReviewsList.sent}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Emails Bounced</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ef4444;">${stats.employeeReviewsList.bounces}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Completed Questionnaires</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeReviewsList.answers}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Google Reviews Left</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #10b981;">${stats.employeeReviewsList.reviews}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #9ca3af;">Unsatisfied Customer Alerts</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #f59e0b;">${stats.employeeReviewsList.unsatisfied}</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- EMPLOYEE: LEAD CAPTURE & SCORING -->
+                    <div style="background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div style="background: rgba(236, 72, 153, 0.1); color: #f472b6; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold;">⚡</div>
+                            <div style="font-size: 14px; font-weight: 700; color: #ffffff;">Employee: Lead Scoring & Web Forms</div>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Form Views</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeLeadScoring.formViews}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Completed Inquiries</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeLeadScoring.completed}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">High-Priority Notifications</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #f59e0b;">${stats.employeeLeadScoring.highPriority}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #9ca3af;">Abandoned Questionnaires</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #9ca3af;">${stats.employeeLeadScoring.abandoned}</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- EMPLOYEE: AUTOMATIC FOLLOW-UP -->
+                    <div style="background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 20px; margin-bottom: 24px;">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div style="background: rgba(14, 165, 233, 0.1); color: #38bdf8; width: 32px; height: 32px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold;">✉️</div>
+                            <div style="font-size: 14px; font-weight: 700; color: #ffffff;">Employee: Follow-up Sequences</div>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Follow-up Emails Sent</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeFollowup.sent}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #9ca3af;">Contacts Who Answered</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #10b981;">${stats.employeeFollowup.replied}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <!-- FOOTER -->
+                <div style="background: #1f2937; padding: 24px 30px; text-align: center; border-top: 1px solid #374151;">
+                    <div style="font-size: 14px; font-weight: 800; color: #ffffff; margin-bottom: 4px;">Equipo Experto</div>
+                    <p style="font-size: 12px; color: #6b7280; margin: 0; line-height: 1.5;">© ${new Date().getFullYear()} Equipo Experto. All rights reserved.</p>
+                    <p style="font-size: 11px; color: #4b5563; margin-top: 4px; line-height: 1.5;">This report was automatically compiled by your automated digital workspaces.</p>
                 </div>
             </div>
         </body>

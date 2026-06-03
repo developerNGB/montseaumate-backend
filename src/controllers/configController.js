@@ -55,14 +55,14 @@ export const getReviewFunnelConfig = async (req, res) => {
 
         // Survey Funnel (New Multi-Rating System)
         const surveyUrl = `${baseUrl}/f/${config.automation_id}`;
-        const surveyQrCode = await qrcode.toDataURL(surveyUrl);
+        const surveyQrCode = await qrcode.toDataURL(`${surveyUrl}?source=qr`);
 
         // Google Review Funnel (Legacy/Direct)
         const reviewUrl = `${baseUrl}/r/${config.automation_id}`;
-        const reviewQrCode = await qrcode.toDataURL(reviewUrl);
+        const reviewQrCode = await qrcode.toDataURL(`${reviewUrl}?source=qr`);
         
         const leadUrl = `${baseUrl}/l/${config.automation_id}`;
-        const leadQrCode = await qrcode.toDataURL(leadUrl);
+        const leadQrCode = await qrcode.toDataURL(`${leadUrl}?source=qr`);
 
         return res.status(200).json({
             success: true,
@@ -143,7 +143,7 @@ export const ensureAutomationId = async (req, res) => {
         }
         const automationId = await resolveOrCreateAutomationId(req.user.id);
         const leadUrl = `${baseUrl}/l/${automationId}`;
-        const leadQrCode = await qrcode.toDataURL(leadUrl);
+        const leadQrCode = await qrcode.toDataURL(`${leadUrl}?source=qr`);
         return res.status(200).json({
             success: true,
             automation_id: automationId,
@@ -335,11 +335,11 @@ export const saveReviewFunnelConfig = async (req, res) => {
             });
         }
         const surveyUrl = `${baseUrl}/f/${automationId}`;
-        const surveyQrCode = await qrcode.toDataURL(surveyUrl);
+        const surveyQrCode = await qrcode.toDataURL(`${surveyUrl}?source=qr`);
         const reviewUrl = `${baseUrl}/r/${automationId}`;
-        const reviewQrCode = await qrcode.toDataURL(reviewUrl);
+        const reviewQrCode = await qrcode.toDataURL(`${reviewUrl}?source=qr`);
         const leadUrl = `${baseUrl}/l/${automationId}`;
-        const leadQrCode = await qrcode.toDataURL(leadUrl);
+        const leadQrCode = await qrcode.toDataURL(`${leadUrl}?source=qr`);
 
         return res.status(200).json({
             success: true,
