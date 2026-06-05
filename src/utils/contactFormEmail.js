@@ -27,9 +27,11 @@ export function buildContactFormEmail({ name, email, message, source = 'Equipo E
     });
     const token = crypto.randomBytes(4).toString('hex');
 
-    const subjectLabel =
-        source === 'Equipo Experto billing inquiry' ? 'billing' : 'contact form';
-    const subject = `New Message from ${name} - ${subjectLabel} - ${stamp}`;
+    const isCustomSales = source.toLowerCase().includes('billing') || source.toLowerCase().includes('sales');
+    const subjectLabel = isCustomSales ? 'Custom Sales Request' : 'contact form';
+    const emailTitle = isCustomSales ? 'CUSTOM SALES REQUEST' : 'NEW CONTACT MESSAGE';
+    
+    const subject = `${subjectLabel} from ${name} - ${stamp}`;
 
     return {
         from: 'Equipo Experto - Contact Form',
@@ -38,7 +40,7 @@ export function buildContactFormEmail({ name, email, message, source = 'Equipo E
         html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #f9f9f9; border-radius: 8px; overflow: hidden;">
                     <div style="background: #1a1a2e; padding: 24px 32px;">
-                        <h2 style="color: #ffffff; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 1px;">NEW CONTACT MESSAGE</h2>
+                        <h2 style="color: #ffffff; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 1px;">${emailTitle}</h2>
                         <p style="color: rgba(255,255,255,0.5); margin: 4px 0 0; font-size: 12px;">${safeSource}</p>
                     </div>
                     <div style="padding: 32px; background: #ffffff;">
@@ -62,7 +64,7 @@ export function buildContactFormEmail({ name, email, message, source = 'Equipo E
                     </div>
                 </div>
             `,
-        text: `NEW CONTACT MESSAGE\n${source}\n\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`,
+        text: `${emailTitle}\n${source}\n\nName: ${name}\nEmail: ${email}\n\nMessage:\n${message}`,
         messageId: `<contact-form.${sentAt.getTime()}.${token}@equipoexperto.com>`,
         headers: {
             'X-Entity-Ref-ID': crypto.randomUUID(),

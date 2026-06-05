@@ -115,7 +115,7 @@ export const submitContactForm = async (req, res) => {
 
         const source =
             req.body.source === 'billing'
-                ? 'Equipo Experto billing inquiry'
+                ? 'Equipo Experto billing inquiry (Custom Sales)'
                 : 'Equipo Experto contact form';
 
         const toEmail = getContactFormInbox();
@@ -533,7 +533,7 @@ export const submitLead = async (req, res) => {
             `SELECT rfs.user_id, rfs.lead_capture_active, rfs.is_active, rfs.auto_response_message,
                     rfs.google_review_url,
                     rfs.notification_email, rfs.whatsapp_number_fallback, rfs.whatsapp_enabled, rfs.email_enabled,
-                    u.email as owner_email
+                    u.email as owner_email, u.company_name
              FROM review_funnel_settings rfs
              JOIN users u ON rfs.user_id = u.id
              WHERE rfs.automation_id = $1`,
@@ -623,7 +623,8 @@ export const submitLead = async (req, res) => {
                     link: leadLink,
                     reviewUrl: reviewLink,
                     googleReviewUrl: result.rows[0].google_review_url,
-                    number: whatsappAuth.account_id || ''
+                    number: whatsappAuth.account_id || '',
+                    company: result.rows[0].company_name || 'our company'
                 });
 
                 if (result.rows[0].email_enabled !== false) {
@@ -683,7 +684,8 @@ export const submitLead = async (req, res) => {
                                             link: `${baseUrl}/r/${automation_id}`,
                                             reviewUrl: `${baseUrl}/r/${automation_id}`,
                                             googleReviewUrl: result.rows[0].google_review_url,
-                                            number: whatsappAuth.account_id || ''
+                                            number: whatsappAuth.account_id || '',
+                                            company: result.rows[0].company_name || 'our company'
                                         });
                                         await whatsappService.sendWhatsAppMessage(user_id, phone, step0Msg);
                                         await pool.query(

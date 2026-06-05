@@ -57,7 +57,7 @@ function normalizeEmail(value) {
 export function getContactFormFromEmail() {
     return (
         process.env.CONTACT_FORM_GOOGLE_FROM?.trim() ||
-        process.env.CONTAFORM_TO?.trim() ||
+        process.env.CONTACT_FORM_TO?.trim() ||
         process.env.EMAIL_USER?.trim() ||
         getContactFormInbox()
     );
@@ -146,31 +146,6 @@ export async function listContactFormSenderUserIds() {
             push(explicitSender);
         }
     }
-
-    const rawEditors = process.env.TRANSLATION_EDITOR_USER_IDS?.trim();
-    if (rawEditors) {
-        const editorIds = rawEditors.split(',').map((s) => s.trim()).filter(Boolean);
-        if (editorIds.length > 0) {
-            const editorsWithGoogle = await pool.query(
-                `SELECT user_id
-                 FROM integrations
-                 WHERE provider = 'google'
-                   AND refresh_token IS NOT NULL
-                   AND user_id::text = ANY($1::text[])
-                 ORDER BY updated_at DESC`,
-                [editorIds],
-            );
-            editorsWithGoogle.rows.forEach((r) => push(r.user_id));
-        }
-    }
-
-    const allGoogle = await pool.query(
-        `SELECT user_id
-         FROM integrations
-         WHERE provider = 'google' AND refresh_token IS NOT NULL
-         ORDER BY updated_at DESC`,
-    );
-    allGoogle.rows.forEach((r) => push(r.user_id));
 
     return ids;
 }

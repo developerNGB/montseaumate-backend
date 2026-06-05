@@ -39,13 +39,24 @@ export const dispatchFollowupForLead = async (
     }
     const link = lead.automation_id ? `${origin}/r/${lead.automation_id}?source=list` : origin;
 
+    let companyName = lead.company_name;
+    if (!companyName) {
+        try {
+            const userRes = await pool.query('SELECT company_name FROM users WHERE id = $1', [userId]);
+            companyName = userRes.rows[0]?.company_name;
+        } catch (e) {
+            console.error('[dispatchFollowupForLead] failed to fetch company name:', e.message);
+        }
+    }
+    companyName = companyName || 'our company';
+
     const personalisedMsg = injectPlaceholders(message || 'Hi {name}! Thanks for reaching out.', {
         name: leadName,
         full_name: leadName,
         link,
         reviewUrl: link,
         googleReviewUrl: lead.google_review_url,
-        company: lead.company_name || 'Our Team',
+        company: companyName,
     });
 
     console.log(

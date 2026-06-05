@@ -20,6 +20,11 @@ export const injectPlaceholders = (template, data = {}) => {
     const contactNumber = data.number || '';
     result = result.replace(/{{number}}/gi, contactNumber);
     result = result.replace(/{number}/gi, contactNumber);
+
+    // Replace {company} / {COMPANY} or {{company}} with data.company, data.company_name or 'our company'
+    const companyName = data.company || data.company_name || 'our company';
+    result = result.replace(/{{company}}/gi, companyName);
+    result = result.replace(/{company}/gi, companyName);
     
     return result;
 };

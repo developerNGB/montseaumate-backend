@@ -534,4 +534,5 @@ export const getEmployeeActivityStatus = async (req, res) => {
         console.error('[getEmployeeActivityStatus] Error:', err.message, err.stack);
         return res.status(500).json({ success: false, message: 'Server error fetching activity status.', error: err.message });
     }
+};
 
