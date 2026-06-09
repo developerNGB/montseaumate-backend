@@ -273,26 +273,27 @@ export const getEmployeeActivityStatus = async (req, res) => {
                 sentTodayRes,
                 isActiveRes,
                 sentRes,
+                contactsRes,
                 repliedRes
             ] = await Promise.all([
                 pool.query(`
                     SELECT MAX(created_at) as last_activity
-                    FROM activity_logs 
-                    WHERE user_id = $1 
+                    FROM activity_logs
+                    WHERE user_id = $1
                     AND automation_name = 'Lead Follow-up'
                     AND status = 'Success'
                 `, [userId]),
                 pool.query(`
                     SELECT COUNT(*) as pending_count
-                    FROM leads 
-                    WHERE user_id = $1 
+                    FROM leads
+                    WHERE user_id = $1
                     AND lead_status IN ('New', 'Contacted')
                     AND marketing_consent = true
                 `, [userId]),
                 pool.query(`
                     SELECT COUNT(*) as sent_today
-                    FROM activity_logs 
-                    WHERE user_id = $1 
+                    FROM activity_logs
+                    WHERE user_id = $1
                     AND automation_name = 'Lead Follow-up'
                     AND status = 'Success'
                     AND created_at >= $2
@@ -300,18 +301,28 @@ export const getEmployeeActivityStatus = async (req, res) => {
                 pool.query(`
                     SELECT is_active FROM lead_followup_settings WHERE user_id = $1
                 `, [userId]),
+                // Total individual emails sent (multiple per contact across sequence steps)
                 pool.query(`
                     SELECT (
-                        SELECT COUNT(*) FROM activity_logs 
+                        SELECT COUNT(*) FROM activity_logs
                         WHERE user_id = $1 AND automation_name = 'Lead Follow-up' AND status = 'Success'
                     ) + (
-                        SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
-                        FROM activity_logs 
+                        SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0)
+                        FROM activity_logs
                         WHERE user_id = $1 AND trigger_type = 'Bulk Trigger' AND status = 'Success'
                     ) as count
                 `, [userId]),
+                // Unique contacts who received at least one follow-up
                 pool.query(`
-                    SELECT COUNT(*) as count FROM leads 
+                    SELECT COUNT(DISTINCT lead_id) as count
+                    FROM activity_logs
+                    WHERE user_id = $1
+                    AND automation_name = 'Lead Follow-up'
+                    AND status = 'Success'
+                    AND lead_id IS NOT NULL
+                `, [userId]),
+                pool.query(`
+                    SELECT COUNT(*) as count FROM leads
                     WHERE user_id = $1 AND lead_status = 'Replied'
                 `, [userId])
             ]);
@@ -322,6 +333,7 @@ export const getEmployeeActivityStatus = async (req, res) => {
             isActive = isActiveRes.rows[0]?.is_active === true;
             detailedStats = {
                 sent: parseInt(sentRes.rows[0]?.count || 0),
+                contacts: parseInt(contactsRes.rows[0]?.count || 0),
                 replied: parseInt(repliedRes.rows[0]?.count || 0)
             };
 

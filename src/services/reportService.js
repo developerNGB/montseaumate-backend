@@ -1,6 +1,7 @@
 import pool from '../db/pool.js';
 import nodemailer from 'nodemailer';
 import { sendDynamicEmail } from './emailService.js';
+import PDFDocument from 'pdfkit';
 
 /**
  * Aggregates weekly stats for a specific user.
@@ -31,6 +32,7 @@ export const getWeeklyStats = async (userId) => {
         highPriorityRes,
         
         followupSentRes,
+        followupContactsRes,
         followupAnsweredRes
     ] = await Promise.all([
         pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
@@ -65,15 +67,26 @@ export const getWeeklyStats = async (userId) => {
         pool.query("SELECT COUNT(*) as count FROM activity_logs WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Lead Subscribed' AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
         pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND filtering_responses IS NOT NULL AND filtering_responses != '{}'::jsonb AND created_at >= NOW() - INTERVAL '7 days'", [userId]),
         
+        // Total emails sent (multiple per contact)
         pool.query(`
             SELECT (
-                SELECT COUNT(*) FROM activity_logs 
+                SELECT COUNT(*) FROM activity_logs
                 WHERE user_id = $1 AND automation_name = 'Lead Follow-up' AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'
             ) + (
-                SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0) 
-                FROM activity_logs 
+                SELECT COALESCE(SUM((metadata::jsonb->>'sent')::int), 0)
+                FROM activity_logs
                 WHERE user_id = $1 AND trigger_type = 'Bulk Trigger' AND status = 'Success' AND created_at >= NOW() - INTERVAL '7 days'
             ) as count
+        `, [userId]),
+        // Unique contacts who received a follow-up this week
+        pool.query(`
+            SELECT COUNT(DISTINCT lead_id) as count
+            FROM activity_logs
+            WHERE user_id = $1
+            AND automation_name = 'Lead Follow-up'
+            AND status = 'Success'
+            AND lead_id IS NOT NULL
+            AND created_at >= NOW() - INTERVAL '7 days'
         `, [userId]),
         pool.query("SELECT COUNT(*) as count FROM leads WHERE user_id = $1 AND lead_status = 'Replied' AND updated_at >= NOW() - INTERVAL '7 days'", [userId])
     ]);
@@ -110,6 +123,7 @@ export const getWeeklyStats = async (userId) => {
             highPriority: parseInt(highPriorityRes.rows[0]?.count || 0, 10)
         },
         employeeFollowup: {
+            contacts: parseInt(followupContactsRes.rows[0]?.count || 0, 10),
             sent: parseInt(followupSentRes.rows[0]?.count || 0, 10),
             replied: parseInt(followupAnsweredRes.rows[0]?.count || 0, 10)
         }
@@ -261,14 +275,22 @@ export const generateReportHtml = (user, stats) => {
                         </div>
                         <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
                             <tr style="border-bottom: 1px solid #374151;">
-                                <td style="padding: 8px 0; color: #9ca3af;">Follow-up Emails Sent</td>
+                                <td style="padding: 8px 0; color: #9ca3af;">Contacts in Sequence</td>
+                                <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeFollowup.contacts}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #374151;">
+                                <td style="padding: 8px 0; color: #9ca3af;">Total Emails Sent</td>
                                 <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #ffffff;">${stats.employeeFollowup.sent}</td>
                             </tr>
                             <tr>
-                                <td style="padding: 8px 0; color: #9ca3af;">Contacts Who Answered</td>
+                                <td style="padding: 8px 0; color: #9ca3af;">Contacts Who Replied</td>
                                 <td style="padding: 8px 0; text-align: right; font-weight: 700; color: #10b981;">${stats.employeeFollowup.replied}</td>
                             </tr>
                         </table>
+                        ${stats.employeeFollowup.contacts > 0 && stats.employeeFollowup.sent > 0 ? `
+                        <p style="margin: 10px 0 0; font-size: 11px; color: #6b7280; line-height: 1.5;">
+                            💡 ${stats.employeeFollowup.sent} emails were sent to ${stats.employeeFollowup.contacts} contacts — each contact receives multiple emails across the sequence steps.
+                        </p>` : ''}
                     </div>
                 </div>
                 
@@ -286,16 +308,167 @@ export const generateReportHtml = (user, stats) => {
 
 
 /**
- * Sends the Weekly Report Email
+ * Generates a PDF buffer of the weekly report using PDFKit.
+ * Pure JS — no browser required.
+ */
+export const generateReportPdf = (user, stats) => {
+    return new Promise((resolve, reject) => {
+        const doc = new PDFDocument({ margin: 40, size: 'A4' });
+        const chunks = [];
+        doc.on('data', (chunk) => chunks.push(chunk));
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+        doc.on('error', reject);
+
+        const DARK  = '#1e293b';
+        const MID   = '#475569';
+        const LIGHT = '#94a3b8';
+        const ACCENT = '#6366f1';
+        const GREEN  = '#16a34a';
+        const RED    = '#dc2626';
+        const AMBER  = '#d97706';
+        const pageW  = doc.page.width - 80; // 40 margins each side
+
+        const end = new Date();
+        const start = new Date();
+        start.setDate(start.getDate() - 7);
+        const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const dateStr = `${fmt(start)} – ${fmt(end)}`;
+
+        // ── HEADER ──────────────────────────────────────────────
+        doc.rect(0, 0, doc.page.width, 80).fill('#1e1b4b');
+        doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18)
+           .text('Weekly Performance Report', 40, 22);
+        doc.fillColor('#a5b4fc').font('Helvetica').fontSize(10)
+           .text(dateStr, 40, 46);
+        doc.fillColor('#a5b4fc').fontSize(9)
+           .text(`${user.company_name || user.name || 'Partner'}`, 40, 60);
+        doc.moveDown(3);
+
+        // ── SECTION HELPER ──────────────────────────────────────
+        const sectionTitle = (title, color = ACCENT) => {
+            doc.moveDown(0.4);
+            doc.fillColor(color).font('Helvetica-Bold').fontSize(8)
+               .text(title.toUpperCase(), { characterSpacing: 1.2 });
+            doc.moveDown(0.2);
+        };
+
+        // ── OVERVIEW ROW ────────────────────────────────────────
+        sectionTitle('Overview — Last 7 Days');
+        const cols = [
+            { label: 'New Leads',      value: stats.newLeads,          color: '#3b82f6' },
+            { label: 'Google Reviews', value: stats.reviewsCollected,   color: GREEN },
+            { label: 'Avg Rating',     value: stats.avgRating > 0 ? `⭐ ${stats.avgRating}` : 'N/A', color: AMBER },
+        ];
+        const cw = pageW / 3;
+        cols.forEach((col, i) => {
+            const x = 40 + i * cw;
+            const y = doc.y;
+            doc.rect(x, y, cw - 6, 48).fill('#f8fafc').stroke('#e2e8f0');
+            doc.fillColor(LIGHT).font('Helvetica').fontSize(7)
+               .text(col.label.toUpperCase(), x + 8, y + 8, { width: cw - 20, characterSpacing: 0.8 });
+            doc.fillColor(col.color).font('Helvetica-Bold').fontSize(18)
+               .text(String(col.value), x + 8, y + 20, { width: cw - 20 });
+        });
+        doc.moveDown(3.8);
+
+        // ── ROW TABLE HELPER ────────────────────────────────────
+        const tableRow = (label, value, valueColor = DARK, isLast = false) => {
+            const y = doc.y;
+            doc.fillColor(MID).font('Helvetica').fontSize(9).text(label, 48, y, { width: pageW - 80 });
+            doc.fillColor(valueColor).font('Helvetica-Bold').fontSize(9)
+               .text(String(value), 48, y, { width: pageW, align: 'right' });
+            if (!isLast) {
+                doc.moveTo(48, doc.y + 2).lineTo(48 + pageW, doc.y + 2).strokeColor('#f1f5f9').stroke();
+            }
+            doc.moveDown(0.5);
+        };
+
+        const cardHeader = (emoji, title) => {
+            const y = doc.y;
+            doc.rect(40, y, pageW, 26).fill('#f8fafc');
+            doc.fillColor(DARK).font('Helvetica-Bold').fontSize(10)
+               .text(`${emoji}  ${title}`, 48, y + 7);
+            doc.moveDown(1.4);
+        };
+
+        // ── REVIEW EMPLOYEE — QR ────────────────────────────────
+        sectionTitle('Digital Employee Productivity');
+        cardHeader('📱', 'Review Employee — QR Code');
+        tableRow('QR Code Scans',         stats.employeeReviewsQr.scans);
+        tableRow('Questions Answered',    stats.employeeReviewsQr.answers);
+        tableRow('Google Reviews Left',   stats.employeeReviewsQr.reviews, GREEN, true);
+        doc.moveDown(0.6);
+
+        // ── REVIEW EMPLOYEE — UPLOAD LIST ────────────────────────
+        cardHeader('📊', 'Review Employee — Upload List');
+        tableRow('Questionnaires Sent',       stats.employeeReviewsList.sent);
+        tableRow('Emails Bounced',            stats.employeeReviewsList.bounces,   stats.employeeReviewsList.bounces > 0 ? RED : DARK);
+        tableRow('Completed Questionnaires',  stats.employeeReviewsList.answers);
+        tableRow('Google Reviews Left',       stats.employeeReviewsList.reviews,   GREEN);
+        tableRow('Unsatisfied Alerts Sent',   stats.employeeReviewsList.unsatisfied, stats.employeeReviewsList.unsatisfied > 0 ? AMBER : DARK, true);
+        doc.moveDown(0.6);
+
+        // ── LEAD CAPTURE ────────────────────────────────────────
+        cardHeader('⚡', 'Lead Capture Employee — Form / WhatsApp');
+        tableRow('Form Views',              stats.employeeLeadScoring.formViews);
+        tableRow('Completed Questionnaires', stats.employeeLeadScoring.completed);
+        tableRow('Abandoned',               stats.employeeLeadScoring.abandoned,   stats.employeeLeadScoring.abandoned > 0 ? AMBER : DARK);
+        tableRow('High-Priority Notifications', stats.employeeLeadScoring.highPriority, stats.employeeLeadScoring.highPriority > 0 ? RED : DARK, true);
+        doc.moveDown(0.6);
+
+        // ── FOLLOW-UP ────────────────────────────────────────────
+        cardHeader('✉️', 'Follow-up Employee');
+        tableRow('Contacts in Sequence',      stats.employeeFollowup.contacts ?? 0);
+        tableRow('Total Emails Sent',         stats.employeeFollowup.sent);
+        tableRow('Replied (follow-up stopped)', stats.employeeFollowup.replied, GREEN, true);
+        doc.moveDown(1);
+
+        // ── FOOTER ───────────────────────────────────────────────
+        doc.fillColor(LIGHT).font('Helvetica').fontSize(8)
+           .text(
+               `© ${new Date().getFullYear()} Equipo Experto · Automatically generated weekly report`,
+               40, doc.page.height - 40,
+               { width: pageW, align: 'center' }
+           );
+
+        doc.end();
+    });
+};
+
+/**
+ * Sends the Weekly Report Email with PDF attachment
  */
 export const sendWeeklyReport = async (user, stats) => {
     const htmlContent = generateReportHtml(user, stats);
 
-    return sendDynamicEmail(user.id, {
+    // Generate PDF attachment
+    let pdfBuffer = null;
+    try {
+        pdfBuffer = await generateReportPdf(user, stats);
+    } catch (pdfErr) {
+        console.error('[WeeklyReport] PDF generation failed (sending email only):', pdfErr.message);
+    }
+
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 7);
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const pdfFilename = `weekly-report-${fmt(start).replace(' ', '-')}-${fmt(end).replace(' ', '-')}.pdf`;
+
+    const mailOptions = {
         to: user.email,
         subject: `📈 Weekly Report: ${stats.newLeads} New Leads & ${stats.reviewsCollected} Reviews`,
         html: htmlContent,
-    });
+        ...(pdfBuffer && {
+            attachments: [{
+                filename: pdfFilename,
+                content: pdfBuffer,
+                contentType: 'application/pdf',
+            }],
+        }),
+    };
+
+    return sendDynamicEmail(user.id, mailOptions);
 };
 
 /**
