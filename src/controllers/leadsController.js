@@ -494,7 +494,7 @@ export const importLeads = async (req, res) => {
 
         const insertRes = await pool.query(
             `INSERT INTO leads
-                 (user_id, full_name, email, phone, notes, source, lead_group, lead_status, marketing_consent, followup_step_index, last_followup_at, created_at)
+                 (user_id, full_name, email, phone, notes, source, lead_group, lead_status, consent_given, marketing_consent, followup_step_index, last_followup_at, created_at)
              SELECT $1,
                     unnest($2::text[]),
                     unnest($3::text[]),
@@ -502,7 +502,7 @@ export const importLeads = async (req, res) => {
                     unnest($5::text[]),
                     unnest($6::text[]),
                     unnest($7::text[]),
-                    'New', true, 0, $8, NOW()
+                    'New', true, true, 0, $8, NOW()
              ON CONFLICT DO NOTHING
              RETURNING *`,
             [userId, names, emails, phones, notesArr, sources, groups, lastFollowupAt]
