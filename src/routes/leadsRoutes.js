@@ -5,6 +5,7 @@ import {
     getLeads,
     getLeadFolders,
     updateFolderMessage,
+    deleteLeadFolder,
     updateLeadStatus,
     importLeads,
     triggerLeadFollowup,
@@ -34,6 +35,7 @@ router.get('/', getLeads);
 router.get('/folders', getLeadFolders);
 router.put('/folders/message', express.json(), updateFolderMessage);
 router.post('/folders/start-followup', express.json(), startFolderFollowup);
+router.delete('/folders/:name', deleteLeadFolder);
 
 // GET /api/leads/:id/timeline
 router.get('/:id/timeline', getLeadTimeline);

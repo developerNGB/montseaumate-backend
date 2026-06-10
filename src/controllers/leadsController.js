@@ -100,6 +100,38 @@ export const updateFolderMessage = async (req, res) => {
     }
 };
 
+/**
+ * DELETE /api/leads/folders/:name — delete a folder.
+ * Leads inside are reassigned to the default group; the folder config row is removed.
+ */
+export const deleteLeadFolder = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const folderName = normalizeLeadGroup(req.params.name, DEFAULT_LEAD_GROUP);
+
+        if (folderName === DEFAULT_LEAD_GROUP) {
+            return res.status(400).json({ success: false, message: 'The default folder cannot be deleted.' });
+        }
+
+        const movedRes = await pool.query(
+            `UPDATE leads SET lead_group = $3
+             WHERE user_id = $1
+               AND COALESCE(NULLIF(TRIM(lead_group), ''), $3) = $2`,
+            [userId, folderName, DEFAULT_LEAD_GROUP]
+        );
+
+        await pool.query(
+            `DELETE FROM lead_folders WHERE user_id = $1 AND name = $2`,
+            [userId, folderName]
+        );
+
+        return res.status(200).json({ success: true, moved: movedRes.rowCount });
+    } catch (err) {
+        console.error('[deleteLeadFolder] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
 export const getLeads = async (req, res) => {
     try {
         const { search, source, status, group, startDate, endDate, ids } = req.query;
