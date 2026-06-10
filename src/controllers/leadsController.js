@@ -476,12 +476,11 @@ export const importLeads = async (req, res) => {
             });
         }
 
-        // 4. Bulk INSERT — cron timing depends on which employee owns this import
+        // 4. Bulk INSERT — imported leads already have full info, no "fill the form" wait.
+        // Backdate last_followup_at so the cron fires the first sequence step immediately.
         let lastFollowupAt = null;
-        if (importPurpose === 'followup' && followupActive) {
+        if ((importPurpose === 'followup' || importPurpose === 'capture') && followupActive) {
             lastFollowupAt = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
-        } else if (importPurpose === 'capture' && followupActive) {
-            lastFollowupAt = new Date().toISOString();
         }
 
         const names    = newLeads.map(l => l.full_name || extractNameFromEmail(l.email) || 'Imported Lead');
