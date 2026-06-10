@@ -206,6 +206,134 @@ async function findGoogleBusinessReviewLink({ userId, companyName = '', email = 
     };
 }
 
+function formatStorefrontAddress(address) {
+    if (!address) return '';
+    const lines = Array.isArray(address.addressLines) ? address.addressLines : [];
+    const parts = [
+        ...lines,
+        address.locality,
+        address.administrativeArea,
+        address.postalCode,
+    ].filter(Boolean);
+    return parts.join(', ');
+}
+
+/**
+ * GET /api/integrations/google/business-listings
+ * Lists every Google Business Profile location on the connected Google account,
+ * with verification status, so the user can pick the one to connect.
+ */
+export const getGoogleBusinessListings = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { access_token: accessToken } = await getValidGoogleTokens(userId);
+        if (!accessToken) {
+            return res.status(401).json({ success: false, code: 'GOOGLE_TOKEN_UNAVAILABLE', message: 'Google is not connected.' });
+        }
+
+        const accountsResult = await fetchGoogleJson(
+            'https://mybusinessaccountmanagement.googleapis.com/v1/accounts',
+            accessToken
+        );
+
+        if (!accountsResult.response.ok) {
+            const status = accountsResult.response.status === 403 ? 403 : 502;
+            return res.status(status).json({
+                success: false,
+                code: status === 403 ? 'GBP_SCOPE_OR_API_UNAVAILABLE' : 'GBP_ACCOUNTS_FETCH_FAILED',
+                message: accountsResult.data?.error?.message || 'Could not fetch Google Business accounts.',
+            });
+        }
+
+        const accounts = Array.isArray(accountsResult.data?.accounts) ? accountsResult.data.accounts : [];
+        const listings = [];
+
+        for (const account of accounts) {
+            const accountName = String(account?.name || '').trim();
+            if (!accountName) continue;
+
+            let nextPageToken = '';
+            let pageGuard = 0;
+
+            do {
+                const params = new URLSearchParams({
+                    readMask: 'title,storefrontAddress,metadata,locationState',
+                    pageSize: '100',
+                });
+                if (nextPageToken) params.set('pageToken', nextPageToken);
+
+                const locationsResult = await fetchGoogleJson(
+                    `https://mybusinessbusinessinformation.googleapis.com/v1/${accountName}/locations?${params.toString()}`,
+                    accessToken
+                );
+
+                if (!locationsResult.response.ok) {
+                    nextPageToken = '';
+                    break;
+                }
+
+                const locations = Array.isArray(locationsResult.data?.locations) ? locationsResult.data.locations : [];
+                for (const location of locations) {
+                    listings.push({
+                        name: location.name || '',
+                        title: location.title || '',
+                        address: formatStorefrontAddress(location.storefrontAddress),
+                        isVerified: !!location.locationState?.isVerified,
+                        hasPendingVerification: !!location.locationState?.hasPendingVerification,
+                        reviewUrl: location.metadata?.newReviewUri || '',
+                        mapsUri: location.metadata?.mapsUri || '',
+                        placeId: location.metadata?.placeId || '',
+                    });
+                }
+
+                nextPageToken = String(locationsResult.data?.nextPageToken || '').trim();
+                pageGuard += 1;
+            } while (nextPageToken && pageGuard < 10);
+        }
+
+        return res.status(200).json({ success: true, listings });
+    } catch (err) {
+        console.error('[getGoogleBusinessListings] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not load Google Business listings.' });
+    }
+};
+
+/**
+ * POST /api/integrations/google/business-listing
+ * Saves the chosen Google Business Profile listing as the user's review link source.
+ */
+export const selectGoogleBusinessListing = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { reviewUrl = '', mapsUri = '', placeId = '', title = '' } = req.body || {};
+        const url = String(reviewUrl || mapsUri || '').trim();
+        if (!url) {
+            return res.status(400).json({ success: false, message: 'A review or maps link is required.' });
+        }
+
+        await pool.query(
+            `INSERT INTO review_funnel_settings (user_id, automation_id, google_review_url, notification_email)
+             VALUES ($1, md5(random()::text), $2, '')
+             ON CONFLICT (user_id) DO UPDATE SET
+                google_review_url = EXCLUDED.google_review_url,
+                updated_at = NOW()`,
+            [userId, url]
+        );
+
+        await pool.query(
+            `UPDATE integrations
+             SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb, updated_at = NOW()
+             WHERE user_id = $1 AND provider = 'google'`,
+            [userId, JSON.stringify({ business: { title, placeId, mapsUri, reviewUrl: url } })]
+        );
+
+        return res.status(200).json({ success: true, businessName: title, reviewUrl: url, mapsUri, placeId });
+    } catch (err) {
+        console.error('[selectGoogleBusinessListing] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not save business listing.' });
+    }
+};
+
 async function ensureOAuthConnectTicketsTable() {
     await pool.query(`
         CREATE TABLE IF NOT EXISTS oauth_connect_tickets (
