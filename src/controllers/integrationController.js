@@ -22,6 +22,12 @@ const GENERIC_EMAIL_DOMAINS = new Set([
     'protonmail.com',
 ]);
 
+// In-memory cache for GBP listings — Google's My Business Account Management
+// API has a very low default quota (often 1 request/minute per project), so
+// repeated modal opens within this window are served from cache.
+const GBP_LISTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
+const gbpListingsCache = new Map();
+
 function normalizeText(value = '') {
     return String(value || '')
         .toLowerCase()
@@ -231,17 +237,44 @@ export const getGoogleBusinessListings = async (req, res) => {
             return res.status(401).json({ success: false, code: 'GOOGLE_TOKEN_UNAVAILABLE', message: 'Google is not connected.' });
         }
 
+        // Serve from cache if we fetched recently — GBP account API quota is very low (often 1 req/min).
+        const cached = gbpListingsCache.get(userId);
+        if (cached && (Date.now() - cached.fetchedAt) < GBP_LISTINGS_CACHE_TTL_MS) {
+            return res.status(200).json({ success: true, listings: cached.listings, cached: true });
+        }
+
         const accountsResult = await fetchGoogleJson(
             'https://mybusinessaccountmanagement.googleapis.com/v1/accounts',
             accessToken
         );
 
         if (!accountsResult.response.ok) {
-            const status = accountsResult.response.status === 403 ? 403 : 502;
-            return res.status(status).json({
+            const status = accountsResult.response.status;
+            const rawMessage = accountsResult.data?.error?.message || '';
+            const apiDisabled = /has not been used in project|it is disabled|SERVICE_DISABLED/i.test(rawMessage);
+            const quotaExceeded = status === 429 || /quota exceeded|RESOURCE_EXHAUSTED/i.test(rawMessage);
+
+            if (quotaExceeded) {
+                // If we have a stale cache, serve it rather than failing outright.
+                if (cached) {
+                    return res.status(200).json({ success: true, listings: cached.listings, cached: true, stale: true });
+                }
+                return res.status(429).json({
+                    success: false,
+                    code: 'GBP_QUOTA_EXCEEDED',
+                    message: 'Google is rate-limiting this request right now. Please wait a minute and try again.',
+                });
+            }
+
+            const httpStatus = status === 403 ? 403 : 502;
+            return res.status(httpStatus).json({
                 success: false,
-                code: status === 403 ? 'GBP_SCOPE_OR_API_UNAVAILABLE' : 'GBP_ACCOUNTS_FETCH_FAILED',
-                message: accountsResult.data?.error?.message || 'Could not fetch Google Business accounts.',
+                code: apiDisabled
+                    ? 'GBP_API_DISABLED'
+                    : (httpStatus === 403 ? 'GBP_SCOPE_OR_API_UNAVAILABLE' : 'GBP_ACCOUNTS_FETCH_FAILED'),
+                message: apiDisabled
+                    ? 'The Google Business Profile API is not enabled for this project yet. Enable the "My Business Account Management API" and "My Business Business Information API" in Google Cloud Console, then try again.'
+                    : (rawMessage || 'Could not fetch Google Business accounts.'),
             });
         }
 
@@ -291,6 +324,7 @@ export const getGoogleBusinessListings = async (req, res) => {
             } while (nextPageToken && pageGuard < 10);
         }
 
+        gbpListingsCache.set(userId, { listings, fetchedAt: Date.now() });
         return res.status(200).json({ success: true, listings });
     } catch (err) {
         console.error('[getGoogleBusinessListings] Error:', err.message);
