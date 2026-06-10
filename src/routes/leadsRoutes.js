@@ -8,6 +8,7 @@ import {
     updateLeadStatus,
     importLeads,
     triggerLeadFollowup,
+    previewLeadMessage,
     triggerBulkFollowup,
     deleteLead,
     bulkDeleteLeads,
@@ -36,6 +37,9 @@ router.post('/folders/start-followup', express.json(), startFolderFollowup);
 
 // GET /api/leads/:id/timeline
 router.get('/:id/timeline', getLeadTimeline);
+
+// GET /api/leads/:id/preview-message — read-only preview of next outgoing message
+router.get('/:id/preview-message', previewLeadMessage);
 
 // POST /api/leads/:id/send-email — send an email to this lead (multipart for attachments)
 router.post('/:id/send-email', upload.array('files', 5), sendLeadEmail);

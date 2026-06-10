@@ -1,10 +1,11 @@
 import pool from '../db/pool.js';
-import { sanitizeLeadRow, sanitizeLeads } from '../utils/leadPrivacy.js';
+import { sanitizeLeadRow, sanitizeLeads, sanitizeLeadEmailForPublic } from '../utils/leadPrivacy.js';
 import { normalizeLeadGroup, DEFAULT_LEAD_GROUP } from '../utils/leadGroups.js';
 import { upsertLeadFolder, getFolderMessage } from '../utils/leadFolders.js';
 import { dispatchFollowupForLead } from '../services/leadDispatchService.js';
 import { executeBulkLeadMessaging } from '../services/bulkLeadMessaging.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
+import { injectPlaceholders } from '../utils/templateUtils.js';
 
 /** Re-export for activity-log retry and internal tooling */
 export { dispatchFollowupForLead };
@@ -694,6 +695,94 @@ export const triggerLeadFollowup = async (req, res) => {
                 ? err.message
                 : 'Could not send follow-up. Check WhatsApp and Gmail under Integrations.',
         });
+    }
+};
+
+/**
+ * GET /api/leads/:id/preview-message — read-only preview of the next
+ * automated message this lead would receive, with placeholders resolved.
+ * No side effects (no send, no DB update).
+ */
+export const previewLeadMessage = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const query = `
+            SELECT
+                l.*,
+                u.company_name,
+                rfs.auto_response_message as funnel_msg, rfs.google_review_url,
+                lfs.followup_sequence, lfs.is_active as lfs_active
+            FROM leads l
+            JOIN users u ON l.user_id = u.id
+            LEFT JOIN review_funnel_settings rfs ON rfs.user_id = u.id
+            LEFT JOIN lead_followup_settings lfs ON lfs.user_id = u.id
+            WHERE l.id = $1 AND l.user_id = $2
+        `;
+        const leadResult = await pool.query(query, [id, req.user.id]);
+
+        if (leadResult.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Lead not found' });
+        }
+
+        const lead = leadResult.rows[0];
+
+        // Same precedence as triggerLeadFollowup: funnel default → sequence step → folder override.
+        let messageToSend = lead.funnel_msg;
+
+        const sequence = typeof lead.followup_sequence === 'string'
+            ? JSON.parse(lead.followup_sequence)
+            : (lead.followup_sequence || []);
+
+        let stepInfo = null;
+        if (sequence.length > 0) {
+            const currentIndex = lead.followup_step_index || 0;
+            if (currentIndex < sequence.length) {
+                messageToSend = sequence[currentIndex].message;
+                stepInfo = { index: currentIndex, total: sequence.length };
+            }
+        }
+
+        if (!messageToSend) {
+            messageToSend = 'Hi {name}! Thanks for reaching out.';
+        }
+
+        const folderMsg = await getFolderMessage(req.user.id, lead.lead_group || DEFAULT_LEAD_GROUP);
+        if (folderMsg) messageToSend = folderMsg;
+
+        const recipientEmail = sanitizeLeadEmailForPublic(lead.email);
+        const leadName =
+            lead.full_name && lead.full_name !== 'there' && lead.full_name !== 'Imported Lead'
+                ? lead.full_name
+                : extractNameFromEmail(recipientEmail) || 'there';
+
+        const origin = frontendBaseUrl() || '';
+        const link = lead.automation_id ? `${origin}/r/${lead.automation_id}?source=list` : origin;
+        const companyName = lead.company_name || 'our company';
+
+        const preview = injectPlaceholders(messageToSend, {
+            name: leadName,
+            full_name: leadName,
+            link,
+            reviewUrl: link,
+            googleReviewUrl: lead.google_review_url,
+            company: companyName,
+        });
+
+        return res.status(200).json({
+            success: true,
+            preview,
+            channels: {
+                whatsapp: !!lead.phone,
+                email: !!lead.email,
+            },
+            sequenceStep: stepInfo,
+            followupActive: !!lead.lfs_active,
+            leadStatus: lead.lead_status,
+        });
+    } catch (err) {
+        console.error('[previewLeadMessage] error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not generate message preview' });
     }
 };
 
