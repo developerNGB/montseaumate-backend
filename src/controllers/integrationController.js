@@ -546,7 +546,7 @@ export const connectProvider = async (req, res) => {
                     'https://www.googleapis.com/auth/userinfo.email',
                     'https://www.googleapis.com/auth/userinfo.profile',
                     'https://www.googleapis.com/auth/gmail.send',
-                    'https://www.googleapis.com/auth/business.manage',
+                    // 'https://www.googleapis.com/auth/business.manage', // GBP integration disabled for now
                 ];
                 const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(callbackUrl)}&response_type=code&scope=${encodeURIComponent(scopes.join(' '))}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
                 return res.redirect(authUrl);
