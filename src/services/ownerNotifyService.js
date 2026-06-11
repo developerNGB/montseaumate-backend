@@ -187,6 +187,30 @@ export async function notifyOwnerLeadImportComplete(
     });
 }
 
+/** Instant alert when a newly captured lead scores "high" — surfaced separately from the routine new-lead notice. */
+export async function notifyOwnerHotLead(
+    userId,
+    { fullName, email, phone, message, score, matchedKeywords = [], leadId }
+) {
+    const targets = await loadOwnerNotifyTargets(userId);
+    const base = frontendBaseUrl();
+    const dashLeads = base ? `${base}/dashboard/leads${leadId ? `?lead=${leadId}` : ''}` : '';
+
+    let body = `🔥 Hot lead alert!\n\nName: ${fullName}\nEmail: ${email}\nPhone: ${phone}\nScore: ${score}/100`;
+    if (message) body += `\nMessage: ${message}`;
+    if (matchedKeywords.length > 0) {
+        body += `\n\nWhy it's hot: mentioned "${matchedKeywords.join('", "')}"`;
+    }
+    body += `\n\nReach out fast — leads contacted within minutes convert far better.`;
+    if (dashLeads) body += `\n\n${dashLeads}`;
+
+    await notifyOwnerChannels(userId, {
+        subject: `🔥 Hot lead: ${fullName}`,
+        message: body,
+        ...targets,
+    });
+}
+
 export async function notifyOwnerBulkSendComplete(
     userId,
     { purpose = 'review', sent = 0, total = 0, folderName = null }

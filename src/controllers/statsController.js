@@ -494,10 +494,9 @@ export const getEmployeeActivityStatus = async (req, res) => {
                     WHERE user_id = $1 AND automation_name = 'Lead Capture Form' AND trigger_type = 'Lead Subscribed'
                 `, [userId]),
                 pool.query(`
-                    SELECT COUNT(*) as count FROM leads 
-                    WHERE user_id = $1 
-                    AND filtering_responses IS NOT NULL 
-                    AND filtering_responses != '{}'::jsonb
+                    SELECT COUNT(*) as count FROM leads
+                    WHERE user_id = $1
+                    AND hot_alert_sent_at IS NOT NULL
                 `, [userId])
             ]);
 

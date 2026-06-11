@@ -6,6 +6,7 @@ import { dispatchFollowupForLead } from '../services/leadDispatchService.js';
 import { executeBulkLeadMessaging } from '../services/bulkLeadMessaging.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders } from '../utils/templateUtils.js';
+import { computeLeadScore } from '../utils/leadScoring.js';
 
 /** Re-export for activity-log retry and internal tooling */
 export { dispatchFollowupForLead };
@@ -238,7 +239,22 @@ export const updateLeadStatus = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Lead not found' });
         }
 
-        return res.status(200).json({ success: true, lead: sanitizeLeadRow(result.rows[0]) });
+        // Recompute score (lead_status influences it) so the score bar stays accurate.
+        let lead = result.rows[0];
+        if (lead_status) {
+            const { score, tier } = computeLeadScore({
+                email: lead.email, phone: lead.phone, consent_given: lead.consent_given,
+                marketing_consent: lead.marketing_consent, lead_status: lead.lead_status,
+                message: lead.message, filtering_responses: lead.filtering_responses,
+            });
+            const updated = await pool.query(
+                `UPDATE leads SET lead_score = $1, lead_score_tier = $2 WHERE id = $3 RETURNING *`,
+                [score, tier, id]
+            );
+            lead = updated.rows[0];
+        }
+
+        return res.status(200).json({ success: true, lead: sanitizeLeadRow(lead) });
     } catch (err) {
         console.error('[updateLeadStatus] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });

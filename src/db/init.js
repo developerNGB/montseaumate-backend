@@ -157,6 +157,9 @@ const initDB = async () => {
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS filtering_responses JSONB DEFAULT '{}'`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS followup_step_index INTEGER DEFAULT 0`);
         await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_followup_at TIMESTAMPTZ`);
+        await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_score INTEGER DEFAULT 0`);
+        await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_score_tier VARCHAR(10) DEFAULT 'low'`);
+        await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS hot_alert_sent_at TIMESTAMPTZ`);
         // Unique indices for fast dedup â€” partial so empty strings don't conflict
         await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_email ON leads (user_id, lower(email)) WHERE email IS NOT NULL AND email != ''`);
         await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_user_phone ON leads (user_id, regexp_replace(phone, '[^0-9]', '', 'g')) WHERE phone IS NOT NULL AND phone != ''`);
@@ -233,7 +236,8 @@ const initDB = async () => {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
-        console.log('  âœ… helper tables ready');\n        // 10. ERROR EVENTS (Admin-only Control Panel)
+        console.log('  âœ… helper tables ready');
+        // 10. ERROR EVENTS (Admin-only Control Panel)
         await client.query(`
             CREATE TABLE IF NOT EXISTS error_events (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

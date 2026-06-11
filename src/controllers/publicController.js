@@ -13,6 +13,8 @@ import {
 import { getContactFormInbox } from '../services/supportMailService.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
+import { computeLeadScore } from '../utils/leadScoring.js';
+import { notifyOwnerHotLead } from '../services/ownerNotifyService.js';
 
 // Load env vars for this controller
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -562,6 +564,15 @@ export const submitLead = async (req, res) => {
         );
         const lead_id = leadInsert.rows[0].id;
 
+        // 1b. Score the lead (used for the dashboard score bar + hot-lead alerts)
+        const { score: leadScore, tier: leadScoreTier, matchedKeywords } = computeLeadScore({
+            email, phone, consent_given, marketing_consent, lead_status: 'New', message, filtering_responses
+        });
+        await pool.query(
+            `UPDATE leads SET lead_score = $1, lead_score_tier = $2 WHERE id = $3`,
+            [leadScore, leadScoreTier, lead_id]
+        );
+
         // 2. Log Activity
         await pool.query(
             `INSERT INTO activity_logs (user_id, automation_name, trigger_type, status, detail, metadata, created_at)
@@ -630,6 +641,20 @@ export const submitLead = async (req, res) => {
                 if (result.rows[0].email_enabled !== false) {
                     await sendInternalEmail(user_id, result.rows[0].notification_email || owner_email, 'New lead captured', ownerMsg);
                     await sendInternalEmail(user_id, email, 'Thanks for contacting us', finalCustomerMsg);
+                }
+
+                // 🔥 HOT LEAD INSTANT ALERT — extra ping when this lead scores "high"
+                if (leadScoreTier === 'high') {
+                    try {
+                        await pool.query(`UPDATE leads SET hot_alert_sent_at = NOW() WHERE id = $1`, [lead_id]);
+                        await notifyOwnerHotLead(user_id, {
+                            fullName: full_name, email, phone, message,
+                            score: leadScore, matchedKeywords, leadId: lead_id
+                        });
+                        console.log(`[HotLead] 🔥 Alert sent for lead ${lead_id} (score ${leadScore})`);
+                    } catch (hotErr) {
+                        console.error(`[HotLead] ❌ Alert failed:`, hotErr.message);
+                    }
                 }
 
                 console.log(`[WA-Check] token="${whatsappAuth.access_token}" | account="${whatsappAuth.account_id}"`);
