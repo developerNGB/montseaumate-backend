@@ -569,23 +569,6 @@ export const importLeads = async (req, res) => {
             } catch (folderErr) {
                 console.error('[importLeads] lead_folders upsert failed:', folderErr.message);
             }
-
-            try {
-                await logActivity({
-                    userId,
-                    automationName: isReviewImport ? 'Review Funnel' : 'Lead Import',
-                    triggerType: isReviewImport ? 'Review request batch' : 'Contact import',
-                    status: 'Success',
-                    detail: `${savedLeads.length} contact${savedLeads.length === 1 ? '' : 's'} added to ${defaultGroup}`,
-                    metadata: {
-                        folder: defaultGroup,
-                        source: sourceHint || 'import',
-                        lead_ids: savedLeads.map((l) => l.id),
-                    },
-                });
-            } catch (logErr) {
-                console.error('[importLeads] activity log failed:', logErr.message);
-            }
         }
 
         // Respond immediately — messaging is fire-and-forget
