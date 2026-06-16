@@ -1548,6 +1548,221 @@ export const getGoogleAnalytics = async (req, res) => {
     }
 };
 
+/**
+ * GET /api/integrations/google/optimization
+ * Calculates Google Business Profile completeness score and returns a checklist of tasks.
+ */
+export const getGoogleOptimization = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // 1. Get Google integration
+        const result = await pool.query(
+            'SELECT metadata FROM integrations WHERE user_id = $1 AND provider = $2',
+            [userId, 'google']
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(200).json({
+                success: true,
+                connected: false,
+                message: 'Google is not connected.'
+            });
+        }
+
+        let metadata = result.rows[0].metadata || {};
+        if (typeof metadata === 'string') {
+            try { metadata = JSON.parse(metadata); } catch { metadata = {}; }
+        }
+
+        const business = metadata.business || {};
+        const optimizationCompleted = metadata.optimizationCompleted || {};
+        const posts = metadata.posts || [];
+
+        // 2. Fetch user profile just in case we need user details (company name, phone)
+        const userRes = await pool.query(
+            'SELECT company_name, phone FROM users WHERE id = $1 LIMIT 1',
+            [userId]
+        );
+        const user = userRes.rows[0] || {};
+
+        // Check real Google API details if connected and not mock
+        const { access_token: accessToken } = await getValidGoogleTokens(userId);
+        let gbpData = null;
+        if (accessToken && !accessToken.startsWith('mock_') && business.name) {
+            try {
+                // Try fetching location details from google
+                const gbpRes = await fetchGoogleJson(
+                    `https://mybusinessbusinessinformation.googleapis.com/v1/${business.name}?readMask=websiteUri,regularHours,phoneNumbers,profile,categories`,
+                    accessToken
+                );
+                if (gbpRes.response.ok && gbpRes.data) {
+                    gbpData = gbpRes.data;
+                }
+            } catch (err) {
+                console.warn('[getGoogleOptimization] Failed to fetch live Google Business Info:', err.message);
+            }
+        }
+
+        // Define tasks and perform auto-detection
+        const tasks = [
+            {
+                id: 'website',
+                title: 'Add website link',
+                description: 'Add your official website URL to your business profile so customers can find you and book services easily.',
+                group: 'basics',
+                scoreWeight: 15,
+                isManual: false,
+                actionLink: 'https://business.google.com/',
+                autoDetected: Boolean(gbpData?.websiteUri || business.websiteUri || business.reviewUrl),
+            },
+            {
+                id: 'phone',
+                title: 'Configure primary phone number',
+                description: 'Provide a direct phone number so local customers can call your shop or clinic with one click.',
+                group: 'basics',
+                scoreWeight: 15,
+                isManual: false,
+                actionLink: 'https://business.google.com/',
+                autoDetected: Boolean(gbpData?.phoneNumbers?.primaryPhone || user.phone),
+            },
+            {
+                id: 'description',
+                title: 'Write a business description',
+                description: 'Explain what makes your business unique. Write at least 100 characters with relevant keywords for local SEO.',
+                group: 'basics',
+                scoreWeight: 15,
+                isManual: false,
+                actionLink: 'https://business.google.com/',
+                autoDetected: Boolean((gbpData?.profile?.description || '').length >= 100),
+            },
+            {
+                id: 'hours',
+                title: 'Set business hours',
+                description: 'Keep your hours of operation accurate so customers know exactly when you are open for business.',
+                group: 'basics',
+                scoreWeight: 15,
+                isManual: false,
+                actionLink: 'https://business.google.com/',
+                autoDetected: Boolean(gbpData?.regularHours?.periods?.length > 0 || business.hours),
+            },
+            {
+                id: 'category',
+                title: 'Set primary business category',
+                description: 'Select the most accurate primary category so Google shows your business for the right searches.',
+                group: 'basics',
+                scoreWeight: 15,
+                isManual: false,
+                actionLink: 'https://business.google.com/',
+                autoDetected: Boolean(gbpData?.categories?.primaryCategory || business.category),
+            },
+            {
+                id: 'review_link',
+                title: 'Connect Review Funnel',
+                description: 'Connect your review link to automatically collect feedback and send happy customers to Google.',
+                group: 'engagement',
+                scoreWeight: 10,
+                isManual: false,
+                actionLink: '/dashboard/config/review-funnel',
+                autoDetected: Boolean(business.reviewUrl),
+            },
+            {
+                id: 'recent_post',
+                title: 'Create a local post',
+                description: 'Publish updates, offers, or news directly to Google Maps. Keep it fresh by posting once a week.',
+                group: 'engagement',
+                scoreWeight: 10,
+                isManual: false,
+                actionLink: '/dashboard/integrations',
+                autoDetected: Boolean(posts.length > 0),
+            },
+            {
+                id: 'photos',
+                title: 'Upload professional photos',
+                description: 'Upload at least 5 photos of your storefront, products, or team to double your listing views.',
+                group: 'media',
+                scoreWeight: 5,
+                isManual: true,
+                actionLink: 'https://business.google.com/',
+                autoDetected: false,
+            }
+        ];
+
+        // Map status
+        let totalScore = 0;
+        const taskList = tasks.map(t => {
+            const isCompleted = optimizationCompleted[t.id] === true || t.autoDetected;
+            if (isCompleted) {
+                totalScore += t.scoreWeight;
+            }
+            return {
+                ...t,
+                status: isCompleted ? 'completed' : 'pending'
+            };
+        });
+
+        return res.status(200).json({
+            success: true,
+            connected: true,
+            businessName: business.title || user.company_name || 'My Google Business',
+            completenessScore: totalScore,
+            tasks: taskList
+        });
+    } catch (err) {
+        console.error('[getGoogleOptimization] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not load Google Business Profile optimization checklist.' });
+    }
+};
+
+/**
+ * POST /api/integrations/google/optimization/toggle
+ * Toggle manual completeness of an optimization task.
+ */
+export const toggleGoogleOptimizationItem = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { itemId, completed } = req.body;
+
+        if (!itemId) {
+            return res.status(400).json({ success: false, message: 'Item ID is required.' });
+        }
+
+        const result = await pool.query(
+            'SELECT metadata FROM integrations WHERE user_id = $1 AND provider = $2',
+            [userId, 'google']
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Google account not connected.' });
+        }
+
+        let metadata = result.rows[0].metadata || {};
+        if (typeof metadata === 'string') {
+            try { metadata = JSON.parse(metadata); } catch { metadata = {}; }
+        }
+
+        if (!metadata.optimizationCompleted) {
+            metadata.optimizationCompleted = {};
+        }
+
+        metadata.optimizationCompleted[itemId] = completed === true;
+
+        await pool.query(
+            'UPDATE integrations SET metadata = $1, updated_at = NOW() WHERE user_id = $2 AND provider = $3',
+            [JSON.stringify(metadata), userId, 'google']
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: 'Checklist updated successfully.',
+            optimizationCompleted: metadata.optimizationCompleted
+        });
+    } catch (err) {
+        console.error('[toggleGoogleOptimizationItem] Error:', err.message);
+        return res.status(500).json({ success: false, message: 'Could not update optimization checklist.' });
+    }
+};
+
 
 
 

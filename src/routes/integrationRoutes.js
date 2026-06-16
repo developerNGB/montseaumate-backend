@@ -13,6 +13,8 @@ import {
     getGooglePosts,
     createGooglePost,
     getGoogleAnalytics,
+    getGoogleOptimization,
+    toggleGoogleOptimizationItem,
 } from '../controllers/integrationController.js';
 import express from 'express';
 import authenticate from '../middleware/authenticate.js';
@@ -36,6 +38,8 @@ router.post('/google/reviews/generate-reply', authenticate, express.json(), gene
 router.get('/google/posts', authenticate, getGooglePosts);
 router.post('/google/posts', authenticate, express.json(), createGooglePost);
 router.get('/google/analytics', authenticate, getGoogleAnalytics);
+router.get('/google/optimization', authenticate, getGoogleOptimization);
+router.post('/google/optimization/toggle', authenticate, express.json(), toggleGoogleOptimizationItem);
 
 // DELETE /api/integrations/:provider — Remove integration
 router.delete('/:provider', authenticate, disconnectProvider);
