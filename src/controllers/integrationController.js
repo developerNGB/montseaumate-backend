@@ -435,7 +435,7 @@ export const createConnectTicket = async (req, res) => {
 export const getIntegrations = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT id, provider, account_id, created_at, updated_at FROM integrations WHERE user_id = $1',
+            'SELECT id, provider, account_id, metadata, created_at, updated_at FROM integrations WHERE user_id = $1',
             [req.user.id]
         );
         return res.status(200).json({ success: true, integrations: result.rows });
