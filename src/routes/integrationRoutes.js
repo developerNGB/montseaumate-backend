@@ -15,6 +15,9 @@ import {
     getGoogleAnalytics,
     getGoogleOptimization,
     toggleGoogleOptimizationItem,
+    getGoogleBooster,
+    saveWidgetSettings,
+    sendReviewReminder,
 } from '../controllers/integrationController.js';
 import express from 'express';
 import authenticate from '../middleware/authenticate.js';
@@ -40,6 +43,9 @@ router.post('/google/posts', authenticate, express.json(), createGooglePost);
 router.get('/google/analytics', authenticate, getGoogleAnalytics);
 router.get('/google/optimization', authenticate, getGoogleOptimization);
 router.post('/google/optimization/toggle', authenticate, express.json(), toggleGoogleOptimizationItem);
+router.get('/google/booster', authenticate, getGoogleBooster);
+router.post('/google/booster/widget', authenticate, express.json(), saveWidgetSettings);
+router.post('/google/booster/remind', authenticate, express.json(), sendReviewReminder);
 
 // DELETE /api/integrations/:provider — Remove integration
 router.delete('/:provider', authenticate, disconnectProvider);
