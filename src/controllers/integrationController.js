@@ -1881,15 +1881,44 @@ export const getGoogleBooster = async (req, res) => {
 
         const replies = metadata.replies || {};
         const business = metadata.business || {};
+        let locationName = business.name || '';
+
+        // Auto-resolve location name if not previously connected
+        const { access_token: accessToken } = await getValidGoogleTokens(userId);
+        if (!locationName && accessToken && !accessToken.startsWith('mock_')) {
+            try {
+                const accountsResult = await fetchGoogleJson(
+                    'https://mybusinessaccountmanagement.googleapis.com/v1/accounts',
+                    accessToken
+                );
+                const accounts = accountsResult.data?.accounts || [];
+                if (accounts.length > 0) {
+                    const locationsResult = await fetchGoogleJson(
+                        `https://mybusinessbusinessinformation.googleapis.com/v1/${accounts[0].name}/locations?readMask=name`,
+                        accessToken
+                    );
+                    const locations = locationsResult.data?.locations || [];
+                    if (locations.length > 0) {
+                        locationName = locations[0].name;
+                        metadata.business = { ...business, name: locationName };
+                        await pool.query(
+                            'UPDATE integrations SET metadata = $1, updated_at = NOW() WHERE user_id = $2 AND provider = $3',
+                            [JSON.stringify(metadata), userId, 'google']
+                        );
+                    }
+                }
+            } catch (resolveErr) {
+                console.error('[getGoogleBooster] Failed to auto-resolve location resource name:', resolveErr.message);
+            }
+        }
         
         // Fetch reviews (fallback to default if real API fails or token is mock)
         let reviews = [];
-        const { access_token: accessToken } = await getValidGoogleTokens(userId);
         let realFetchSuccess = false;
 
-        if (business.name && accessToken && !accessToken.startsWith('mock_')) {
+        if (locationName && accessToken && !accessToken.startsWith('mock_')) {
             try {
-                const reviewsUrl = `https://mybusiness.googleapis.com/v4/${business.name}/reviews`;
+                const reviewsUrl = `https://mybusiness.googleapis.com/v4/${locationName}/reviews`;
                 const apiRes = await fetchGoogleJson(reviewsUrl, accessToken);
                 if (apiRes.response.ok && apiRes.data?.reviews) {
                     reviews = apiRes.data.reviews.map(rev => ({
