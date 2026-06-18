@@ -3,6 +3,10 @@ import pool from '../db/pool.js';
 
 export const connectWhatsApp = async (req, res) => {
     try {
+        // Purge memory and database credentials to force a new QR code handshake/scan
+        await whatsappService.disconnectClient(req.user.id);
+        await pool.query('DELETE FROM integrations WHERE user_id = $1 AND provider = $2', [req.user.id, 'whatsapp']);
+
         await whatsappService.initWhatsAppClient(req.user.id);
         res.json({ success: true, message: 'Initialization started' });
     } catch (err) {
