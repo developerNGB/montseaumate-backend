@@ -1,0 +1,97 @@
+# Exported from Render on 2026-06-20T23:50:29Z
+version: "1"
+projects:
+- name: My project
+  environments:
+  - name: Production
+    services:
+    - type: web
+      name: montseaumate-backend
+      runtime: node
+      repo: https://github.com/developerNGB/montseaumate-backend
+      plan: free
+      envVars:
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+      - key: STRIPE_PRICE_STARTER
+        sync: false
+      - key: STRIPE_PRICE_PRO
+        sync: false
+      - key: STRIPE_PRICE_GROWTH
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: MICROSOFT_CLIENT_SECRET
+        sync: false
+      - key: MICROSOFT_CLIENT_ID
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: SUPPORT_SMTP_PASS
+        sync: false
+      - key: SUPPORT_SMTP_USER
+        sync: false
+      - key: SUPPORT_SMTP_SECURE
+        sync: false
+      - key: SUPPORT_SMTP_PORT
+        sync: false
+      - key: SUPPORT_SMTP_HOST
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: FOLLOWUP_STUCK_PROCESSING_MINUTES
+        sync: false
+      - key: TRANSLATION_EDITOR_USER_IDS
+        sync: false
+      - key: JWT_RENEW_IF_EXPIRES_WITHIN_SECONDS
+        sync: false
+      - key: JWT_EXPIRES_IN
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: NODE_ENV
+        sync: false
+      - key: PORT
+        sync: false
+      - key: N8N_AUTO_RESPONSE_WEBHOOK
+        sync: false
+      - key: N8N_LEAD_CAPTURE_WEBHOOK
+        sync: false
+      - key: N8N_REVIEW_FEEDBACK_WEBHOOK
+        sync: false
+      - key: N8N_LEAD_FOLLOWUP_WEBHOOK
+        sync: false
+      - key: VITE_N8N_REVIEW_FEEDBACK_WEBHOOK
+        sync: false
+      - key: VITE_N8N_AUTO_RESPONSE_WEBHOOK
+        sync: false
+      - key: VITE_N8N_LEAD_CAPTURE_WEBHOOK
+        sync: false
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: VITE_API_URL
+        sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: .env
+        sync: false
+      region: singapore
+      buildCommand: npm install
+      startCommand: node src/index.js
+      domains:
+      - api.equipoexperto.com
+      autoDeployTrigger: commit
