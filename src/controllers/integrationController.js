@@ -506,7 +506,8 @@ export const getGoogleReviewLinkSuggestion = async (req, res) => {
                 result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 401 :
                 result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
                 result.code === 'GBP_NO_LOCATIONS' ? 404 :
-                result.code === 'GBP_AMBIGUOUS' ? 409 : 502;
+                result.code === 'GBP_AMBIGUOUS' ? 409 :
+                result.status === 429 ? 429 : 502;
             return res.status(status).json({
                 success: false,
                 ...result,
