@@ -50,15 +50,71 @@ const PORT = process.env.PORT || 5000;
 ['JWT_SECRET', 'DATABASE_URL'].forEach(key => {
     if (!process.env[key]) console.error(`âŒ Missing env var: ${key} â€” server will not function correctly`);
 });
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With', 'X-CSRF-Token'],
-    exposedHeaders: ['X-New-Access-Token'],
-    optionsSuccessStatus: 204 // Proper status code for OPTIONS
-}));
+if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error('âŒ Missing EMAIL_USER / EMAIL_PASS â€” contact form and OTP emails will not send');
+}
+
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// MIDDLEWARE
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+// Trust Render's proxy for headers (needed for rate-limiting and reliable CORS)
+app.set('trust proxy', 1);
+
+// CORS â€” set CORS_ORIGINS (comma-separated) in production; see server/src/utils/corsWhitelist.js
+const whitelist = getCorsWhitelist();
+
+const isPublicApi = (req) => {
+    const p = req.path || req.url;
+    return p.startsWith('/api/l/') || 
+           p.startsWith('/api/r/') || 
+           p.startsWith('/api/f/') || 
+           p.startsWith('/api/support/');
+};
+
+// Handle preflight OPTIONS requests BEFORE any other middleware
+app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    if (!origin || whitelist.indexOf(origin) !== -1 || isPublicApi(req)) {
+        res.header('Access-Control-Allow-Origin', origin || '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With, X-CSRF-Token');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        res.header('Access-Control-Expose-Headers', 'X-New-Access-Token');
+        res.header('Access-Control-Max-Age', '86400'); // 24 hours
+    }
+    res.status(204).end();
+});
+
+// Enable COOP for Google login - must be set before CORS
+app.use((req, res, next) => {
+    // Allow popups for OAuth flows but maintain security
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // Also needed for some OAuth scenarios
+    res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+    next();
+});
+
+// CORS Middleware - Simplified and more reliable
+app.use((req, res, next) => {
+    cors({
+        origin: function(origin, callback) {
+            // Allow requests with no origin (like mobile apps or curl requests)
+            if (!origin) return callback(null, true);
+            
+            if (whitelist.indexOf(origin) !== -1 || isPublicApi(req)) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With', 'X-CSRF-Token'],
+        exposedHeaders: ['X-New-Access-Token'],
+        optionsSuccessStatus: 204 // Proper status code for OPTIONS
+    })(req, res, next);
+});
 
 // Stripe webhook â€” raw body required for signature verification (must be before express.json)
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
