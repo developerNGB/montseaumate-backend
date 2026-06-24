@@ -124,7 +124,50 @@ export const initWhatsAppClient = async (userId) => {
                     const fromPhone = JID.split('@')[0];
                     if (!fromPhone) continue;
 
-                    // Update matching lead's status to 'Replied' if they are not already Replied
+                    // 1. Get message text
+                    const messageType = Object.keys(msg.message || {})[0];
+                    let text = '';
+                    if (messageType === 'conversation') text = msg.message.conversation;
+                    else if (messageType === 'extendedTextMessage') text = msg.message.extendedTextMessage.text;
+                    
+                    if (!text) continue; // Skip non-text messages for now
+
+                    // 2. Upsert Inbox Conversation
+                    const convResult = await pool.query(`
+                        INSERT INTO inbox_conversations (user_id, contact_phone, contact_name, channel, last_message_text, last_message_time, is_read)
+                        VALUES ($1, $2, $3, 'whatsapp', $4, NOW(), FALSE)
+                        ON CONFLICT (id) DO UPDATE 
+                        SET last_message_text = EXCLUDED.last_message_text, last_message_time = NOW(), is_read = FALSE
+                        RETURNING id;
+                    `, [userId, fromPhone, msg.pushName || fromPhone, text]);
+                    // Wait, ON CONFLICT requires a unique constraint. We don't have a unique constraint on (user_id, contact_phone). 
+                    // Let's do a SELECT first.
+                    let convId;
+                    const existingConv = await pool.query(
+                        `SELECT id FROM inbox_conversations WHERE user_id = $1 AND contact_phone = $2 AND channel = 'whatsapp'`, 
+                        [userId, fromPhone]
+                    );
+                    if (existingConv.rows.length > 0) {
+                        convId = existingConv.rows[0].id;
+                        await pool.query(
+                            `UPDATE inbox_conversations SET last_message_text = $1, last_message_time = NOW(), is_read = FALSE, contact_name = COALESCE(NULLIF($2, ''), contact_name) WHERE id = $3`,
+                            [text, msg.pushName || '', convId]
+                        );
+                    } else {
+                        const newConv = await pool.query(`
+                            INSERT INTO inbox_conversations (user_id, contact_phone, contact_name, channel, last_message_text, is_read)
+                            VALUES ($1, $2, $3, 'whatsapp', $4, FALSE) RETURNING id
+                        `, [userId, fromPhone, msg.pushName || fromPhone, text]);
+                        convId = newConv.rows[0].id;
+                    }
+
+                    // 3. Insert Message
+                    await pool.query(`
+                        INSERT INTO inbox_messages (conversation_id, sender_type, text, is_read)
+                        VALUES ($1, 'contact', $2, FALSE)
+                    `, [convId, text]);
+
+                    // 4. Update matching lead's status to 'Replied' if they are not already Replied
                     await pool.query(
                         `UPDATE leads SET lead_status = 'Replied', updated_at = NOW()
                          WHERE user_id = $1 AND regexp_replace(phone, '[^0-9]', '', 'g') = $2 AND lead_status != 'Replied'`,
@@ -132,7 +175,7 @@ export const initWhatsAppClient = async (userId) => {
                     );
                 }
             } catch (err) {
-                console.error('[WA-Socket] Error updating lead on WhatsApp reply:', err.message);
+                console.error('[WA-Socket] Error updating inbox/lead on WhatsApp reply:', err.message);
             }
         });
 
@@ -239,6 +282,36 @@ export const sendWhatsAppMessage = async (userId, targetPhone, text) => {
 
     await sock.sendMessage(jid, { text });
     console.log(`[WA-Send] ✅ Message delivered to ${jid}`);
+
+    // Log outbound message to inbox
+    try {
+        let convId;
+        const existingConv = await pool.query(
+            `SELECT id FROM inbox_conversations WHERE user_id = $1 AND contact_phone = $2 AND channel = 'whatsapp'`, 
+            [userId, cleaned]
+        );
+        if (existingConv.rows.length > 0) {
+            convId = existingConv.rows[0].id;
+            await pool.query(
+                `UPDATE inbox_conversations SET last_message_text = $1, last_message_time = NOW() WHERE id = $2`,
+                [text, convId]
+            );
+        } else {
+            const newConv = await pool.query(`
+                INSERT INTO inbox_conversations (user_id, contact_phone, contact_name, channel, last_message_text, is_read)
+                VALUES ($1, $2, $3, 'whatsapp', $4, TRUE) RETURNING id
+            `, [userId, cleaned, cleaned, text]);
+            convId = newConv.rows[0].id;
+        }
+
+        await pool.query(`
+            INSERT INTO inbox_messages (conversation_id, sender_type, text, is_read)
+            VALUES ($1, 'business', $2, TRUE)
+        `, [convId, text]);
+    } catch (dbErr) {
+        console.error('[WA-Send] Error logging outbound message to inbox:', dbErr.message);
+    }
+
     return true;
 };
 

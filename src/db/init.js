@@ -1,4 +1,4 @@
-﻿import pool from './pool.js';
+import pool from './pool.js';
 
 /**
  * Initialize database tables.
@@ -258,6 +258,53 @@ const initDB = async () => {
         await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events (created_at DESC)`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_level ON error_events (level)`);
         console.log('  ✅ error_events table ready');
+        // 11. OMNICHANNEL INBOX
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS inbox_conversations (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                contact_phone VARCHAR(50),
+                contact_email VARCHAR(255),
+                contact_name VARCHAR(255),
+                channel VARCHAR(50) NOT NULL DEFAULT 'whatsapp',
+                last_message_time TIMESTAMPTZ DEFAULT NOW(),
+                last_message_text TEXT,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_inbox_conv_user ON inbox_conversations(user_id)`);
+
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS inbox_messages (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                conversation_id UUID NOT NULL REFERENCES inbox_conversations(id) ON DELETE CASCADE,
+                sender_type VARCHAR(50) NOT NULL, -- 'contact' or 'business'
+                text TEXT,
+                is_read BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_inbox_msg_conv ON inbox_messages(conversation_id)`);
+        console.log('  ✅ inbox tables ready');
+
+        // 12. NFC CARDS
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS nfc_cards (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                funnel_id VARCHAR(50) NOT NULL,
+                card_name VARCHAR(255) NOT NULL,
+                short_code VARCHAR(20) UNIQUE NOT NULL,
+                scans INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_nfc_user ON nfc_cards(user_id)`);
+        console.log('  ✅ nfc_cards table ready');
+
         await client.query('COMMIT');
         console.log('\nðŸŽ‰ Database consolidated initialization complete!');
     } catch (err) {

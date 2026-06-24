@@ -18,12 +18,14 @@ import marketplaceRoutes from './routes/marketplaceRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
 import feedbackRoutes from './routes/feedbackRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
+import inboxRoutes from './routes/inboxRoutes.js';
 import translationRoutes from './routes/translationRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import smtpRoutes from './routes/smtpRoutes.js';
 import apolloRoutes from './routes/apolloRoutes.js';
 import stripeRoutes from './routes/stripeRoutes.js';
 import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
+import nfcRoutes from './routes/nfcRoutes.js';
 import authenticate from './middleware/authenticate.js';
 import requireActiveSubscription from './middleware/requireActiveSubscription.js';
 import startFollowupCron from './cron/followupCron.js';
@@ -259,6 +261,9 @@ app.use('/api/translations', translationRoutes);
 // dashboardApi applies authenticate to every /api request; mounting it first caused 401 on /api/r/*.
 app.use('/api', publicRoutes);
 
+// NFC Routes (Contains both public /t/:code and protected /cards)
+app.use('/api', nfcRoutes);
+
 // Protected dashboard APIs — require Stripe subscription (admins exempt)
 const dashboardApi = express.Router();
 dashboardApi.use(authenticate, requireActiveSubscription);
@@ -272,6 +277,7 @@ dashboardApi.use('/marketplace', marketplaceRoutes);
 dashboardApi.use('/stats', statsRoutes);
 dashboardApi.use('/feedback', feedbackRoutes);
 dashboardApi.use('/whatsapp', whatsappRoutes);
+dashboardApi.use('/inbox', inboxRoutes);
 dashboardApi.use('/smtp', smtpRoutes);
 dashboardApi.use('/apollo', apolloRoutes);
 dashboardApi.use('/apify', apolloRoutes);
@@ -564,13 +570,29 @@ const runMigrations = async () => {
         await safeQuery('lead_capture.capture_sources',     `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS capture_sources JSONB DEFAULT '["qr"]'`);
         await safeQuery('lead_capture.whatsapp_enabled',      `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT TRUE`);
         await safeQuery('lead_capture.email_enabled',         `ALTER TABLE lead_capture_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN DEFAULT TRUE`);
+        await safeQuery('idx_inbox_msg_conv', `CREATE INDEX IF NOT EXISTS idx_inbox_msg_conv ON inbox_messages(conversation_id)`);
 
-        console.log('âœ… Startup migrations & performance indices verified.');
+        // Phase 2: NFC Cards
+        await safeQuery('nfc_cards_table', `
+            CREATE TABLE IF NOT EXISTS nfc_cards (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                funnel_id VARCHAR(50) NOT NULL,
+                card_name VARCHAR(255) NOT NULL,
+                short_code VARCHAR(20) UNIQUE NOT NULL,
+                scans INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        await safeQuery('idx_nfc_user', `CREATE INDEX IF NOT EXISTS idx_nfc_user ON nfc_cards(user_id)`);
+
+        console.log('✅ Startup migrations & performance indices verified.');
         
         // Finalize Startup
         startServer();
     } catch (err) {
-        console.error('âŒ Startup migration failed:', err.message);
+        console.error('â Œ Startup migration failed:', err.message);
         // Start server anyway to allow debugging/logs
         startServer();
     }
