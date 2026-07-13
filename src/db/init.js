@@ -105,6 +105,7 @@ const initDB = async () => {
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS auto_response_message TEXT`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS filtering_questions JSONB DEFAULT '[]'`);
         await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS whatsapp_number_fallback VARCHAR(50)`);
+        await client.query(`ALTER TABLE review_funnel_settings ADD COLUMN IF NOT EXISTS flow_json JSONB DEFAULT '{}'`);
         console.log('  âœ… review_funnel_settings table ready');
 
         // 5. FEEDBACK TABLE
@@ -184,6 +185,7 @@ const initDB = async () => {
             );
         `);
         await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS reminder_active BOOLEAN DEFAULT false`);
+        await client.query(`ALTER TABLE lead_followup_settings ADD COLUMN IF NOT EXISTS flow_json JSONB DEFAULT '{}'`);
         console.log('  âœ… lead_followup_settings table ready');
 
         // 8. SMTP SETTINGS (Custom Domain Email)
@@ -255,6 +257,28 @@ const initDB = async () => {
                 created_at TIMESTAMPTZ DEFAULT NOW()
             );
         `);
+
+        // 11. SEO TRACKING (Admin-only Local SEO Tracker)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS seo_keywords (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                keyword VARCHAR(255) NOT NULL,
+                location VARCHAR(255) NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS seo_ranks (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                keyword_id UUID NOT NULL REFERENCES seo_keywords(id) ON DELETE CASCADE,
+                rank INTEGER NOT NULL,
+                competitors_json JSONB DEFAULT '[]',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        `);
+        console.log('  ✅ seo tracking tables ready');
         await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_created ON error_events (created_at DESC)`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_error_events_level ON error_events (level)`);
         console.log('  ✅ error_events table ready');

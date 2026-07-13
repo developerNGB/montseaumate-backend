@@ -17,7 +17,7 @@ export default async function requireActiveSubscription(req, res, next) {
         }
 
         const result = await pool.query(
-            `SELECT id, email, role, plan, status, trial_ends_at, stripe_subscription_id
+            `SELECT id, email, role, plan, status, trial_ends_at, stripe_subscription_id, stripe_customer_id, onboarding_completed, created_at
              FROM users WHERE id = $1`,
             [userId]
         );

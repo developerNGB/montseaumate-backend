@@ -36,7 +36,7 @@ function respondEmployeeLimit(res, billing, wouldTotal) {
 export const getReviewFunnelConfig = async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, lead_sources, capture_sources, whatsapp_enabled, email_enabled, COALESCE(capture_embed_type, \'inline\') AS capture_embed_type, COALESCE(review_next_step_done, FALSE) AS review_next_step_done, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done FROM review_funnel_settings WHERE user_id = $1',
+            'SELECT automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, is_active, lead_capture_active, whatsapp_number_fallback, lead_source, capture_source, lead_sources, capture_sources, whatsapp_enabled, email_enabled, flow_json, COALESCE(capture_embed_type, \'inline\') AS capture_embed_type, COALESCE(review_next_step_done, FALSE) AS review_next_step_done, COALESCE(capture_next_step_done, FALSE) AS capture_next_step_done FROM review_funnel_settings WHERE user_id = $1',
             [req.user.id]
         );
 
@@ -164,7 +164,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
             google_review_url, notification_email, auto_response_message, 
             filtering_questions, lead_capture_active, is_active, 
             whatsapp_number_fallback, lead_source, capture_source,
-            whatsapp_enabled, email_enabled
+            whatsapp_enabled, email_enabled, flow_json
         } = req.body;
 
         // Generate an automation ID if one doesn't exist
@@ -275,8 +275,8 @@ export const saveReviewFunnelConfig = async (req, res) => {
 
         await pool.query(
             `INSERT INTO review_funnel_settings 
-                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled, review_next_step_done, capture_next_step_done, updated_at) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+                (user_id, automation_id, google_review_url, notification_email, auto_response_message, filtering_questions, lead_capture_active, is_active, whatsapp_number_fallback, lead_source, capture_source, whatsapp_enabled, email_enabled, review_next_step_done, capture_next_step_done, flow_json, updated_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
              ON CONFLICT (user_id) DO UPDATE SET 
                 google_review_url = EXCLUDED.google_review_url,
                 notification_email = EXCLUDED.notification_email,
@@ -291,6 +291,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 email_enabled = EXCLUDED.email_enabled,
                 review_next_step_done = EXCLUDED.review_next_step_done,
                 capture_next_step_done = EXCLUDED.capture_next_step_done,
+                flow_json = EXCLUDED.flow_json,
                 updated_at = NOW()`,
             [
                 req.user.id, automationId, 
@@ -306,6 +307,7 @@ export const saveReviewFunnelConfig = async (req, res) => {
                 email_enabled !== undefined ? email_enabled : (existingConfig.email_enabled ?? true),
                 reviewIntroDone,
                 captureIntroDone,
+                JSON.stringify(flow_json || existingConfig.flow_json || {}),
             ]
         );
 
@@ -380,13 +382,13 @@ export const saveReviewFunnelConfig = async (req, res) => {
 async function queryLeadFollowupSettings(userId) {
     try {
         return await pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, lead_sources, whatsapp_enabled, email_enabled, followup_sequence, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, lead_sources, whatsapp_enabled, email_enabled, followup_sequence, flow_json, COALESCE(followup_next_step_done, FALSE) AS followup_next_step_done FROM lead_followup_settings WHERE user_id = $1',
             [userId]
         );
     } catch (e) {
         if (e.code !== '42703') throw e;
         return pool.query(
-            'SELECT is_active, delay_value, delay_unit, message, lead_source FROM lead_followup_settings WHERE user_id = $1',
+            'SELECT is_active, delay_value, delay_unit, message, lead_source, flow_json FROM lead_followup_settings WHERE user_id = $1',
             [userId]
         );
     }
@@ -430,6 +432,7 @@ function normalizeLeadFollowupRow(row) {
         whatsapp_enabled: row.whatsapp_enabled ?? true,
         email_enabled: row.email_enabled ?? true,
         followup_sequence,
+        flow_json: row.flow_json ?? {},
         followup_next_step_done: !!row.followup_next_step_done,
     };
 }
@@ -516,6 +519,8 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 : rawFollowupSeq;
         if (!Array.isArray(followup_sequence)) followup_sequence = [];
 
+        const flow_json = passed.flow_json !== undefined ? passed.flow_json : (existing.flow_json ?? {});
+
         const billingLf = await loadBillingRow(req.user.id, req.user);
         const planMaxFollowSteps = getMaxFollowupSequenceSteps(billingLf.plan, billingLf.trial_ends_at);
         const maxFollowSteps = planMaxFollowSteps ?? FOLLOWUP_SEQUENCE_HARD_MAX;
@@ -552,8 +557,8 @@ export const saveLeadFollowupConfig = async (req, res) => {
             await pool.query(
                 `INSERT INTO lead_followup_settings
                     (user_id, is_active, delay_value, delay_unit, message,
-                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, followup_next_step_done, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source, whatsapp_enabled, email_enabled, followup_sequence, followup_next_step_done, flow_json, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
                  ON CONFLICT (user_id) DO UPDATE SET
                     is_active = EXCLUDED.is_active,
                     delay_value = EXCLUDED.delay_value,
@@ -568,10 +573,11 @@ export const saveLeadFollowupConfig = async (req, res) => {
                     email_enabled = EXCLUDED.email_enabled,
                     followup_sequence = EXCLUDED.followup_sequence,
                     followup_next_step_done = EXCLUDED.followup_next_step_done,
+                    flow_json = EXCLUDED.flow_json,
                     updated_at = NOW()`,
                 [req.user.id, is_active, delay_value, delay_unit, message,
                     reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
-                    whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence), followIntroDone]
+                    whatsapp_enabled, email_enabled, JSON.stringify(followup_sequence), followIntroDone, JSON.stringify(flow_json)]
             );
             try {
                 await pool.query(
@@ -608,6 +614,7 @@ export const saveLeadFollowupConfig = async (req, res) => {
                 reminder_active, reminder_delay_value, reminder_delay_unit, reminder_message, lead_source,
                 lead_sources: leadSourcesLf,
                 followup_sequence,
+                flow_json,
                 whatsapp_enabled, email_enabled, followup_next_step_done: followIntroDone,
             }
         });

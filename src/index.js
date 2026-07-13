@@ -26,6 +26,7 @@ import apolloRoutes from './routes/apolloRoutes.js';
 import stripeRoutes from './routes/stripeRoutes.js';
 import stripeWebhookRoutes from './routes/stripeWebhookRoutes.js';
 import nfcRoutes from './routes/nfcRoutes.js';
+import seoRoutes from './routes/seoRoutes.js';
 import authenticate from './middleware/authenticate.js';
 import requireActiveSubscription from './middleware/requireActiveSubscription.js';
 import startFollowupCron from './cron/followupCron.js';
@@ -281,6 +282,7 @@ dashboardApi.use('/inbox', inboxRoutes);
 dashboardApi.use('/smtp', smtpRoutes);
 dashboardApi.use('/apollo', apolloRoutes);
 dashboardApi.use('/apify', apolloRoutes);
+dashboardApi.use('/seo', seoRoutes);
 app.use('/api', dashboardApi);
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -586,6 +588,20 @@ const runMigrations = async () => {
             )
         `);
         await safeQuery('idx_nfc_user', `CREATE INDEX IF NOT EXISTS idx_nfc_user ON nfc_cards(user_id)`);
+
+        // Phase 4: Local SEO Tracking
+        await safeQuery('seo_rankings_table', `
+            CREATE TABLE IF NOT EXISTS seo_rankings (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                keyword VARCHAR(255) NOT NULL,
+                my_rank INTEGER DEFAULT NULL,
+                competitors JSONB DEFAULT '[]', 
+                location VARCHAR(255) DEFAULT 'Local',
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        `);
+        await safeQuery('idx_seo_user', `CREATE INDEX IF NOT EXISTS idx_seo_user ON seo_rankings(user_id)`);
 
         console.log('✅ Startup migrations & performance indices verified.');
         

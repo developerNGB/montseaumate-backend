@@ -13,6 +13,19 @@ export function isAdminUser(user) {
     return allowList.includes(String(user.email || '').toLowerCase());
 }
 
+/**
+ * Normal user gate - matches NORMAL_USER environment variable.
+ */
+export function isNormalUser(user) {
+    if (!user) return false;
+    const allowList = String(process.env.NORMAL_USER || '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+    if (!allowList.length) return false;
+    return allowList.includes(String(user.email || '').toLowerCase());
+}
+
 /** @deprecated Use enrichUserForClient from billingAccess.js */
 export function withAdminFlag(user) {
     if (!user || typeof user !== 'object') return user;

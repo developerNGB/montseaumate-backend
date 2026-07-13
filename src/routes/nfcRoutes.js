@@ -2,6 +2,7 @@ import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../db/pool.js';
 import authenticate from '../middleware/authenticate.js';
+import { isNormalUser } from '../utils/adminAccess.js';
 
 const router = express.Router();
 
@@ -47,6 +48,14 @@ router.get('/t/:code', async (req, res) => {
 
 // Everything below requires authentication
 router.use(authenticate);
+
+// Block normal users from accessing new NFC features
+router.use((req, res, next) => {
+    if (isNormalUser(req.user)) {
+        return res.status(403).json({ success: false, message: 'Access denied. Feature not available on your plan.' });
+    }
+    next();
+});
 
 // 2. GET all NFC cards for user
 router.get('/cards', async (req, res) => {
