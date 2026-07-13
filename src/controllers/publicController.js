@@ -671,13 +671,7 @@ export const submitLead = async (req, res) => {
                         console.log(`[WA-Owner] ⚠️ No account_id in DB — owner not notified`);
                     }
 
-                    // B. CUSTOMER — auto-response
-                    if (phone) {
-                        console.log(`[WA-Customer] → ${phone}`);
-                        whatsappService.sendWhatsAppMessage(user_id, phone, finalCustomerMsg)
-                            .then(() => console.log(`[WA-Customer] ✅ Sent`))
-                            .catch(e => console.error(`[WA-Customer] ❌ ${e.message}`));
-                    }
+                    let autoResponseSent = false;
 
                     // C. INSTANT: Fire follow-up sequence step 0 immediately (bypass cron delay)
                     if (phone) {
@@ -720,6 +714,7 @@ export const submitLead = async (req, res) => {
                                             [lead_id]
                                         );
                                         console.log(`[WA-Step0] ✅ First follow-up step sent instantly to ${phone}`);
+                                        autoResponseSent = true;
                                     } else {
                                         // Session not ready — release claim so cron handles it
                                         await pool.query(
@@ -740,6 +735,14 @@ export const submitLead = async (req, res) => {
                                 );
                             } catch (_) {}
                         }
+                    }
+
+                    // B. CUSTOMER — auto-response (Only sent if we didn't send step 0 follow-up)
+                    if (phone && !autoResponseSent) {
+                        console.log(`[WA-Customer] → ${phone}`);
+                        whatsappService.sendWhatsAppMessage(user_id, phone, finalCustomerMsg)
+                            .then(() => console.log(`[WA-Customer] ✅ Sent`))
+                            .catch(e => console.error(`[WA-Customer] ❌ ${e.message}`));
                     }
                 } else {
                     console.log(`[WA-Native] ⚠️ Not active. Token: "${whatsappAuth.access_token}"`);
