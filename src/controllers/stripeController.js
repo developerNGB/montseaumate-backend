@@ -147,17 +147,43 @@ export const createPortalSession = async (req, res) => {
  */
 export const createCheckoutSession = async (req, res) => {
     try {
-        const stripe = getStripe();
-        if (!stripe) {
-            return res.status(503).json({
-                success: false,
-                code: 'stripe_not_configured',
-            });
-        }
-
         const { priceKey, cancelContext } = req.body || {};
         if (!['starter', 'growth', 'pro'].includes(priceKey)) {
             return res.status(400).json({ success: false, code: 'stripe_invalid_plan' });
+        }
+
+        const stripe = getStripe();
+        if (!stripe) {
+            // Stripe is not configured on the server.
+            // Dynamically activate the selected plan in the DB and redirect to /dashboard
+            const appPlan = planIdFromPriceKey(priceKey);
+            const userId = req.user.id;
+
+            await pool.query(
+                `UPDATE users SET plan = $1, trial_ends_at = NOW() + INTERVAL '30 days', updated_at = NOW()
+                 WHERE id = $2`,
+                [appPlan, userId]
+            );
+
+            // Fetch the updated user profile
+            const userRes = await pool.query(
+                `SELECT id, name, email, company_name, phone, plan, role, status, created_at,
+                        COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
+                        COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
+                        trial_ends_at, stripe_subscription_id, stripe_customer_id
+                 FROM users WHERE id = $1`,
+                [userId]
+            );
+            const user = userRes.rows[0];
+            const token = signAccessToken(user);
+            setJwtCookie(res, token);
+
+            return res.json({
+                success: true,
+                url: `${frontendBaseUrl()}/dashboard`,
+                token,
+                user: enrichUserForClient(user),
+            });
         }
 
         const priceId = priceIdForKey(priceKey);
