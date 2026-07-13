@@ -115,11 +115,27 @@ const startFollowupCron = () => {
                     
                     if (leadEmail) {
                         // If this email matches a lead for this user, mark them as Replied
-                        await pool.query(
-                            `UPDATE leads SET lead_status = 'Replied', updated_at = NOW() 
-                             WHERE user_id = $1 AND lower(email) = $2 AND lead_status != 'Replied'`,
+                        const leadRes = await pool.query(
+                            `SELECT id, full_name, lead_status FROM leads
+                             WHERE user_id = $1 AND lower(email) = $2`,
                             [userId, leadEmail.toLowerCase()]
                         );
+                        if (leadRes.rows.length > 0) {
+                            const lead = leadRes.rows[0];
+                            if (lead.lead_status !== 'Replied') {
+                                await pool.query(
+                                    `UPDATE leads SET lead_status = 'Replied', updated_at = NOW() WHERE id = $1`,
+                                    [lead.id]
+                                );
+                                try {
+                                    const { notifyOwnerLeadReply } = await import('../services/ownerNotifyService.js');
+                                    const replySnippet = message.snippet || 'Replied to your email';
+                                    await notifyOwnerLeadReply(userId, lead.full_name, replySnippet);
+                                } catch (notifyErr) {
+                                    console.error('[GmailReply] Error notifying owner on reply:', notifyErr.message);
+                                }
+                            }
+                        }
                     }
                 }
             }

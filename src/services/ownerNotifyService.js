@@ -248,3 +248,29 @@ export async function notifyOwnerBulkSendComplete(
         ...targets,
     });
 }
+
+/** Alert the owner of any incoming lead reply, highlighting if it contains "hot" keywords. */
+export async function notifyOwnerLeadReply(userId, leadName, replyText) {
+    const targets = await loadOwnerNotifyTargets(userId);
+    const base = frontendBaseUrl();
+    const dashLeads = base ? `${base}/dashboard/leads` : '';
+
+    const lowercaseText = String(replyText || '').toLowerCase();
+    const keywords = ['price', 'call me', 'yes', 'interested', 'precio', 'llámame', 'interesado', 'si', 'sí'];
+    const isHot = keywords.some(kw => lowercaseText.includes(kw));
+
+    const subject = isHot ? `🔥 Hot lead: ${leadName} replied` : `✉️ Lead ${leadName} replied`;
+    
+    let body = isHot
+        ? `🔥 Hot lead alert!\n\n${leadName} just replied: "${replyText}"`
+        : `✉️ Lead reply alert!\n\n${leadName} just replied: "${replyText}"`;
+    
+    body += `\n\nReach out fast to close the deal.`;
+    if (dashLeads) body += `\n\nView inbox: ${dashLeads}`;
+
+    await notifyOwnerChannels(userId, {
+        subject,
+        message: body,
+        ...targets,
+    });
+}

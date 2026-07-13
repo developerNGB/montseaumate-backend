@@ -168,11 +168,26 @@ export const initWhatsAppClient = async (userId) => {
                     `, [convId, text]);
 
                     // 4. Update matching lead's status to 'Replied' if they are not already Replied
-                    await pool.query(
-                        `UPDATE leads SET lead_status = 'Replied', updated_at = NOW()
-                         WHERE user_id = $1 AND regexp_replace(phone, '[^0-9]', '', 'g') = $2 AND lead_status != 'Replied'`,
+                    const leadRes = await pool.query(
+                        `SELECT id, full_name, lead_status FROM leads
+                         WHERE user_id = $1 AND regexp_replace(phone, '[^0-9]', '', 'g') = $2`,
                         [userId, fromPhone]
                     );
+                    if (leadRes.rows.length > 0) {
+                        const lead = leadRes.rows[0];
+                        if (lead.lead_status !== 'Replied') {
+                            await pool.query(
+                                `UPDATE leads SET lead_status = 'Replied', updated_at = NOW() WHERE id = $1`,
+                                [lead.id]
+                            );
+                            try {
+                                const { notifyOwnerLeadReply } = await import('./ownerNotifyService.js');
+                                await notifyOwnerLeadReply(userId, lead.full_name, text);
+                            } catch (notifyErr) {
+                                console.error('[WA-Socket] Error notifying owner on reply:', notifyErr.message);
+                            }
+                        }
+                    }
                 }
             } catch (err) {
                 console.error('[WA-Socket] Error updating inbox/lead on WhatsApp reply:', err.message);

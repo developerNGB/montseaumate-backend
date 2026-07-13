@@ -36,6 +36,15 @@ export function computeLeadScore(lead = {}) {
         score += Math.min(15, matchedKeywords.length * 5);
     }
 
+    const HIGH_PRIORITY_PHRASES = [
+        'ready to buy this month', 'comprar este mes', 'comprar hoy', 'ready to buy', 'listo para comprar',
+        'ready to start', 'this month', 'este mes', 'urgente', 'urgent', 'immediately', 'inmediatamente'
+    ];
+    const hasHighPriorityPhrase = HIGH_PRIORITY_PHRASES.some(phrase => text.includes(phrase));
+    if (hasHighPriorityPhrase) {
+        score = Math.max(80, score);
+    }
+
     score = Math.max(0, Math.min(100, score));
     return { score, tier: getLeadScoreTier(score), matchedKeywords };
 }
