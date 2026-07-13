@@ -248,7 +248,11 @@ export const getDashboardStats = async (req, res) => {
 export const getEmployeeActivityStatus = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { employee } = req.query; // 'followup', 'review', or 'capture'
+        let { employee } = req.query; // 'followup', 'review', or 'capture'
+
+        if (typeof employee === 'string' && employee.includes(':')) {
+            employee = employee.split(':')[0];
+        }
 
         if (!employee || !['followup', 'review', 'capture'].includes(employee)) {
             return res.status(400).json({ 
