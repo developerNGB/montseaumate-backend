@@ -4,20 +4,21 @@ import pool from '../db/pool.js';
 export const getTranslations = async (req, res) => {
     try {
         const result = await pool.query('SELECT key_name, english_text, spanish_text FROM translations');
-        // Convert to a simple key-value object for easy use in frontend
-        const mapping = {};
+        const mapping = { en: {}, es: {} };
         result.rows.forEach(row => {
-            const val = row.spanish_text;
-            // Only include translations that have real content:
-            // skip nulls, empty strings, and cases where the value is the same as the key (untranslated)
-            if (val && typeof val === 'string' && val.trim() !== '' && val.trim() !== row.key_name) {
-                mapping[row.key_name] = val;
+            const enVal = row.english_text;
+            const esVal = row.spanish_text;
+            if (enVal && typeof enVal === 'string' && enVal.trim() !== '' && enVal.trim() !== row.key_name) {
+                mapping.en[row.key_name] = enVal;
+            }
+            if (esVal && typeof esVal === 'string' && esVal.trim() !== '' && esVal.trim() !== row.key_name) {
+                mapping.es[row.key_name] = esVal;
             }
         });
         res.json({ success: true, translations: mapping, raw: result.rows });
     } catch (err) {
         console.error('[getTranslations]', err);
-        res.json({ success: true, translations: {}, raw: [] });
+        res.json({ success: true, translations: { en: {}, es: {} }, raw: [] });
     }
 };
 
