@@ -173,7 +173,7 @@ async function refreshEnvGmailAccessToken() {
             client_secret: process.env.GOOGLE_CLIENT_SECRET.trim(),
             refresh_token: refreshToken,
             grant_type: 'refresh_token',
-        }),
+        }).toString(),
     }, GMAIL_TOKEN_TIMEOUT_MS, 'GMAIL_API_TIMEOUT');
     const data = await response.json();
     if (data.error) {
@@ -193,7 +193,7 @@ async function sendViaEnvGmailApi(mailOptions) {
         getContactFormInbox();
 
     const accessToken = await refreshEnvGmailAccessToken();
-    const encodedMail = buildGmailRawMime(mailOptions, from);
+    const encodedMail = await buildGmailRawMime(mailOptions, from);
 
     const response = await fetchWithTimeout('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST',

@@ -40,7 +40,7 @@ export const getValidGoogleTokens = async (userId) => {
                 client_secret: process.env.GOOGLE_CLIENT_SECRET,
                 refresh_token,
                 grant_type: 'refresh_token'
-            })
+            }).toString()
         });
 
         const data = await response.json();
@@ -52,7 +52,7 @@ export const getValidGoogleTokens = async (userId) => {
             if (data.error === 'invalid_grant') {
                 console.error(`[GoogleAuth] User ${userId} must reconnect Google account (scope or consent issue)`);
             }
-            return { access_token, refresh_token };
+            return { access_token: null, refresh_token };
         }
 
         const newAccessToken = data.access_token;

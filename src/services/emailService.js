@@ -356,19 +356,23 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
 
         // 1. Try Custom SMTP
         if (!options.integrationsOnly && smtpRes.rows.length > 0) {
-            const config = smtpRes.rows[0];
-            console.log(`[EmailService][${Date.now() - startTime}ms] Using Custom SMTP (${config.from_email})`);
-            
-            const transporter = nodemailer.createTransport(buildSmtpTransportOptions(config));
+            try {
+                const config = smtpRes.rows[0];
+                console.log(`[EmailService][${Date.now() - startTime}ms] Using Custom SMTP (${config.from_email})`);
+                
+                const transporter = nodemailer.createTransport(buildSmtpTransportOptions(config));
 
-            const finalFrom = config.from_name 
-                ? `"${config.from_name}" <${config.from_email}>` 
-                : config.from_email;
+                const finalFrom = config.from_name 
+                    ? `"${config.from_name}" <${config.from_email}>` 
+                    : config.from_email;
 
-            const options = { ...mailOptions, from: mailOptions.from || finalFrom };
-            const info = await transporter.sendMail(options);
-            console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Custom SMTP sent: ${info.messageId}`);
-            return { success: true, messageId: info.messageId, provider: 'smtp' };
+                const sendOptions = { ...mailOptions, from: mailOptions.from || finalFrom };
+                const info = await transporter.sendMail(sendOptions);
+                console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Custom SMTP sent: ${info.messageId}`);
+                return { success: true, messageId: info.messageId, provider: 'smtp' };
+            } catch (smtpErr) {
+                console.warn('[EmailService] Custom SMTP failed, trying integrations:', smtpErr.message);
+            }
         }
 
         // 2. Try Microsoft Integration (fall through to Google on failure)
@@ -432,51 +436,87 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
 
         // 3. Try Google Integration (Gmail API via Fetch for speed)
         if (integrations.google) {
-            const { access_token: googleAccessToken } = await getValidGoogleTokens(userId);
-            const googleFrom = integrations.google.email;
-            if (googleAccessToken && googleFrom) {
-                console.log(`[EmailService][${Date.now() - startTime}ms] Using Gmail API (Direct Fetch)`);
+            try {
+                const { access_token: googleAccessToken } = await getValidGoogleTokens(userId);
+                const googleFrom = integrations.google.email;
+                if (googleAccessToken && googleFrom) {
+                    console.log(`[EmailService][${Date.now() - startTime}ms] Using Gmail API (Direct Fetch)`);
 
-                const encodedMail = await buildGmailRawMime(mailOptions, googleFrom);
+                    const encodedMail = await buildGmailRawMime(mailOptions, googleFrom);
 
-                const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${googleAccessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ raw: encodedMail })
-                });
+                    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${googleAccessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ raw: encodedMail })
+                    });
 
-                if (response.ok) {
-                    const data = await response.json();
-                    console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Gmail API sent: ${data.id}`);
-                    return { success: true, messageId: data.id, provider: 'google' };
-                } else {
-                    const errData = await response.json();
-                    console.error('[EmailService] ❌ Gmail API Failed:', errData);
-                    
-                    // Specific error handling for UX
-                    if (errData.error?.code === 401) {
-                        throw new Error('Gmail access expired. Please reconnect your account in Integrations.');
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Gmail API sent: ${data.id}`);
+                        return { success: true, messageId: data.id, provider: 'google' };
+                    } else {
+                        const errData = await response.json();
+                        console.error('[EmailService] ❌ Gmail API Failed:', errData);
+                        
+                        // Specific error handling for UX
+                        if (errData.error?.code === 401) {
+                            throw new Error('Gmail access expired. Please reconnect your account in Integrations.');
+                        }
+                        if (errData.error?.code === 403) {
+                            throw new Error('Gmail permission denied. Make sure you granted "Send" permissions.');
+                        }
+                        if (errData.error?.code === 429) {
+                            throw new Error('Gmail rate limit reached. Please try again in a few minutes.');
+                        }
+                        if (errData.error?.message?.includes('Invalid To header')) {
+                            throw new Error('Invalid recipient email address.');
+                        }
+                        
+                        throw new Error(`Gmail API Error: ${errData.error?.message || 'Unknown error'}`);
                     }
-                    if (errData.error?.code === 403) {
-                        throw new Error('Gmail permission denied. Make sure you granted "Send" permissions.');
-                    }
-                    if (errData.error?.code === 429) {
-                        throw new Error('Gmail rate limit reached. Please try again in a few minutes.');
-                    }
-                    if (errData.error?.message?.includes('Invalid To header')) {
-                        throw new Error('Invalid recipient email address.');
-                    }
-                    
-                    throw new Error(`Gmail API Error: ${errData.error?.message || 'Unknown error'}`);
                 }
+            } catch (googleErr) {
+                console.warn('[EmailService] Google Integration failed, trying fallback:', googleErr.message);
             }
         }
 
+        // 4. Try Platform Gmail Fallback (SMTP using EMAIL_USER and EMAIL_PASS)
+        const platformEmail = process.env.EMAIL_USER?.trim();
+        const platformPass = process.env.EMAIL_PASS?.replace(/\s+/g, '');
+        if (platformEmail && platformPass) {
+            console.log(`[EmailService][${Date.now() - startTime}ms] Using Platform Gmail Fallback SMTP (${platformEmail})`);
+            const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: {
+                    user: platformEmail,
+                    pass: platformPass,
+                },
+                ...SMTP_TIMEOUTS,
+            });
+
+            // Fetch business owner name/email for From and Reply-To headers
+            const userRes = await pool.query('SELECT name, company_name, email FROM users WHERE id = $1', [userId]);
+            const user = userRes.rows[0] || {};
+            const displayName = user.company_name || user.name || 'Our Team';
+            
+            const finalFrom = `"${displayName.replace(/"/g, '\\"')}" <${platformEmail}>`;
+            const finalReplyTo = mailOptions.replyTo || user.email || platformEmail;
+
+            const sendOptions = {
+                ...mailOptions,
+                from: mailOptions.from || finalFrom,
+                replyTo: finalReplyTo,
+            };
+            const info = await transporter.sendMail(sendOptions);
+            console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Platform Gmail Fallback sent: ${info.messageId}`);
+            return { success: true, messageId: info.messageId, provider: 'platform_gmail_fallback' };
+        }
+
         throw new Error(
-            'No outbound email is configured for this workspace. Link the Gmail you use on your account — ' +
+            'No outbound email is configured for this workspace, and platform fallback failed. Link the Gmail you use on your account — ' +
                 'open Dashboard → Integrations → Connect Google — or connect Microsoft Outlook, ' +
                 'or add SMTP. You can change this anytime in Integrations or SMTP settings.'
         );
