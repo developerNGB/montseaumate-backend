@@ -509,49 +509,12 @@ export const sendDynamicEmail = async (userId, mailOptions, options = {}) => {
             }
         }
 
-        // Try Platform Gmail Fallback (SMTP using EMAIL_USER and EMAIL_PASS)
-        const platformEmail = process.env.EMAIL_USER?.trim();
-        const platformPass = process.env.EMAIL_PASS?.replace(/\s+/g, '');
-        if (platformEmail && platformPass) {
-            try {
-                console.log(`[EmailService][${Date.now() - startTime}ms] Using Platform Gmail Fallback SMTP (${platformEmail})`);
-                const transporter = nodemailer.createTransport({
-                    service: 'gmail',
-                    auth: {
-                        user: platformEmail,
-                        pass: platformPass,
-                    },
-                    ...SMTP_TIMEOUTS,
-                });
-
-                // Fetch business owner name/email for From and Reply-To headers
-                const userRes = await pool.query('SELECT name, company_name, email FROM users WHERE id = $1', [userId]);
-                const user = userRes.rows[0] || {};
-                const displayName = user.company_name || user.name || 'Our Team';
-                
-                const finalFrom = `"${displayName.replace(/"/g, '\\"')}" <${platformEmail}>`;
-                const finalReplyTo = mailOptions.replyTo || user.email || platformEmail;
-
-                const sendOptions = {
-                    ...mailOptions,
-                    from: mailOptions.from || finalFrom,
-                    replyTo: finalReplyTo,
-                };
-                const info = await transporter.sendMail(sendOptions);
-                console.log(`[EmailService][${Date.now() - startTime}ms] ✅ Platform Gmail Fallback sent: ${info.messageId}`);
-                return { success: true, messageId: info.messageId, provider: 'platform_gmail_fallback' };
-            } catch (fallbackErr) {
-                console.error('[EmailService] Platform Fallback failed:', fallbackErr.message);
-                lastError = fallbackErr;
-            }
-        }
-
         if (lastError) {
             throw lastError;
         }
 
         throw new Error(
-            'No outbound email is configured for this workspace, and platform fallback failed. Link the Gmail you use on your account — ' +
+            'No outbound email is configured for this workspace. Link the Gmail you use on your account — ' +
                 'open Dashboard → Integrations → Connect Google — or connect Microsoft Outlook, ' +
                 'or add SMTP. You can change this anytime in Integrations or SMTP settings.'
         );
