@@ -504,10 +504,10 @@ export const getGoogleReviewLinkSuggestion = async (req, res) => {
         if (!result.ok) {
             const status =
                 result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 401 :
-                result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
-                result.code === 'GBP_NO_LOCATIONS' ? 404 :
-                result.code === 'GBP_AMBIGUOUS' ? 409 :
-                result.status === 429 ? 429 : 502;
+                    result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
+                        result.code === 'GBP_NO_LOCATIONS' ? 404 :
+                            result.code === 'GBP_AMBIGUOUS' ? 409 :
+                                result.status === 429 ? 429 : 502;
             return res.status(status).json({
                 success: false,
                 ...result,
@@ -566,10 +566,8 @@ export const connectProvider = async (req, res) => {
         if (provider === 'google') {
             const clientId = process.env.GOOGLE_CLIENT_ID;
             if (clientId) {
-                // Real Google OAuth2 â€” least privilege: send mail only (no inbox read / full Gmail)
-                // gmail.send â†’ Gmail API users.messages.send (see emailService.js)
-                // email + profile â†’ oauth2 userinfo for connected account display
-                // Note: automatic "reply detected" inbox scanning (followupCron) needs readonly and is skipped if list returns 403.
+                // Real Google OAuth2 — request gmail.send for outbound dispatch (see emailService.js)
+                // email + profile → oauth2 userinfo for connected account display
                 const scopes = [
                     'openid',
                     'https://www.googleapis.com/auth/userinfo.email',
@@ -635,12 +633,12 @@ export const providerCallback = async (req, res) => {
         const ticket = String(state || '').trim();
         const ticketRes = ticket
             ? await pool.query(
-                  `SELECT user_id, job_id
+                `SELECT user_id, job_id
                    FROM oauth_connect_tickets
                    WHERE ticket = $1 AND provider = $2 AND used = FALSE AND expires_at > NOW()
                    LIMIT 1`,
-                  [ticket, provider]
-              )
+                [ticket, provider]
+            )
             : { rows: [] };
         const ticketRow = ticketRes.rows[0] || null;
         const jobId = ticketRow?.job_id || '';
@@ -750,7 +748,7 @@ export const providerCallback = async (req, res) => {
 
             accessToken = tokenData.access_token;
             refreshToken = tokenData.refresh_token || null;
-            
+
             // FETCH MICROSOFT EMAIL
             try {
                 const meRes = await fetch('https://graph.microsoft.com/v1.0/me', {
@@ -789,8 +787,8 @@ export const providerCallback = async (req, res) => {
                 refreshToken = `mock_${provider}_refresh_token_never_expires`;
                 metadata.email = `mock_${provider}_user@example.com`;
                 // Provide a mock review link for Google
-                accountId = provider === 'google' 
-                    ? 'https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4' 
+                accountId = provider === 'google'
+                    ? 'https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4'
                     : `mock_${provider}_account_id`;
                 expiresAt = new Date(Date.now() + 3600 * 1000); // 1 hour
             } else {
@@ -1503,7 +1501,7 @@ export const getGoogleAnalytics = async (req, res) => {
                 // Standard location format is locations/{locationId}. If locationName is accounts/123/locations/456, we extract locations/456
                 const locPart = locationName.includes('/locations/') ? `locations/${locationName.split('/locations/')[1]}` : locationName;
                 const perfUrl = `https://businessprofileperformance.googleapis.com/v1/${locPart}:fetchMultiDailyMetricsTimeSeries?dailyMetrics=BUSINESS_IMPRESSIONS_DESKTOP_MAPS,BUSINESS_IMPRESSIONS_MOBILE_MAPS,BUSINESS_IMPRESSIONS_DESKTOP_SEARCH,BUSINESS_IMPRESSIONS_MOBILE_SEARCH,BUSINESS_DIRECTION_REQUESTS,BUSINESS_CALLS,BUSINESS_URL_CLICKS&dailyRange.startDate.year=2026&dailyRange.startDate.month=05&dailyRange.startDate.day=01&dailyRange.endDate.year=2026&dailyRange.endDate.month=06&dailyRange.endDate.day=01`;
-                
+
                 const apiRes = await fetchGoogleJson(perfUrl, accessToken);
                 if (apiRes.response.ok && apiRes.data?.multiDailyMetricTimeSeries) {
                     // Summarize values
@@ -1912,7 +1910,7 @@ export const getGoogleBooster = async (req, res) => {
                 console.error('[getGoogleBooster] Failed to auto-resolve location resource name:', resolveErr.message);
             }
         }
-        
+
         // Fetch reviews (fallback to default if real API fails or token is mock)
         let reviews = [];
         let realFetchSuccess = false;

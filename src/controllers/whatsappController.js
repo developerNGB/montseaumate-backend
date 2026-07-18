@@ -71,9 +71,15 @@ export const sendNativeMessage = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
-        // 1. Authorize: Find the user who owns this native session token
+        // 1. Authorize: Find the user who owns this native session.
+        // We validate whatsapp_access_token against the user's UUID (user_id) or the integration's id (UUID).
+        // The literal string 'whatsapp_native_session' is shared across all users and must NOT be allowed
+        // as a valid auth token.
         const authCheck = await pool.query(
-            "SELECT user_id FROM integrations WHERE provider = 'whatsapp' AND access_token = $1",
+            `SELECT user_id FROM integrations 
+             WHERE provider = 'whatsapp' 
+               AND (id::text = $1 OR user_id::text = $1 OR access_token = $1)
+               AND access_token != 'whatsapp_native_session'`,
             [whatsapp_access_token]
         );
 
