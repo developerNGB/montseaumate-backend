@@ -246,7 +246,7 @@ export const getGoogleBusinessListings = async (req, res) => {
         const userId = req.user.id;
         const { access_token: accessToken } = await getValidGoogleTokens(userId);
         if (!accessToken) {
-            return res.status(401).json({ success: false, code: 'GOOGLE_TOKEN_UNAVAILABLE', message: 'Google is not connected.' });
+            return res.status(404).json({ success: false, code: 'GOOGLE_TOKEN_UNAVAILABLE', message: 'Google is not connected.' });
         }
 
         if (accessToken.startsWith('mock_')) {
@@ -503,7 +503,7 @@ export const getGoogleReviewLinkSuggestion = async (req, res) => {
 
         if (!result.ok) {
             const status =
-                result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 401 :
+                result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 404 :
                     result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
                         result.code === 'GBP_NO_LOCATIONS' ? 404 :
                             result.code === 'GBP_AMBIGUOUS' ? 409 :
@@ -1010,7 +1010,7 @@ export const getGoogleReviews = async (req, res) => {
 
         const { access_token: accessToken } = await getValidGoogleTokens(userId);
         if (!accessToken) {
-            return res.status(401).json({ success: false, message: 'Google authentication expired.' });
+            return res.status(404).json({ success: false, message: 'Google authentication expired.' });
         }
 
         let metadata = result.rows[0].metadata || {};
@@ -1287,7 +1287,7 @@ export const getGooglePosts = async (req, res) => {
 
         const { access_token: accessToken } = await getValidGoogleTokens(userId);
         if (!accessToken) {
-            return res.status(401).json({ success: false, message: 'Google authentication expired.' });
+            return res.status(404).json({ success: false, message: 'Google authentication expired.' });
         }
 
         let metadata = result.rows[0].metadata || {};
