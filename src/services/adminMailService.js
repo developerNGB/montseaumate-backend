@@ -1,4 +1,8 @@
 import pool from '../db/pool.js';
+import fetch from 'node-fetch';
+import { getValidGoogleToken } from '../utils/googleAuth.js';
+import { buildGmailRawMime } from '../utils/mimeMessage.js';
+import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -27,86 +31,67 @@ function isPlaceholderSmtpPass(pass) {
 /**
  * Sends a notification email to the admin inbox defined in CONTACT_FORM_TO.
  * Guarantees that the email is sent ONLY from the configured admin email (equipoexpertoia@gmail.com).
- * Uses env-configured Gmail SMTP on port 587 as the primary strategy, with fallbacks.
+ * Uses the Gmail REST API over HTTPS (port 443) as the primary strategy to bypass SMTP port blocking.
  */
 export async function sendAdminNotification({ subject, text, html, replyTo }) {
     const adminEmail = (process.env.CONTACT_FORM_TO || 'equipoexpertoia@gmail.com').trim().toLowerCase();
     const errors = [];
 
-    // --- STRATEGY 1: Try env Gmail SMTP on port 587 with App Password (STARTTLS) ---
+    // --- STRATEGY 1: Try env Gmail REST API over HTTPS (using GOOGLE_REFRESH_TOKEN) ---
     try {
         const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
-        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
 
-        if (gmailUser && gmailPass) {
+        if (gmailUser && clientId && clientSecret && refreshToken) {
             if (gmailUser.toLowerCase().trim() !== adminEmail) {
                 throw new Error(`Gmail user ${gmailUser} does not match adminEmail ${adminEmail}`);
             }
 
-            console.log(`[AdminMailService] Attempting env Gmail SMTP:587 send via ${gmailUser}`);
-            const transporter587 = nodemailer.createTransport({
-                host: 'smtp.gmail.com',
-                port: 587,
-                secure: false,
-                requireTLS: true,
-                auth: { user: gmailUser, pass: gmailPass },
-                connectionTimeout: SMTP_TIMEOUT_MS,
-                greetingTimeout: SMTP_TIMEOUT_MS,
-                socketTimeout: SMTP_TIMEOUT_MS,
+            console.log(`[AdminMailService] Attempting env Gmail REST API HTTPS OAuth2 send via ${gmailUser}`);
+            const oauth2Client = new google.auth.OAuth2(
+                clientId,
+                clientSecret,
+                "https://developers.google.com/oauthplayground"
+            );
+            oauth2Client.setCredentials({
+                refresh_token: refreshToken,
             });
-            const info = await transporter587.sendMail({
-                from: `"Equipo Experto Notification" <${gmailUser}>`,
-                to: adminEmail,
-                replyTo: replyTo || undefined,
-                subject,
-                text,
-                html,
+
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+            const lines = [
+                `To: ${adminEmail}`,
+                `From: "Equipo Experto Notification" <${gmailUser}>`,
+                replyTo ? `Reply-To: ${replyTo}` : '',
+                `Subject: ${subject}`,
+                `MIME-Version: 1.0`,
+                `Content-Type: text/html; charset=utf-8`,
+                ``,
+                html || text,
+            ].filter(line => line !== '');
+
+            const raw = Buffer.from(lines.join("\r\n"))
+                .toString("base64")
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=+$/, "");
+
+            const response = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw },
             });
-            console.log(`[AdminMailService] ✅ Sent via env Gmail SMTP:587: ${info.messageId}`);
-            return { success: true, messageId: info.messageId, provider: 'env_gmail_smtp_587' };
+
+            console.log(`[AdminMailService] ✅ Sent via env Gmail REST API HTTPS: ${response.data.id}`);
+            return { success: true, messageId: response.data.id, provider: 'env_gmail_api_oauth2' };
         }
-    } catch (err587) {
-        console.warn(`[AdminMailService] Env Gmail SMTP:587 failed: ${err587.message}`);
-        errors.push(`env_gmail_smtp_587:${err587.message}`);
+    } catch (err) {
+        console.warn(`[AdminMailService] Env Gmail REST API OAuth2 Strategy failed: ${err.message}`);
+        errors.push(`env_gmail_api_oauth2:${err.message}`);
     }
 
-    // --- STRATEGY 2: Try env Gmail SMTP on port 465 with App Password (SSL) ---
-    try {
-        const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
-        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-
-        if (gmailUser && gmailPass) {
-            if (gmailUser.toLowerCase().trim() !== adminEmail) {
-                throw new Error(`Gmail user ${gmailUser} does not match adminEmail ${adminEmail}`);
-            }
-
-            console.log(`[AdminMailService] Attempting env Gmail SMTP:465 send via ${gmailUser}`);
-            const transporter465 = nodemailer.createTransport({
-                host: 'smtp.gmail.com',
-                port: 465,
-                secure: true,
-                auth: { user: gmailUser, pass: gmailPass },
-                connectionTimeout: SMTP_TIMEOUT_MS,
-                greetingTimeout: SMTP_TIMEOUT_MS,
-                socketTimeout: SMTP_TIMEOUT_MS,
-            });
-            const info = await transporter465.sendMail({
-                from: `"Equipo Experto Notification" <${gmailUser}>`,
-                to: adminEmail,
-                replyTo: replyTo || undefined,
-                subject,
-                text,
-                html,
-            });
-            console.log(`[AdminMailService] ✅ Sent via env Gmail SMTP:465: ${info.messageId}`);
-            return { success: true, messageId: info.messageId, provider: 'env_gmail_smtp_465' };
-        }
-    } catch (err465) {
-        console.warn(`[AdminMailService] Env Gmail SMTP:465 failed: ${err465.message}`);
-        errors.push(`env_gmail_smtp_465:${err465.message}`);
-    }
-
-    // --- STRATEGY 3: Try Database-configured Google OAuth integration for the admin user (If matches admin email) ---
+    // --- STRATEGY 2: Try Database-configured Google OAuth integration for the admin user (If matches admin email) ---
     try {
         const adminRes = await pool.query(`SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1`, [adminEmail]);
         const targetUserId = adminRes.rows[0]?.id || (await pool.query(`SELECT id FROM users ORDER BY created_at ASC LIMIT 1`)).rows[0]?.id;
@@ -128,10 +113,6 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
                 fromEmail = fromEmail.trim().toLowerCase();
 
                 if (fromEmail === adminEmail) {
-                    const { getValidGoogleToken } = await import('../utils/googleAuth.js');
-                    const { buildGmailRawMime } = await import('../utils/mimeMessage.js');
-                    const { default: fetch } = await import('node-fetch');
-
                     const accessToken = await getValidGoogleToken(targetUserId);
                     if (accessToken) {
                         console.log(`[AdminMailService] Attempting Gmail API send (From: ${fromEmail})`);
@@ -162,7 +143,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
                         }
                     }
                 } else {
-                    console.warn(`[AdminMailService] Google integration email ${fromEmail} does not match adminEmail ${adminEmail}, skipping Strategy 3`);
+                    console.warn(`[AdminMailService] Google integration email ${fromEmail} does not match adminEmail ${adminEmail}, skipping Strategy 2`);
                 }
             }
         }
@@ -171,7 +152,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
         errors.push(`gmail_api_oauth:${err.message}`);
     }
 
-    // --- STRATEGY 4: Try Database-configured SMTP Settings for the admin user (If matches admin email) ---
+    // --- STRATEGY 3: Try Database-configured SMTP Settings for the admin user (If matches admin email) ---
     try {
         const adminRes = await pool.query(`SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1`, [adminEmail]);
         const targetUserId = adminRes.rows[0]?.id || (await pool.query(`SELECT id FROM users ORDER BY created_at ASC LIMIT 1`)).rows[0]?.id;
@@ -204,7 +185,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
                     console.log(`[AdminMailService] ✅ Sent via DB SMTP settings: ${info.messageId}`);
                     return { success: true, messageId: info.messageId, provider: 'db_smtp' };
                 } else {
-                    console.warn(`[AdminMailService] DB SMTP from_email ${configFrom} does not match adminEmail ${adminEmail}, skipping Strategy 4`);
+                    console.warn(`[AdminMailService] DB SMTP from_email ${configFrom} does not match adminEmail ${adminEmail}, skipping Strategy 3`);
                 }
             }
         }
@@ -213,7 +194,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
         errors.push(`db_smtp:${err.message}`);
     }
 
-    // --- STRATEGY 5: Try env CDMON SMTP ---
+    // --- STRATEGY 4: Try env CDMON SMTP ---
     try {
         const supportHost = process.env.SUPPORT_SMTP_HOST?.trim();
         const supportUser = process.env.SUPPORT_SMTP_USER?.trim();
@@ -243,12 +224,76 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
                 console.log(`[AdminMailService] ✅ Sent via CDMON SMTP: ${info.messageId}`);
                 return { success: true, messageId: info.messageId, provider: 'cdmon_smtp' };
             } else {
-                console.warn(`[AdminMailService] CDMON supportUser ${supportUser} does not match adminEmail ${adminEmail}, skipping Strategy 5`);
+                console.warn(`[AdminMailService] CDMON supportUser ${supportUser} does not match adminEmail ${adminEmail}, skipping Strategy 4`);
             }
         }
     } catch (err) {
         console.warn(`[AdminMailService] CDMON SMTP Strategy failed: ${err.message}`);
         errors.push(`cdmon_smtp:${err.message}`);
+    }
+
+    // --- STRATEGY 5: Try env Gmail SMTP (port 465 -> 587 fallback) ---
+    const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
+    const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+    if (gmailUser && gmailPass) {
+        if (gmailUser.toLowerCase().trim() === adminEmail) {
+            // Try Port 465 first
+            try {
+                console.log(`[AdminMailService] Attempting env Gmail SMTP:465 send`);
+                const transporter465 = nodemailer.createTransport({
+                    host: 'smtp.gmail.com',
+                    port: 465,
+                    secure: true,
+                    auth: { user: gmailUser, pass: gmailPass },
+                    connectionTimeout: SMTP_TIMEOUT_MS,
+                    greetingTimeout: SMTP_TIMEOUT_MS,
+                    socketTimeout: SMTP_TIMEOUT_MS,
+                });
+                const info = await transporter465.sendMail({
+                    from: `"Equipo Experto Notification" <${gmailUser}>`,
+                    to: adminEmail,
+                    replyTo: replyTo || undefined,
+                    subject,
+                    text,
+                    html,
+                });
+                console.log(`[AdminMailService] ✅ Sent via env Gmail SMTP:465: ${info.messageId}`);
+                return { success: true, messageId: info.messageId, provider: 'env_gmail_smtp_465' };
+            } catch (err465) {
+                console.warn(`[AdminMailService] Env Gmail SMTP:465 failed (${err465.message}), trying port 587...`);
+                errors.push(`env_gmail_smtp_465:${err465.message}`);
+            }
+
+            // Try Port 587 next
+            try {
+                console.log(`[AdminMailService] Attempting env Gmail SMTP:587 send`);
+                const transporter587 = nodemailer.createTransport({
+                    host: 'smtp.gmail.com',
+                    port: 587,
+                    secure: false,
+                    requireTLS: true,
+                    auth: { user: gmailUser, pass: gmailPass },
+                    connectionTimeout: SMTP_TIMEOUT_MS,
+                    greetingTimeout: SMTP_TIMEOUT_MS,
+                    socketTimeout: SMTP_TIMEOUT_MS,
+                });
+                const info = await transporter587.sendMail({
+                    from: `"Equipo Experto Notification" <${gmailUser}>`,
+                    to: adminEmail,
+                    replyTo: replyTo || undefined,
+                    subject,
+                    text,
+                    html,
+                });
+                console.log(`[AdminMailService] ✅ Sent via env Gmail SMTP:587: ${info.messageId}`);
+                return { success: true, messageId: info.messageId, provider: 'env_gmail_smtp_587' };
+            } catch (err587) {
+                console.error(`[AdminMailService] Env Gmail SMTP:587 failed (${err587.message}).`);
+                errors.push(`env_gmail_smtp_587:${err587.message}`);
+            }
+        } else {
+            console.warn(`[AdminMailService] Gmail user ${gmailUser} does not match adminEmail ${adminEmail}, skipping Strategy 5`);
+        }
     }
 
     throw new Error(`All notification strategies failed: ${errors.join('; ')}`);
