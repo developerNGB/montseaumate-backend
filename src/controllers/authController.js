@@ -26,7 +26,8 @@ const selectUserByEmailQuery = `
     SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at,
            COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
            COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
-           trial_ends_at, stripe_subscription_id, stripe_customer_id
+           trial_ends_at, stripe_subscription_id, stripe_customer_id,
+           auth_provider
     FROM users
     WHERE lower(email) = $1
     LIMIT 1
@@ -330,7 +331,7 @@ export const getProfile = async (req, res) => {
         console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
             `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
-                    trial_ends_at, stripe_subscription_id, stripe_customer_id
+                    trial_ends_at, stripe_subscription_id, stripe_customer_id, auth_provider
              FROM users
              WHERE id = $1`,
             [req.user.id]
@@ -383,7 +384,7 @@ export const updateProfile = async (req, res) => {
              SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, onboarding_completed = COALESCE($5, onboarding_completed), updated_at = NOW()
              WHERE id = $6
              RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
-                       trial_ends_at, stripe_subscription_id, stripe_customer_id`,
+                       trial_ends_at, stripe_subscription_id, stripe_customer_id, auth_provider`,
             [
                 company_name ? company_name.trim() : null,
                 email.toLowerCase().trim(),
@@ -426,6 +427,15 @@ export const updatePassword = async (req, res) => {
 
         // Fetch current password hash
         const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+
+        // Google OAuth users have no local password — give a clear, helpful message
+        if (!result.rows[0].password_hash) {
+            return res.status(400).json({
+                success: false,
+                message: 'Your account uses Google sign-in and does not have a local password. Please continue signing in with Google.',
+                code: 'google_oauth_account',
+            });
+        }
 
         const isMatch = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
         if (!isMatch) {

@@ -5,12 +5,6 @@ import pool from '../db/pool.js';
 import { normalizeLeadGroup } from '../utils/leadGroups.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
 import { injectPlaceholders, createEmailTemplate } from '../utils/templateUtils.js';
-import {
-    isContactFormMailConfigured,
-    listContactFormSenderUserIds,
-    sendContactFormNotification,
-} from '../services/contactFormMailService.js';
-import { getContactFormInbox } from '../services/supportMailService.js';
 import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { computeLeadScore } from '../utils/leadScoring.js';
@@ -71,60 +65,109 @@ const notifyOwnerInternally = async (config, subject, message) => {
 };
 
 /**
- * GET /api/support/contact/status — public readiness (no secrets)
+ * GET /api/support/contact/status — public readiness (no secrets exposed)
  */
 export const getContactFormStatus = async (_req, res) => {
     try {
-        const senderIds = await listContactFormSenderUserIds();
-        const configured = await isContactFormMailConfigured();
+        const gmailUser = (process.env.EMAIL_USER || '').trim();
+        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+        const configured = Boolean(gmailUser && gmailPass);
         return res.json({
             success: true,
-            transport: 'gmail_api_or_smtp',
+            transport: 'gmail_smtp',
             configured,
-            senderCandidates: senderIds.length,
-            inbox: getContactFormInbox(),
+            inbox: gmailUser || 'equipoexpertoia@gmail.com',
         });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
     }
 };
 
+
 /**
  * POST /api/support/contact
- * Handles contact form submissions from the main landing page
+ * Sends contact form email from equipoexpertoia@gmail.com to itself using Gmail SMTP.
+ * Uses EMAIL_USER + EMAIL_PASS (App Password) — no dashboard integration required.
  */
 export const submitContactForm = async (req, res) => {
     try {
         const { name, email, message } = req.body;
 
-        if (!name || !email || !message) {
+        // Basic validation (client also validates, but double-check server side)
+        const trimmedName    = (name    || '').trim();
+        const trimmedEmail   = (email   || '').trim();
+        const trimmedMessage = (message || '').trim();
+
+        if (!trimmedName || !trimmedEmail || !trimmedMessage) {
             return res.status(400).json({ success: false, message: 'Please provide name, email and message.' });
         }
 
-        console.log(`[submitContactForm] New message from ${name} (${email})`);
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(trimmedEmail)) {
+            return res.status(400).json({ success: false, message: 'Please provide a valid email address.' });
+        }
 
-        if (!(await isContactFormMailConfigured())) {
-            console.error(
-                '[submitContactForm] No Gmail sender: connect Google in Integrations (gmail.send) or set CONTACT_FORM_GOOGLE_REFRESH_TOKEN',
-            );
+        const gmailUser = (process.env.EMAIL_USER || '').trim();
+        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+
+        if (!gmailUser || !gmailPass) {
+            console.error('[submitContactForm] EMAIL_USER / EMAIL_PASS not set in .env');
             return res.status(503).json({
                 success: false,
-                code: 'contact_sender_not_configured',
-                message:
-                    'We could not send your message right now. Please email equipoexpertoia@gmail.com directly or try again later.',
+                code: 'smtp_not_configured',
+                message: 'We could not send your message right now. Please email equipoexpertoia@gmail.com directly.',
             });
         }
 
-        const source =
-            req.body.source === 'billing'
-                ? 'Equipo Experto billing inquiry (Custom Sales)'
-                : 'Equipo Experto contact form';
+        console.log(`[submitContactForm] Sending contact mail from ${trimmedName} (${trimmedEmail}) via Gmail SMTP`);
 
-        const toEmail = getContactFormInbox();
-        const result = await sendContactFormNotification({ name, email, message, source });
-        console.log(
-            `[submitContactForm] ✅ Email sent via ${result.provider} → ${toEmail}`,
-        );
+        // Lazy-import nodemailer so this module loads even when nodemailer isn't available at startup
+        const nodemailer = (await import('nodemailer')).default;
+
+        const transporter = nodemailer.createTransport({
+            host: 'smtp.gmail.com',
+            port: 465,
+            secure: true,
+            auth: { user: gmailUser, pass: gmailPass },
+            connectionTimeout: 8000,
+            greetingTimeout: 5000,
+            socketTimeout: 8000,
+        });
+
+        const isSource = req.body.source === 'billing';
+        const sourceLabel = isSource ? 'Billing Inquiry (Custom Sales)' : 'Landing Page Contact Form';
+
+        const htmlBody = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;background:#f9f9f9;">
+  <div style="background:#fff;border-radius:8px;padding:30px;border:1px solid #e0e0e0;">
+    <h2 style="color:#1a1a2e;margin-top:0;">📬 New Contact Message</h2>
+    <table style="width:100%;border-collapse:collapse;">
+      <tr><td style="padding:8px 0;font-weight:bold;color:#555;width:120px;">Source:</td><td style="padding:8px 0;color:#333;">${sourceLabel}</td></tr>
+      <tr><td style="padding:8px 0;font-weight:bold;color:#555;">Name:</td><td style="padding:8px 0;color:#333;">${trimmedName}</td></tr>
+      <tr><td style="padding:8px 0;font-weight:bold;color:#555;">Email:</td><td style="padding:8px 0;"><a href="mailto:${trimmedEmail}" style="color:#0066cc;">${trimmedEmail}</a></td></tr>
+    </table>
+    <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+    <h3 style="color:#555;margin-bottom:10px;">Message:</h3>
+    <div style="background:#f5f5f5;padding:15px;border-radius:6px;color:#333;line-height:1.6;white-space:pre-wrap;">${trimmedMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+    <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+    <p style="color:#888;font-size:12px;margin:0;">Reply directly to <a href="mailto:${trimmedEmail}">${trimmedEmail}</a> to respond to this message.</p>
+  </div>
+</body>
+</html>`;
+
+        await transporter.sendMail({
+            from: `"Equipo Experto Contact Form" <${gmailUser}>`,
+            to: gmailUser,       // send to itself — admin reads all messages here
+            replyTo: trimmedEmail,
+            subject: `[Contact Form] New message from ${trimmedName}`,
+            text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
+            html: htmlBody,
+        });
+
+        console.log(`[submitContactForm] ✅ Email sent via Gmail SMTP → ${gmailUser}`);
 
         return res.status(200).json({
             success: true,
@@ -132,35 +175,24 @@ export const submitContactForm = async (req, res) => {
         });
 
     } catch (err) {
-        console.error('[submitContactForm] CRITICAL ERR:', err.code || err.message, err.response || '');
-        const msg = String(err.message || '');
-        let code = 'contact_send_failed';
-        if (err.code === 'contact_sender_not_configured') {
-            code = 'contact_sender_not_configured';
-        } else if (err.code === 'contact_gmail_scope' || /gmail\.send|Send" permissions/i.test(msg)) {
-            code = 'contact_integration_expired';
-        } else if (/expired|reconnect/i.test(msg)) {
-            code = 'contact_integration_expired';
-        } else if (/rate limit/i.test(msg)) {
-            code = 'contact_rate_limited';
+        console.error('[submitContactForm] FAILED:', err.code || err.message);
+
+        let userMessage = 'We could not deliver your message. Please email equipoexpertoia@gmail.com directly or try again later.';
+        if (err.code === 'EAUTH') {
+            userMessage = 'Email authentication failed on the server. Please try again later or contact us directly.';
+            console.error('[submitContactForm] Gmail Auth error — check EMAIL_USER / EMAIL_PASS (App Password) in .env');
+        } else if (/ETIMEDOUT|ECONNECTION|ESOCKET/i.test(err.code || '')) {
+            userMessage = 'Email server is temporarily unreachable. Please try again in a moment.';
         }
-        const inbox = getContactFormInbox();
-        const userMessage =
-            code === 'contact_sender_not_configured'
-                ? `We could not send your message right now. Please email ${inbox} directly or try again later.`
-                : code === 'contact_integration_expired'
-                  ? 'Our email connection needs to be renewed. Please email us directly or try again in a few minutes.'
-                  : code === 'contact_rate_limited'
-                    ? 'Too many messages sent recently. Please wait a few minutes and try again.'
-                    : `We could not deliver your message. Please email ${inbox} directly or try again later.`;
 
         return res.status(503).json({
             success: false,
-            code,
+            code: err.code || 'contact_send_failed',
             message: userMessage,
         });
     }
 };
+
 
 // REMOVED ensureProductionUrl helper to allow direct .env control accurately as requested by user.
 

@@ -34,7 +34,12 @@ export const getFeedbackStats = async (req, res) => {
             `SELECT 
                 COUNT(*) as total_feedback,
                 AVG(rating_overall) as avg_rating,
-                COUNT(CASE WHEN contact_requested = true THEN 1 END) as leads_captured
+                COUNT(CASE WHEN contact_requested = true THEN 1 END) as leads_captured,
+                COUNT(CASE WHEN rating_overall = 1 THEN 1 END) as rating_1,
+                COUNT(CASE WHEN rating_overall = 2 THEN 1 END) as rating_2,
+                COUNT(CASE WHEN rating_overall = 3 THEN 1 END) as rating_3,
+                COUNT(CASE WHEN rating_overall = 4 THEN 1 END) as rating_4,
+                COUNT(CASE WHEN rating_overall = 5 THEN 1 END) as rating_5
              FROM feedback 
              WHERE user_id = $1`,
             [req.user.id]
@@ -45,7 +50,12 @@ export const getFeedbackStats = async (req, res) => {
             data: {
                 total_feedback: parseInt(stats.rows[0].total_feedback) || 0,
                 avg_rating: parseFloat(stats.rows[0].avg_rating) || 0,
-                leads_captured: parseInt(stats.rows[0].leads_captured) || 0
+                leads_captured: parseInt(stats.rows[0].leads_captured) || 0,
+                rating_1: parseInt(stats.rows[0].rating_1) || 0,
+                rating_2: parseInt(stats.rows[0].rating_2) || 0,
+                rating_3: parseInt(stats.rows[0].rating_3) || 0,
+                rating_4: parseInt(stats.rows[0].rating_4) || 0,
+                rating_5: parseInt(stats.rows[0].rating_5) || 0,
             }
         });
     } catch (err) {
