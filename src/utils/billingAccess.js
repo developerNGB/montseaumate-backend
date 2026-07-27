@@ -54,8 +54,10 @@ export function enrichUserForClient(user) {
     const is_admin = isAdminUser(user);
     const is_normal_user = isNormalUser(user);
     const billing = resolveBillingForEntitlements(user, user.plan, user.trial_ends_at);
+    const auth_provider = user.auth_provider || (user.password_hash ? 'email' : 'google');
     return {
         ...user,
+        auth_provider,
         is_admin,
         is_normal_user,
         plan: billing.plan,
@@ -70,8 +72,10 @@ export function enrichUserForNewSignup(user) {
     const is_admin = isAdminUser(user);
     const is_normal_user = isNormalUser(user);
     const billing = resolveBillingForEntitlements(user, user.plan, user.trial_ends_at);
+    const auth_provider = user.auth_provider || (user.password_hash ? 'email' : 'google');
     return {
         ...user,
+        auth_provider,
         is_admin,
         is_normal_user,
         plan: billing.plan,

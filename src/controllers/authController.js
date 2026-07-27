@@ -27,7 +27,7 @@ const selectUserByEmailQuery = `
            COALESCE(weekly_reports_enabled, TRUE) AS weekly_reports_enabled,
            COALESCE(onboarding_completed, FALSE) AS onboarding_completed,
            trial_ends_at, stripe_subscription_id, stripe_customer_id,
-           auth_provider
+           (CASE WHEN password_hash IS NULL OR password_hash = '' THEN 'google' ELSE 'email' END) AS auth_provider
     FROM users
     WHERE lower(email) = $1
     LIMIT 1
@@ -330,8 +330,9 @@ export const getProfile = async (req, res) => {
     try {
         console.log('[getProfile] Fetching for user id:', req.user?.id);
         const result = await pool.query(
-            `SELECT id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
-                    trial_ends_at, stripe_subscription_id, stripe_customer_id, auth_provider
+            `SELECT id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
+                    trial_ends_at, stripe_subscription_id, stripe_customer_id,
+                    (CASE WHEN password_hash IS NULL OR password_hash = '' THEN 'google' ELSE 'email' END) AS auth_provider
              FROM users
              WHERE id = $1`,
             [req.user.id]
@@ -383,8 +384,8 @@ export const updateProfile = async (req, res) => {
             `UPDATE users
              SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, onboarding_completed = COALESCE($5, onboarding_completed), updated_at = NOW()
              WHERE id = $6
-             RETURNING id, name, email, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
-                       trial_ends_at, stripe_subscription_id, stripe_customer_id, auth_provider`,
+             RETURNING id, name, email, password_hash, company_name, phone, plan, role, status, created_at, weekly_reports_enabled, onboarding_completed,
+                       trial_ends_at, stripe_subscription_id, stripe_customer_id`,
             [
                 company_name ? company_name.trim() : null,
                 email.toLowerCase().trim(),
