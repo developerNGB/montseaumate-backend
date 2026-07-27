@@ -240,7 +240,23 @@ export const submitContactForm = async (req, res) => {
             replyTo: trimmedEmail
         });
 
-        sendEmailPromise.catch(async (err) => {
+        sendEmailPromise.then(async (result) => {
+            console.log('[submitContactForm] Async admin notification succeeded:', result);
+            try {
+                await pool.query(
+                    `INSERT INTO activity_logs (id, user_id, automation_name, trigger_type, status, detail, metadata, created_at)
+                     VALUES (gen_random_uuid(), $1, 'Admin Notification', 'Contact Form Submit', 'Success', $2, $3, NOW())`,
+                    [
+                        targetUserId,
+                        `Email sent successfully via ${result.provider || 'unknown'}`,
+                        JSON.stringify(result)
+                    ]
+                );
+                console.log('[submitContactForm] ✅ Saved success activity log to DB');
+            } catch (logErr) {
+                console.error('[submitContactForm] Failed to log success activity to DB:', logErr.message);
+            }
+        }).catch(async (err) => {
             console.error('[submitContactForm] Async admin notification failed:', err.message);
             try {
                 await pool.query(
