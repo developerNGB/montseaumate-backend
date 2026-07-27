@@ -70,6 +70,12 @@ const notifyOwnerInternally = async (config, subject, message) => {
  */
 export const getContactFormStatus = async (_req, res) => {
     try {
+        let commitHash = 'unknown';
+        try {
+            const { execSync } = await import('child_process');
+            commitHash = execSync('git rev-parse HEAD').toString().trim();
+        } catch (err) {}
+
         const gmailUser = (process.env.EMAIL_USER || '').trim();
         const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
         const configured = Boolean(gmailUser && gmailPass);
@@ -78,6 +84,7 @@ export const getContactFormStatus = async (_req, res) => {
             transport: 'gmail_smtp',
             configured,
             inbox: gmailUser || 'equipoexpertoia@gmail.com',
+            version: commitHash,
         });
     } catch (err) {
         return res.status(500).json({ success: false, message: err.message });
