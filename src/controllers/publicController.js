@@ -233,15 +233,15 @@ export const submitContactForm = async (req, res) => {
         };
 
         // 3. Attempt sending email to admin inbox using the dedicated adminMailService (uses .env SMTP only)
-        const sendEmailPromise = sendAdminNotification({
-            subject: `[Contact Form] New message from ${trimmedName}`,
-            text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
-            html: htmlBody,
-            replyTo: trimmedEmail
-        });
+        try {
+            const result = await sendAdminNotification({
+                subject: `[Contact Form] New message from ${trimmedName}`,
+                text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
+                html: htmlBody,
+                replyTo: trimmedEmail
+            });
 
-        sendEmailPromise.then(async (result) => {
-            console.log('[submitContactForm] Async admin notification succeeded:', result);
+            console.log('[submitContactForm] Admin notification succeeded:', result);
             try {
                 await pool.query(
                     `INSERT INTO activity_logs (id, user_id, automation_name, trigger_type, status, detail, metadata, created_at)
@@ -256,8 +256,14 @@ export const submitContactForm = async (req, res) => {
             } catch (logErr) {
                 console.error('[submitContactForm] Failed to log success activity to DB:', logErr.message);
             }
-        }).catch(async (err) => {
-            console.error('[submitContactForm] Async admin notification failed:', err.message);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Your message has been received! Our team will get back to you shortly.',
+            });
+
+        } catch (err) {
+            console.error('[submitContactForm] Admin notification failed:', err.message);
             try {
                 await pool.query(
                     `INSERT INTO error_events (id, level, message, stack, context, user_id, route, method, created_at)
@@ -273,19 +279,18 @@ export const submitContactForm = async (req, res) => {
             } catch (logErr) {
                 console.error('[submitContactForm] Failed to log error event to DB:', logErr.message);
             }
-        });
 
-        // 4. Return 200 OK so visitor always gets confirmation
-        return res.status(200).json({
-            success: true,
-            message: 'Your message has been received! Our team will get back to you shortly.',
-        });
+            return res.status(500).json({
+                success: false,
+                message: `Failed to send email: ${err.message}`,
+            });
+        }
 
     } catch (err) {
         console.error('[submitContactForm] Error:', err.message);
-        return res.status(200).json({
-            success: true,
-            message: 'Your message has been received! Our team will get back to you shortly.',
+        return res.status(500).json({
+            success: false,
+            message: 'An internal error occurred. Please try again later.',
         });
     }
 };
