@@ -9,6 +9,7 @@ import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { computeLeadScore } from '../utils/leadScoring.js';
 import { notifyOwnerHotLead } from '../services/ownerNotifyService.js';
+import { sendAdminNotification } from '../services/adminMailService.js';
 
 // Load env vars for this controller
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -224,40 +225,15 @@ export const submitContactForm = async (req, res) => {
             html: htmlBody,
         };
 
-        // 3. Attempt sending email via target user's dynamic settings, fallback to static Gmail SMTP env
-        const sendEmailPromise = (async () => {
-            if (targetUserId) {
-                try {
-                    console.log(`[submitContactForm] Trying to send via sendDynamicEmail for user ${targetUserId}`);
-                    const result = await sendDynamicEmail(targetUserId, mailData);
-                    if (result && result.success) {
-                        console.log(`[submitContactForm] ✅ Email sent via sendDynamicEmail (${result.provider})`);
-                        return;
-                    }
-                } catch (dynErr) {
-                    console.warn(`[submitContactForm] sendDynamicEmail failed: ${dynErr.message}. Falling back to env SMTP.`);
-                }
-            }
+        // 3. Attempt sending email to admin inbox using the dedicated adminMailService (uses .env SMTP only)
+        const sendEmailPromise = sendAdminNotification({
+            subject: `[Contact Form] New message from ${trimmedName}`,
+            text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
+            html: htmlBody,
+            replyTo: trimmedEmail
+        });
 
-            const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
-            const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-
-            if (gmailUser && gmailPass) {
-                await sendContactFormMailWithFallback({
-                    gmailUser,
-                    gmailPass,
-                    trimmedName,
-                    trimmedEmail,
-                    trimmedMessage,
-                    sourceLabel,
-                    htmlBody,
-                });
-            } else {
-                console.warn('[submitContactForm] No backup SMTP env credentials available.');
-            }
-        })();
-
-        sendEmailPromise.catch((err) => console.error('[submitContactForm] Async mail delivery failed:', err.message));
+        sendEmailPromise.catch((err) => console.error('[submitContactForm] Async admin notification failed:', err.message));
 
         // 4. Return 200 OK so visitor always gets confirmation
         return res.status(200).json({
