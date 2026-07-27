@@ -163,11 +163,18 @@ export const submitContactForm = async (req, res) => {
         const isSource = req.body.source === 'billing';
         const sourceLabel = isSource ? 'Billing Inquiry (Custom Sales)' : 'Landing Page Contact Form';
 
-        // 1. Save to Database (leads table) so message is ALWAYS saved even if SMTP fails
+        // 1. Resolve Target User and Save to Database (leads table)
+        let targetUserId = null;
+        const recipientEmail = (
+            process.env.CONTACT_FORM_TO?.trim() ||
+            process.env.EMAIL_USER?.trim() ||
+            process.env.SUPPORT_EMAIL?.trim() ||
+            'equipoexpertoia@gmail.com'
+        ).trim();
+
         try {
-            const defaultOwnerEmail = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
-            const adminRes = await pool.query(`SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1`, [defaultOwnerEmail]);
-            let targetUserId = adminRes.rows[0]?.id;
+            const adminRes = await pool.query(`SELECT id FROM users WHERE lower(email) = lower($1) LIMIT 1`, [recipientEmail]);
+            targetUserId = adminRes.rows[0]?.id;
 
             if (!targetUserId) {
                 const ownerRes = await pool.query(`SELECT id FROM users ORDER BY created_at ASC LIMIT 1`);
@@ -187,12 +194,8 @@ export const submitContactForm = async (req, res) => {
             console.error('[submitContactForm] DB save notice:', dbErr.message);
         }
 
-        // 2. Attempt sending email via Gmail SMTP (port 465 -> 587 fallback)
-        const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
-        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-
-        if (gmailUser && gmailPass) {
-            const htmlBody = `
+        // 2. Construct email payloads
+        const htmlBody = `
 <!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"></head>
@@ -213,18 +216,50 @@ export const submitContactForm = async (req, res) => {
 </body>
 </html>`;
 
-            sendContactFormMailWithFallback({
-                gmailUser,
-                gmailPass,
-                trimmedName,
-                trimmedEmail,
-                trimmedMessage,
-                sourceLabel,
-                htmlBody,
-            }).catch((err) => console.error('[submitContactForm] Async mail notice:', err.message));
-        }
+        const mailData = {
+            to: recipientEmail,
+            replyTo: trimmedEmail,
+            subject: `[Contact Form] New message from ${trimmedName}`,
+            text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
+            html: htmlBody,
+        };
 
-        // 3. Return 200 OK so visitor always gets confirmation
+        // 3. Attempt sending email via target user's dynamic settings, fallback to static Gmail SMTP env
+        const sendEmailPromise = (async () => {
+            if (targetUserId) {
+                try {
+                    console.log(`[submitContactForm] Trying to send via sendDynamicEmail for user ${targetUserId}`);
+                    const result = await sendDynamicEmail(targetUserId, mailData);
+                    if (result && result.success) {
+                        console.log(`[submitContactForm] ✅ Email sent via sendDynamicEmail (${result.provider})`);
+                        return;
+                    }
+                } catch (dynErr) {
+                    console.warn(`[submitContactForm] sendDynamicEmail failed: ${dynErr.message}. Falling back to env SMTP.`);
+                }
+            }
+
+            const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
+            const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+
+            if (gmailUser && gmailPass) {
+                await sendContactFormMailWithFallback({
+                    gmailUser,
+                    gmailPass,
+                    trimmedName,
+                    trimmedEmail,
+                    trimmedMessage,
+                    sourceLabel,
+                    htmlBody,
+                });
+            } else {
+                console.warn('[submitContactForm] No backup SMTP env credentials available.');
+            }
+        })();
+
+        sendEmailPromise.catch((err) => console.error('[submitContactForm] Async mail delivery failed:', err.message));
+
+        // 4. Return 200 OK so visitor always gets confirmation
         return res.status(200).json({
             success: true,
             message: 'Your message has been received! Our team will get back to you shortly.',
