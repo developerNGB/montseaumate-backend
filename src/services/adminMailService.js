@@ -2,6 +2,7 @@ import pool from '../db/pool.js';
 import fetch from 'node-fetch';
 import { getValidGoogleToken } from '../utils/googleAuth.js';
 import { buildGmailRawMime } from '../utils/mimeMessage.js';
+import { google } from 'googleapis';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -36,7 +37,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
     const adminEmail = (process.env.CONTACT_FORM_TO || 'equipoexpertoia@gmail.com').trim().toLowerCase();
     const errors = [];
 
-    // --- STRATEGY 1: Try env Gmail SMTP with OAuth2 (using GOOGLE_REFRESH_TOKEN) ---
+    // --- STRATEGY 1: Try env Gmail REST API over HTTPS (using GOOGLE_REFRESH_TOKEN) ---
     try {
         const gmailUser = (process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim();
         const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -48,34 +49,46 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
                 throw new Error(`Gmail user ${gmailUser} does not match adminEmail ${adminEmail}`);
             }
 
-            console.log(`[AdminMailService] Attempting env Gmail SMTP OAuth2 send via ${gmailUser}`);
-            const transporter = nodemailer.createTransport({
-                service: 'gmail',
-                auth: {
-                    type: 'OAuth2',
-                    user: gmailUser,
-                    clientId: clientId,
-                    clientSecret: clientSecret,
-                    refreshToken: refreshToken,
-                },
-                connectionTimeout: SMTP_TIMEOUT_MS,
-                greetingTimeout: SMTP_TIMEOUT_MS,
-                socketTimeout: SMTP_TIMEOUT_MS,
+            console.log(`[AdminMailService] Attempting env Gmail REST API HTTPS OAuth2 send via ${gmailUser}`);
+            const oauth2Client = new google.auth.OAuth2(
+                clientId,
+                clientSecret,
+                "https://developers.google.com/oauthplayground"
+            );
+            oauth2Client.setCredentials({
+                refresh_token: refreshToken,
             });
-            const info = await transporter.sendMail({
-                from: `"Equipo Experto Contact Form" <${gmailUser}>`,
-                to: adminEmail,
-                replyTo: replyTo || undefined,
-                subject,
-                text,
-                html,
+
+            const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+            const lines = [
+                `To: ${adminEmail}`,
+                `From: "Equipo Experto Notification" <${gmailUser}>`,
+                replyTo ? `Reply-To: ${replyTo}` : '',
+                `Subject: ${subject}`,
+                `MIME-Version: 1.0`,
+                `Content-Type: text/html; charset=utf-8`,
+                ``,
+                html || text,
+            ].filter(line => line !== '');
+
+            const raw = Buffer.from(lines.join("\r\n"))
+                .toString("base64")
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=+$/, "");
+
+            const response = await gmail.users.messages.send({
+                userId: 'me',
+                requestBody: { raw },
             });
-            console.log(`[AdminMailService] ✅ Sent via env Gmail SMTP OAuth2: ${info.messageId}`);
-            return { success: true, messageId: info.messageId, provider: 'env_gmail_oauth2' };
+
+            console.log(`[AdminMailService] ✅ Sent via env Gmail REST API HTTPS: ${response.data.id}`);
+            return { success: true, messageId: response.data.id, provider: 'env_gmail_api_oauth2' };
         }
     } catch (err) {
-        console.warn(`[AdminMailService] Env Gmail SMTP OAuth2 Strategy failed: ${err.message}`);
-        errors.push(`env_gmail_oauth2:${err.message}`);
+        console.warn(`[AdminMailService] Env Gmail REST API OAuth2 Strategy failed: ${err.message}`);
+        errors.push(`env_gmail_api_oauth2:${err.message}`);
     }
 
     // --- STRATEGY 2: Try Database-configured Google OAuth integration for the admin user (If matches admin email) ---
