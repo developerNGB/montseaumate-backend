@@ -480,7 +480,7 @@ export const getGoogleReviewLinkSuggestion = async (req, res) => {
             [req.user.id, 'google']
         );
         if (integrationRes.rows.length === 0) {
-            return res.status(404).json({
+            return res.status(200).json({
                 success: false,
                 code: 'GOOGLE_NOT_CONNECTED',
                 message: 'Google is not connected for this user.',
@@ -502,12 +502,20 @@ export const getGoogleReviewLinkSuggestion = async (req, res) => {
         });
 
         if (!result.ok) {
+            if (
+                result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ||
+                result.code === 'GBP_NO_LOCATIONS' ||
+                result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE'
+            ) {
+                return res.status(200).json({
+                    success: false,
+                    ...result,
+                });
+            }
+
             const status =
-                result.code === 'GOOGLE_TOKEN_UNAVAILABLE' ? 404 :
-                    result.code === 'GBP_SCOPE_OR_API_UNAVAILABLE' ? 403 :
-                        result.code === 'GBP_NO_LOCATIONS' ? 404 :
-                            result.code === 'GBP_AMBIGUOUS' ? 409 :
-                                result.status === 429 ? 429 : 502;
+                result.code === 'GBP_AMBIGUOUS' ? 409 :
+                    result.status === 429 ? 429 : 502;
             return res.status(status).json({
                 success: false,
                 ...result,
