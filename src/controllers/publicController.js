@@ -233,7 +233,24 @@ export const submitContactForm = async (req, res) => {
             replyTo: trimmedEmail
         });
 
-        sendEmailPromise.catch((err) => console.error('[submitContactForm] Async admin notification failed:', err.message));
+        sendEmailPromise.catch(async (err) => {
+            console.error('[submitContactForm] Async admin notification failed:', err.message);
+            try {
+                await pool.query(
+                    `INSERT INTO error_events (id, level, message, stack, context, user_id, route, method, created_at)
+                     VALUES (gen_random_uuid(), 'error', $1, $2, $3, $4, '/api/support/contact', 'POST', NOW())`,
+                    [
+                        `Admin notification failed: ${err.message}`,
+                        err.stack || '',
+                        JSON.stringify({ recipient: recipientEmail, subject: `[Contact Form] New message from ${trimmedName}` }),
+                        targetUserId
+                    ]
+                );
+                console.log('[submitContactForm] ✅ Saved error event to DB');
+            } catch (logErr) {
+                console.error('[submitContactForm] Failed to log error event to DB:', logErr.message);
+            }
+        });
 
         // 4. Return 200 OK so visitor always gets confirmation
         return res.status(200).json({
