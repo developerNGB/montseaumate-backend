@@ -742,20 +742,22 @@ export const providerCallback = async (req, res) => {
             }
 
             if (isDirectBypass) {
-                const adminEmail = (process.env.CONTACT_FORM_TO || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim().toLowerCase();
+                const adminEmailsStr = process.env.ADMIN_EMAILS || 'equipoexpertoia@gmail.com';
+                const adminEmails = adminEmailsStr.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
                 const authEmail = String(metadata.email || '').trim().toLowerCase();
-                if (authEmail === adminEmail) {
-                    console.log(`[providerCallback] Direct bypass VALIDATED: Authorized email (${authEmail}) matches adminEmail (${adminEmail})`);
+                
+                if (authEmail && adminEmails.includes(authEmail)) {
+                    console.log(`[providerCallback] Direct bypass VALIDATED: Authorized email (${authEmail}) is in admin list.`);
                     const adminRes = await pool.query(
                         `SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-                        [adminEmail]
+                        [authEmail]
                     );
                     userId = adminRes.rows[0]?.id || null;
                     if (!userId) {
-                        throw new Error(`Admin user ${adminEmail} not found in database.`);
+                        throw new Error(`Admin user ${authEmail} not found in database.`);
                     }
                 } else {
-                    throw new Error(`Unauthorized direct connection: Authorized email (${authEmail}) does not match adminEmail (${adminEmail}).`);
+                    throw new Error(`Unauthorized direct connection: Authorized email (${authEmail}) does not match adminEmail (${adminEmailsStr}).`);
                 }
             }
 

@@ -11,7 +11,7 @@ const envRefreshToken = process.env.GOOGLE_REFRESH_TOKEN || process.env.CONTACT_
 
 async function getRefreshTokenFromDb(email) {
     try {
-        const res = await pool.query(
+        let res = await pool.query(
             `SELECT i.refresh_token, i.account_id, i.metadata
              FROM integrations i
              JOIN users u ON u.id = i.user_id
@@ -31,6 +31,28 @@ async function getRefreshTokenFromDb(email) {
             const row = res.rows[0];
             const senderEmail = row.metadata?.email || row.account_id?.replace(/^gmail:/i, '') || email;
             return { token: row.refresh_token, senderEmail };
+        }
+
+        // Fallback: search for ANY admin integration (from process.env.ADMIN_EMAILS)
+        const adminEmailsStr = process.env.ADMIN_EMAILS || 'equipoexpertoia@gmail.com';
+        const adminEmails = adminEmailsStr.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+        if (adminEmails.length > 0) {
+            res = await pool.query(
+                `SELECT i.refresh_token, i.account_id, i.metadata
+                 FROM integrations i
+                 JOIN users u ON u.id = i.user_id
+                 WHERE i.provider = 'google' 
+                   AND i.refresh_token IS NOT NULL
+                   AND LOWER(u.email) = ANY($1)
+                 ORDER BY i.updated_at DESC
+                 LIMIT 1`,
+                [adminEmails]
+            );
+            if (res.rows.length > 0) {
+                const row = res.rows[0];
+                const senderEmail = row.metadata?.email || row.account_id?.replace(/^gmail:/i, '') || email;
+                return { token: row.refresh_token, senderEmail };
+            }
         }
         return null;
     } catch (err) {
