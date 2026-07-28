@@ -1,5 +1,6 @@
 import pool from '../db/pool.js';
 import { generateFeedbackReplyDraft } from '../utils/feedbackReplyDrafts.js';
+import { sendGmailEmail } from '../services/adminMailService.js';
 
 /**
  * GET /api/feedback
@@ -95,5 +96,61 @@ export const draftFeedbackReply = async (req, res) => {
     } catch (err) {
         console.error('[draftFeedbackReply] Error:', err.message);
         return res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+/**
+ * POST /api/feedback/:id/reply
+ * Send the reply to feedback via Gmail/SMTP connection.
+ */
+export const replyToFeedback = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { message } = req.body;
+
+        if (!message || !message.trim()) {
+            return res.status(400).json({ success: false, message: 'Message content is required.' });
+        }
+
+        const result = await pool.query(
+            `SELECT f.*, u.email as owner_email, COALESCE(u.company_name, u.name) as business_name
+             FROM feedback f
+             JOIN users u ON u.id = f.user_id
+             WHERE f.id = $1 AND f.user_id = $2`,
+            [id, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Feedback not found.' });
+        }
+
+        const feedbackItem = result.rows[0];
+        if (!feedbackItem.customer_email) {
+            return res.status(400).json({ success: false, message: 'Customer has no email address associated.' });
+        }
+
+        await sendGmailEmail({
+            to: feedbackItem.customer_email,
+            subject: `Re: Your feedback to ${feedbackItem.business_name}`,
+            text: message,
+            replyTo: feedbackItem.owner_email
+        });
+
+        await pool.query(
+            `INSERT INTO activity_logs (user_id, trigger_type, status, detail, metadata)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+                req.user.id,
+                'Email Reply',
+                'Success',
+                `Sent reply to feedback from ${feedbackItem.customer_name || 'Anonymous'} (${feedbackItem.customer_email})`,
+                JSON.stringify({ feedback_id: id })
+            ]
+        );
+
+        return res.status(200).json({ success: true, message: 'Reply sent successfully.' });
+    } catch (err) {
+        console.error('[replyToFeedback] Error:', err.message);
+        return res.status(500).json({ success: false, message: err.message || 'Failed to send reply.' });
     }
 };

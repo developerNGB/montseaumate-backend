@@ -380,6 +380,13 @@ export const updateProfile = async (req, res) => {
             return res.status(409).json({ success: false, message: 'Email address is already in use.' });
         }
 
+        if (phone && phone.trim()) {
+            const phoneRegex = /^\+?[0-9\s\-()]{7,20}$/;
+            if (!phoneRegex.test(phone.trim())) {
+                return res.status(400).json({ success: false, message: 'Invalid phone number format. Only digits, spaces, hyphens, parentheses, and leading + are allowed.' });
+            }
+        }
+
         const result = await pool.query(
             `UPDATE users
              SET company_name = $1, email = $2, phone = $3, weekly_reports_enabled = $4, onboarding_completed = COALESCE($5, onboarding_completed), updated_at = NOW()
@@ -430,7 +437,8 @@ export const updatePassword = async (req, res) => {
         const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
 
         // Google OAuth users have no local password — give a clear, helpful message
-        if (!result.rows[0].password_hash) {
+        const passwordHash = result.rows[0].password_hash;
+        if (!passwordHash || !passwordHash.startsWith('$2')) {
             return res.status(400).json({
                 success: false,
                 message: 'Your account uses Google sign-in and does not have a local password. Please continue signing in with Google.',

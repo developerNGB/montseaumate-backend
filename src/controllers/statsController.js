@@ -396,7 +396,7 @@ export const getEmployeeActivityStatus = async (req, res) => {
                 pool.query(`
                     SELECT COUNT(*) as count FROM activity_logs 
                     WHERE user_id = $1 
-                    AND trigger_type = 'Customer Review' 
+                    AND trigger_type IN ('Feedback Received', 'Customer Review') 
                     AND status = 'Success' 
                     AND metadata::jsonb->>'source' = 'qr'
                 `, [userId]),
@@ -424,7 +424,7 @@ export const getEmployeeActivityStatus = async (req, res) => {
                 pool.query(`
                     SELECT COUNT(*) as count FROM activity_logs 
                     WHERE user_id = $1 
-                    AND trigger_type = 'Customer Review' 
+                    AND trigger_type IN ('Feedback Received', 'Customer Review') 
                     AND status = 'Success' 
                     AND metadata::jsonb->>'source' = 'list'
                 `, [userId]),
