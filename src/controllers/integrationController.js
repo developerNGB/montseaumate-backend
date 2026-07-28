@@ -656,15 +656,19 @@ export const providerCallback = async (req, res) => {
             return res.redirect(`${frontendRedirect}?error=oauth_failed`);
         }
 
-        if (!code || !state) {
+        if (!code) {
             return res.redirect(`${frontendRedirect}?error=invalid_callback`);
         }
 
-        if (!ticketRow) {
+        let isDirectBypass = false;
+        let userId = ticketRow?.user_id;
+
+        if ((!state || !ticketRow) && provider === 'google') {
+            console.log('[providerCallback] Direct bypass check triggered: state/ticket missing.');
+            isDirectBypass = true;
+        } else if (!ticketRow) {
             return res.redirect(`${frontendRedirect}?error=invalid_state`);
         }
-
-        const userId = ticketRow.user_id;
         let accessToken = '';
         let refreshToken = '';
         let accountId = '';
@@ -735,6 +739,24 @@ export const providerCallback = async (req, res) => {
 
             if (tokenData.expires_in) {
                 expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+            }
+
+            if (isDirectBypass) {
+                const adminEmail = (process.env.CONTACT_FORM_TO || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim().toLowerCase();
+                const authEmail = String(metadata.email || '').trim().toLowerCase();
+                if (authEmail === adminEmail) {
+                    console.log(`[providerCallback] Direct bypass VALIDATED: Authorized email (${authEmail}) matches adminEmail (${adminEmail})`);
+                    const adminRes = await pool.query(
+                        `SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+                        [adminEmail]
+                    );
+                    userId = adminRes.rows[0]?.id || null;
+                    if (!userId) {
+                        throw new Error(`Admin user ${adminEmail} not found in database.`);
+                    }
+                } else {
+                    throw new Error(`Unauthorized direct connection: Authorized email (${authEmail}) does not match adminEmail (${adminEmail}).`);
+                }
             }
 
         } else if (provider === 'microsoft' && process.env.MICROSOFT_CLIENT_ID) {
@@ -817,7 +839,9 @@ export const providerCallback = async (req, res) => {
                 updated_at = NOW()`,
             [userId, provider, accessToken, refreshToken, expiresAt, accountId, JSON.stringify(metadata)]
         );
-        await pool.query('UPDATE oauth_connect_tickets SET used = TRUE WHERE ticket = $1', [ticket]);
+        if (!isDirectBypass) {
+            await pool.query('UPDATE oauth_connect_tickets SET used = TRUE WHERE ticket = $1', [ticket]);
+        }
 
         // 3. Redirect user back to the dashboard integrations tab successfully
         return res.redirect(`${frontendRedirect}?success=connected`);
