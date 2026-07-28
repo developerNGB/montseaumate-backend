@@ -73,14 +73,21 @@ export const getContactFormStatus = async (_req, res) => {
             commitHash = execSync('git rev-parse HEAD').toString().trim();
         } catch (err) {}
 
-        const gmailUser = (process.env.EMAIL_USER || '').trim();
-        const gmailPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-        const configured = Boolean(gmailUser && gmailPass);
+                const hasClientId = Boolean(process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID);
+        const hasClientSecret = Boolean(process.env.GOOGLE_CLIENT_SECRET);
+        const hasRefreshToken = Boolean(process.env.GOOGLE_REFRESH_TOKEN || process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN);
+
         return res.json({
             success: true,
-            transport: 'gmail_smtp',
-            configured,
-            inbox: gmailUser || 'equipoexpertoia@gmail.com',
+            transport: 'gmail_api_https',
+            diagnostics: {
+                hasClientId,
+                hasClientSecret,
+                hasRefreshToken,
+                GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ? 'SET' : (process.env.VITE_GOOGLE_CLIENT_ID ? 'SET (VITE)' : 'MISSING'),
+                GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ? 'SET' : 'MISSING',
+                GOOGLE_REFRESH_TOKEN: (process.env.GOOGLE_REFRESH_TOKEN || process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN) ? 'SET' : 'MISSING',
+            },
             version: commitHash,
         });
     } catch (err) {

@@ -4,7 +4,7 @@ import { loadProjectEnv } from '../utils/loadEnv.js';
 // Load env vars explicitly to ensure they are available
 loadProjectEnv();
 
-const clientId = process.env.GOOGLE_CLIENT_ID;
+const clientId = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID;
 const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
 const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || process.env.CONTACT_FORM_GOOGLE_REFRESH_TOKEN;
 
