@@ -1,6 +1,4 @@
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { loadProjectEnv } from '../utils/loadEnv.js';
 import pool from '../db/pool.js';
 import { normalizeLeadGroup } from '../utils/leadGroups.js';
 import { frontendBaseUrl } from '../utils/publicUrls.js';
@@ -12,8 +10,7 @@ import { notifyOwnerHotLead } from '../services/ownerNotifyService.js';
 import { sendAdminNotification } from '../services/adminMailService.js';
 
 // Load env vars for this controller
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.join(__dirname, '../../../.env') });
+loadProjectEnv();
 
 const sendInternalEmail = async (userId, to, subject, message) => {
     if (!to) return 'none';
