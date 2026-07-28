@@ -7,7 +7,7 @@ import * as whatsappService from '../services/whatsappService.js';
 import { sendDynamicEmail } from '../services/emailService.js';
 import { computeLeadScore } from '../utils/leadScoring.js';
 import { notifyOwnerHotLead } from '../services/ownerNotifyService.js';
-import { sendAdminNotification } from '../services/adminMailService.js';
+import { sendAdminNotification, sendGmailEmail } from '../services/adminMailService.js';
 
 // Load env vars for this controller
 loadProjectEnv();
@@ -246,6 +246,35 @@ export const submitContactForm = async (req, res) => {
             });
 
             console.log('[submitContactForm] Admin notification succeeded:', result);
+
+            // Send auto-response thank-you email to the visitor
+            try {
+                const autoResponseHtml = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333;">
+  <div style="background:#fff;border-radius:8px;padding:30px;border:1px solid #e0e0e0;">
+    <h2 style="color:#1a1a2e;margin-top:0;">Hi ${trimmedName},</h2>
+    <p>Thank you for reaching out to <strong>Equipo Experto</strong>!</p>
+    <p>We have successfully received your contact message. Our team is reviewing it and we will get back to you as soon as possible.</p>
+    <hr style="border:none;border-top:1px solid #eee;margin:20px 0;">
+    <p style="font-size:12px;color:#888;">This is an automated confirmation of your message. Please do not reply directly to this email.</p>
+  </div>
+</body>
+</html>`;
+
+                await sendGmailEmail({
+                    to: trimmedEmail,
+                    subject: 'Thank you for contacting Equipo Experto',
+                    text: `Hi ${trimmedName},\n\nThank you for reaching out to Equipo Experto! We have received your message and will get back to you as soon as possible.`,
+                    html: autoResponseHtml
+                });
+                console.log(`[submitContactForm] ✅ Auto-response sent to visitor: ${trimmedEmail}`);
+            } catch (autoErr) {
+                console.warn('[submitContactForm] Failed to send auto-response email to visitor:', autoErr.message);
+            }
+
             try {
                 await pool.query(
                     `INSERT INTO activity_logs (id, user_id, automation_name, trigger_type, status, detail, metadata, created_at)

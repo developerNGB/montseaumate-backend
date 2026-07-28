@@ -59,23 +59,22 @@ function encodeMessage({ to, from, replyTo, subject, text, html }) {
 }
 
 /**
- * Sends a notification email to the admin inbox over HTTPS using the Gmail REST API.
+ * Sends a generic email over HTTPS using the Gmail REST API.
  * Uses environment variable credentials if set, otherwise falls back to querying the database
  * for the active Google Integration of the admin inbox (toEmail).
  */
-export async function sendAdminNotification({ subject, text, html, replyTo }) {
-    const toEmail = (process.env.CONTACT_FORM_TO || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim().toLowerCase();
+export async function sendGmailEmail({ to, subject, text, html, replyTo }) {
+    const toEmail = to.trim().toLowerCase();
 
     let activeRefreshToken = envRefreshToken;
     let activeFromEmail = process.env.GMAIL_USER || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com';
 
     if (!activeRefreshToken) {
-        console.log(`[AdminMailService] GOOGLE_REFRESH_TOKEN not found in env. Searching DB integrations for ${toEmail}...`);
-        const dbResult = await getRefreshTokenFromDb(toEmail);
+        const adminEmail = (process.env.CONTACT_FORM_TO || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim().toLowerCase();
+        const dbResult = await getRefreshTokenFromDb(adminEmail);
         if (dbResult) {
             activeRefreshToken = dbResult.token;
             activeFromEmail = dbResult.senderEmail;
-            console.log(`[AdminMailService] Found active DB Google integration for sender: ${activeFromEmail}`);
         }
     }
 
@@ -94,7 +93,7 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
 
     const raw = encodeMessage({
         to: toEmail,
-        from: `"Equipo Experto Notification" <${activeFromEmail}>`,
+        from: `"Equipo Experto" <${activeFromEmail}>`,
         replyTo: replyTo,
         subject: subject,
         text: text,
@@ -112,4 +111,18 @@ export async function sendAdminNotification({ subject, text, html, replyTo }) {
 
     console.log(`[MAIL] delivered via Gmail API, id=${response.data.id}, from=${activeFromEmail}, to=${toEmail}`);
     return { success: true, messageId: response.data.id, provider: 'gmail_api_https', from: activeFromEmail };
+}
+
+/**
+ * Sends a notification email to the admin inbox over HTTPS using the Gmail REST API.
+ */
+export async function sendAdminNotification({ subject, text, html, replyTo }) {
+    const toEmail = (process.env.CONTACT_FORM_TO || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com').trim().toLowerCase();
+    return sendGmailEmail({
+        to: toEmail,
+        subject,
+        text,
+        html,
+        replyTo
+    });
 }
