@@ -45,6 +45,7 @@ function encodeMessage({ to, from, replyTo, subject, text, html }) {
 
 /**
  * Sends a notification email to the admin inbox over HTTPS using the Gmail REST API.
+ * This is the ONLY delivery mechanism to bypass SMTP port blocks on the host.
  */
 export async function sendAdminNotification({ subject, text, html, replyTo }) {
     const fromEmail = process.env.GMAIL_USER || process.env.EMAIL_USER || 'equipoexpertoia@gmail.com';
