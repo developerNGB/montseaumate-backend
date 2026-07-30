@@ -61,12 +61,22 @@ async function getRefreshTokenFromDb(email) {
     }
 }
 
+function encodeUtf8Header(text) {
+    if (!text) return '';
+    if (/[^\x00-\x7F]/.test(text)) {
+        const b64 = Buffer.from(text, 'utf-8').toString('base64');
+        return `=?UTF-8?B?${b64}?=`;
+    }
+    return text;
+}
+
 function encodeMessage({ to, from, replyTo, subject, text, html }) {
+    const encodedSubject = encodeUtf8Header(subject);
     const lines = [
         `To: ${to}`,
         `From: ${from}`,
         replyTo ? `Reply-To: ${replyTo}` : '',
-        `Subject: ${subject}`,
+        `Subject: ${encodedSubject}`,
         `MIME-Version: 1.0`,
         html ? `Content-Type: text/html; charset=utf-8` : `Content-Type: text/plain; charset=utf-8`,
         ``,

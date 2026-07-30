@@ -96,63 +96,9 @@ export const getContactFormStatus = async (_req, res) => {
 };
 
 
-async function sendContactFormMailWithFallback({ gmailUser, gmailPass, trimmedName, trimmedEmail, trimmedMessage, sourceLabel, htmlBody }) {
-    try {
-        const nodemailer = (await import('nodemailer')).default;
-        const mailData = {
-            from: `"Equipo Experto Contact Form" <${gmailUser}>`,
-            to: gmailUser,
-            replyTo: trimmedEmail,
-            subject: `[Contact Form] New message from ${trimmedName}`,
-            text: `Source: ${sourceLabel}\nName: ${trimmedName}\nEmail: ${trimmedEmail}\n\nMessage:\n${trimmedMessage}`,
-            html: htmlBody,
-        };
-
-        // Try Port 465 (SSL) first with 5s timeout
-        try {
-            const transporter465 = nodemailer.createTransport({
-                host: 'smtp.gmail.com',
-                port: 465,
-                secure: true,
-                auth: { user: gmailUser, pass: gmailPass },
-                connectionTimeout: 5000,
-                greetingTimeout: 4000,
-                socketTimeout: 5000,
-            });
-            await transporter465.sendMail(mailData);
-            console.log(`[submitContactForm] ✅ Email sent via Gmail SMTP:465 → ${gmailUser}`);
-            return true;
-        } catch (err465) {
-            console.warn(`[submitContactForm] SMTP:465 notice (${err465.message}), trying port 587...`);
-        }
-
-        // Try Port 587 (STARTTLS) next with 5s timeout
-        try {
-            const transporter587 = nodemailer.createTransport({
-                host: 'smtp.gmail.com',
-                port: 587,
-                secure: false,
-                requireTLS: true,
-                auth: { user: gmailUser, pass: gmailPass },
-                connectionTimeout: 5000,
-                greetingTimeout: 4000,
-                socketTimeout: 5000,
-            });
-            await transporter587.sendMail(mailData);
-            console.log(`[submitContactForm] ✅ Email sent via Gmail SMTP:587 → ${gmailUser}`);
-            return true;
-        } catch (err587) {
-            console.warn(`[submitContactForm] SMTP:587 notice (${err587.message}).`);
-        }
-    } catch (importErr) {
-        console.error('[submitContactForm] Mailer error:', importErr.message);
-    }
-    return false;
-}
-
 /**
  * POST /api/support/contact
- * Saves submission into DB + sends email via Gmail SMTP (465/587 fallback).
+ * Saves submission into DB + sends email via direct Gmail REST API over HTTPS (gmail.googleapis.com).
  * Returns 200 OK so contact messages are never lost and visitors always get a success confirmation.
  */
 export const submitContactForm = async (req, res) => {
